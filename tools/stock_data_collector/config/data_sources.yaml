@@ -1,0 +1,58 @@
+canonical_provider: tushare
+provider_priority:
+  - tushare
+  - akshare
+  - joinquant
+validator_providers:
+  - akshare
+  - joinquant
+supplement_providers:
+  - akshare
+  - joinquant
+allow_field_level_merge: true
+allow_fallback_when_canonical_missing: true
+allow_majority_override_canonical: false
+quarantine_on_critical_conflict: true
+manual_review_on_trading_critical_conflict: true
+minimum_quality_for_supplement: 0.65
+minimum_quality_for_trading_use: 0.80
+providers:
+  tushare:
+    enabled: true
+    role: canonical
+    auth_env:
+      token: TUSHARE_TOKEN
+    retry_attempts: 3
+    timeout_seconds: 30
+    rate_limit:
+      requests_per_minute: 180
+      burst: 20
+    allow_fallback: false
+    allow_cross_validation: true
+    allow_field_level_supplement: false
+  akshare:
+    enabled: true
+    role: validator_supplement
+    auth_env: {}
+    retry_attempts: 3
+    timeout_seconds: 30
+    rate_limit:
+      requests_per_minute: 60
+      burst: 10
+    allow_fallback: true
+    allow_cross_validation: true
+    allow_field_level_supplement: true
+  joinquant:
+    enabled: true
+    role: validator_supplement
+    auth_env:
+      username: JQDATA_USERNAME
+      password: JQDATA_PASSWORD
+    retry_attempts: 3
+    timeout_seconds: 30
+    rate_limit:
+      requests_per_minute: 120
+      burst: 10
+    allow_fallback: true
+    allow_cross_validation: true
+    allow_field_level_supplement: true

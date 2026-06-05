@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stock-data-collector"
+version = "0.2.0"
+description = "A-share structured stock data ingestion, validation, storage, and query layer."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "Proprietary" }
+authors = [{ name = "stock_data_ingestion maintainers" }]
+dependencies = [
+  "pandas>=2.0",
+  "pydantic>=2.0",
+  "SQLAlchemy>=2.0",
+  "PyYAML>=6.0",
+  "pyarrow>=14.0",
+  "tenacity>=8.2",
+  "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+providers = [
+  "tushare>=1.4",
+  "akshare>=1.13",
+  "jqdatasdk>=1.9",
+]
+dev = [
+  "pytest>=8.0",
+  "pytest-cov>=5.0",
+  "ruff>=0.5",
+  "mypy>=1.8",
+]
+
+[project.scripts]
+stock-data-ingestion = "stock_data_ingestion.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["stock_data_ingestion*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+plugins = []
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_return_any = true

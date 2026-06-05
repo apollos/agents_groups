@@ -1,0 +1,8 @@
+sqlite_path: data/stock_data.db
+enable_wal: true
+raw_object_root: data/raw_objects
+parquet_root: data/parquet
+compress_raw_payload: true
+raw_format: jsonl.gz
+timezone: Asia/Shanghai
+log_path: logs/stock_data_ingestion.log

@@ -1,0 +1,77 @@
+field_tolerances:
+  price:
+    absolute: 0.01
+    relative: 0.0001
+  volume:
+    relative: 0.005
+  amount:
+    relative: 0.01
+  turnover_rate:
+    absolute: 0.05
+  adj_factor:
+    relative: 0.0001
+  market_value:
+    relative: 0.01
+  valuation_ratio:
+    relative: 0.01
+  financial_amount:
+    relative: 0.001
+    absolute: 10000.0
+  financial_ratio:
+    absolute: 0.01
+    relative: 0.01
+provider_reliability:
+  tushare: 0.90
+  joinquant: 0.85
+  akshare: 0.75
+  manual_import: 0.60
+  unknown: 0.30
+quality_weights:
+  completeness_score: 0.25
+  consistency_score: 0.30
+  timeliness_score: 0.15
+  provider_reliability_score: 0.10
+  anomaly_score: 0.10
+  provenance_score: 0.10
+quality_adjustments:
+  canonical_validated_by_two_sources: 0.08
+  canonical_validated_by_one_source: 0.04
+  canonical_only_not_validated: -0.05
+  single_source_fallback: -0.15
+  multi_source_fallback_agreed: -0.08
+  low_conflict: -0.05
+  medium_conflict: -0.12
+  high_conflict: -0.25
+  critical_conflict: -0.50
+  missing_raw_payload_ref: -0.30
+  missing_field_provenance: -0.20
+conflict_severity_rules:
+  bool_or_status_different: medium
+  critical_field_different: high
+  trading_critical_conflict: critical
+critical_fields:
+  - is_open
+  - is_trading
+  - is_suspended
+  - is_st
+  - is_star_st
+  - has_delisting_risk
+  - hit_limit_up
+  - hit_limit_down
+  - list_status
+  - tradability_status
+  - limit_up_price
+  - limit_down_price
+  - adj_factor
+  - close
+  - volume
+  - amount
+supplement_field_whitelist:
+  - main_business
+  - turnover_rate_free_float
+  - vwap
+  - source_methodology
+  - money_flow_main_net_inflow
+  - money_flow_super_large_net_inflow
+  - money_flow_large_net_inflow
+  - concept_strength
