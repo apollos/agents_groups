@@ -5,8 +5,8 @@ import os
 from typing import Any
 
 from stock_data_ingestion.adapters.base import BaseDataAdapter
-from stock_data_ingestion.normalization.ticker import normalize_ticker, to_tushare_symbol
 from stock_data_ingestion.normalization.datetime_utils import now_asia_shanghai
+from stock_data_ingestion.normalization.ticker import normalize_ticker, to_tushare_symbol
 from stock_data_ingestion.schemas.errors import ErrorCode
 from stock_data_ingestion.schemas.records import ProviderFetchResult
 from stock_data_ingestion.schemas.requests import StockDataRequest
@@ -16,6 +16,12 @@ class TushareAdapter(BaseDataAdapter):
     provider_name = "tushare"
     source_site = "tushare"
     adapter_version = "0.1.0"
+
+    _STOCK_BASIC_FIELDS = (
+        "ts_code,symbol,name,area,industry,fullname,enname,cnspell,market,exchange,"
+        "curr_type,list_status,list_date,delist_date"
+    )
+    _SECURITY_MASTER_LIST_STATUSES = ("L", "D", "P")
 
     def __init__(self) -> None:
         super().__init__()
@@ -47,19 +53,124 @@ class TushareAdapter(BaseDataAdapter):
             return ErrorCode.PROVIDER_TIMEOUT
         return ErrorCode.UNKNOWN_ERROR
 
+    @staticmethod
+    def _dataframe_to_records(df: Any) -> list[dict[str, Any]]:
+        if df is None:
+            return []
+        if bool(getattr(df, "empty", False)):
+            return []
+        return df.to_dict(orient="records")
+
+    def _fetch_stock_basic_rows_for_requested_tickers(
+        self,
+        fields: str,
+        requested_tickers: set[str],
+    ) -> list[dict[str, Any]]:
+        """Fetch stock_basic rows by exact ``ts_code`` for targeted requests.
+
+        Do not fetch the full L/D/P universe before filtering. Tushare's delisted
+        universe contains historical non-six-digit codes such as ``TS0018.SH``.
+        Those are valid raw Tushare history, but they are outside this project's
+        normalized A-share ticker grammar and must not break a request for normal
+        tickers such as ``600519.SH`` and ``000001.SZ``.
+        """
+
+        rows: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+
+        for ticker in sorted(requested_tickers):
+            ts_code = to_tushare_symbol(ticker)
+
+            # Usually enough for currently listed securities. This keeps the fast
+            # path to one exact Tushare query per ticker.
+            query_records = self._dataframe_to_records(
+                self._pro.stock_basic(ts_code=ts_code, fields=fields)
+            )
+
+            # Some accounts/API versions may require list_status for delisted or
+            # pre-listing securities. Keep the query narrow: exact ts_code + status,
+            # never full-market list_status when the caller supplied tickers.
+            if not query_records:
+                for status in (*self._SECURITY_MASTER_LIST_STATUSES, "G"):
+                    query_records.extend(
+                        self._dataframe_to_records(
+                            self._pro.stock_basic(
+                                ts_code=ts_code,
+                                list_status=status,
+                                fields=fields,
+                            )
+                        )
+                    )
+
+            for row in query_records:
+                raw_ts_code = row.get("ts_code") or row.get("symbol") or ts_code
+                try:
+                    normalized = normalize_ticker(raw_ts_code)
+                except Exception:  # noqa: BLE001
+                    # Defensive only: an exact ts_code query should not return an
+                    # unrelated/non-standard row. If it does, skip that row instead
+                    # of marking the whole provider failed.
+                    continue
+
+                if normalized not in requested_tickers:
+                    continue
+
+                dedupe_key = (normalized, str(row.get("list_status", "")))
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+                rows.append(row)
+
+        return rows
+
+    def _fetch_full_security_master_rows(self, fields: str) -> list[dict[str, Any]]:
+        """Fetch L/D/P security master rows without normalizing provider symbols.
+
+        Full-universe sync must preserve raw Tushare rows. Non-standard historical
+        symbols are handled later as row-level normalization errors, so one odd
+        delisted code never turns into a provider-level failure.
+        """
+
+        rows: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for status in self._SECURITY_MASTER_LIST_STATUSES:
+            status_rows = self._dataframe_to_records(
+                self._pro.stock_basic(exchange="", list_status=status, fields=fields)
+            )
+            for row in status_rows:
+                ts_code = str(row.get("ts_code") or "").strip()
+                list_status = str(row.get("list_status") or status).strip()
+                dedupe_key = (ts_code, list_status)
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+                rows.append(row)
+        return rows
+
     def fetch_security_master(self, request: StockDataRequest) -> ProviderFetchResult:
         source_api = "stock_basic"
         started = now_asia_shanghai()
         if not self.token:
-            return self._unavailable_result(source_api, ErrorCode.TOKEN_MISSING, "TUSHARE_TOKEN is missing")
+            return self._unavailable_result(
+                source_api,
+                ErrorCode.TOKEN_MISSING,
+                "TUSHARE_TOKEN is missing",
+            )
         if not self.is_available() or not self.authenticate():
-            return self._unavailable_result(source_api, ErrorCode.PROVIDER_UNAVAILABLE, "tushare SDK unavailable")
+            return self._unavailable_result(
+                source_api,
+                ErrorCode.PROVIDER_UNAVAILABLE,
+                "tushare SDK unavailable",
+            )
         try:
-            df = self._pro.stock_basic(exchange="", list_status="L,D,P", fields="ts_code,symbol,name,area,industry,fullname,enname,cnspell,market,exchange,curr_type,list_status,list_date,delist_date")
-            raw_records = df.to_dict(orient="records") if df is not None else []
+            fields = self._STOCK_BASIC_FIELDS
             if request.tickers:
-                allowed = set(request.tickers)
-                raw_records = [r for r in raw_records if normalize_ticker(r.get("ts_code")) in allowed]
+                raw_records = self._fetch_stock_basic_rows_for_requested_tickers(
+                    fields,
+                    set(request.tickers),
+                )
+            else:
+                raw_records = self._fetch_full_security_master_rows(fields)
             return self._success_result(source_api, raw_records, started)
         except Exception as exc:  # noqa: BLE001
             return self._error_result(source_api, started, exc, self._classify_error(exc), retryable=True)
