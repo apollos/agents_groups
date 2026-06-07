@@ -29,3 +29,32 @@ def test_missing_provider_fields_are_not_conflicts_or_matches() -> None:
     assert result.matched_fields == ["name"]
     assert result.conflicted_fields == []
     assert result.conflicts == []
+
+
+
+class ComparableBar(BaseModel):
+    record_type: str = "bar"
+    provider: str
+    source_api: str = ""
+    normalized_ticker: str = "000001.SZ"
+    frequency: str = "1d"
+    timestamp: str = "2025-01-02T00:00:00"
+    adjust: str = "none"
+    record_id: str = "rec"
+    request_id: str = "req"
+    ingestion_run_id: str = "run"
+    close: float
+    amount: float
+    vwap: float | None = None
+
+
+def test_tencent_hist_estimated_amount_is_not_compared() -> None:
+    canonical = ComparableBar(provider="tushare", source_api="daily", close=11.43, amount=2_102_923_078.11, vwap=11.55)
+    tencent = ComparableBar(provider="akshare", source_api="stock_zh_a_hist_tx", close=11.43, amount=2_081_000_000.00, vwap=11.44)
+
+    result = compare_standard_records(canonical, tencent, ["close", "amount", "vwap"])
+
+    assert result.status == "matched"
+    assert result.checked_fields == ["close"]
+    assert result.matched_fields == ["close"]
+    assert result.conflicted_fields == []

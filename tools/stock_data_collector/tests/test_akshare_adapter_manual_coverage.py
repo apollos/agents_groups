@@ -69,6 +69,40 @@ def test_security_master_enriches_code_name_with_detail_and_exchange_lists(monke
     assert row["total_share"] == 1256197800.0
 
 
+
+def test_daily_historical_bars_use_tencent_stock_zh_a_hist_tx(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = {"tx": [], "em": 0}
+
+    def stock_zh_a_hist(**kwargs):  # pragma: no cover - should not be called for 1d
+        calls["em"] += 1
+        raise AssertionError("Eastmoney stock_zh_a_hist must not be used for daily requests when Tencent fallback is enabled")
+
+    def stock_zh_a_hist_tx(**kwargs):
+        calls["tx"].append(kwargs)
+        return FakeDF([{"date": "2025-01-02", "open": 11.73, "close": 11.43, "high": 11.77, "low": 11.39, "amount": 1819597}])
+
+    fake = types.SimpleNamespace(stock_zh_a_hist=stock_zh_a_hist, stock_zh_a_hist_tx=stock_zh_a_hist_tx)
+    install_fake_ak(monkeypatch, fake)
+
+    result = AKShareAdapter().fetch_historical_bars(
+        request(RequestType.historical_bars, tickers=["000001.SZ"], start_date="20250101", end_date="20250630", frequency=Frequency.d1)
+    )
+
+    assert result.status == AdapterFetchStatus.success
+    assert result.source_api == "stock_zh_a_hist_tx"
+    assert calls["tx"] == [{"symbol": "sz000001", "start_date": "20250101", "end_date": "20250630", "adjust": ""}]
+    assert calls["em"] == 0
+    row = result.raw_records[0]
+    assert row["normalized_ticker"] == "000001.SZ"
+    assert row["provider_symbol"] == "sz000001"
+    assert row["日期"] == "2025-01-02"
+    assert row["开盘"] == 11.73
+    assert row["收盘"] == 11.43
+    assert row["成交量"] == 1819597
+    assert row["volume_unit"] == "hand"
+    assert row["amount_is_estimated"] is True
+    assert row["raw_source_api"] == "stock_zh_a_hist_tx"
+
 def test_minute_historical_bars_use_stock_zh_a_hist_min_em(monkeypatch: pytest.MonkeyPatch) -> None:
     called = {}
 
@@ -172,3 +206,49 @@ def test_industry_and_concept_membership(monkeypatch: pytest.MonkeyPatch) -> Non
     assert result.status == AdapterFetchStatus.success
     assert any(r.get("industry_name") == "白酒" for r in result.raw_records)
     assert any(r.get("concept_name") == "国企改革" for r in result.raw_records)
+
+
+def test_security_master_uses_exchange_lists_when_code_name_wrapper_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    def stock_info_a_code_name():
+        raise TimeoutError("szse wrapper timeout")
+
+    fake = types.SimpleNamespace(
+        stock_info_a_code_name=stock_info_a_code_name,
+        stock_info_sh_name_code=lambda symbol="主板A股": FakeDF(
+            [{"证券代码": "600519", "证券简称": "贵州茅台", "公司全称": "贵州茅台酒股份有限公司", "上市日期": "2001-08-27"}]
+            if symbol == "主板A股"
+            else []
+        ),
+        stock_info_sz_name_code=lambda symbol="A股列表": FakeDF([]),
+        stock_info_bj_name_code=lambda: FakeDF([]),
+        stock_individual_info_em=lambda symbol: FakeDF([]),
+    )
+    install_fake_ak(monkeypatch, fake)
+
+    result = AKShareAdapter().fetch_security_master(request(RequestType.security_master, tickers=["600519.SH"]))
+
+    assert result.status == AdapterFetchStatus.success
+    assert len(result.raw_records) == 1
+    row = result.raw_records[0]
+    assert row["normalized_ticker"] == "600519.SH"
+    assert row["name"] == "贵州茅台"
+    assert row["company_full_name"] == "贵州茅台酒股份有限公司"
+    assert row["security_master_primary_source"] == "exchange_stock_lists"
+    assert "stock_info_a_code_name failed" in row["code_name_warning"]
+
+
+def test_realtime_still_uses_eastmoney_when_no_tencent_all_a_realtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    called = {"spot": 0}
+
+    def spot():
+        called["spot"] += 1
+        return FakeDF([{"代码": "600519", "名称": "贵州茅台", "最新价": 1500, "成交量": 10, "成交额": 1000}])
+
+    fake = types.SimpleNamespace(stock_zh_a_spot_em=spot)
+    install_fake_ak(monkeypatch, fake)
+
+    result = AKShareAdapter().fetch_realtime_quote(request(RequestType.realtime_quote, tickers=["600519.SH"]))
+
+    assert result.status == AdapterFetchStatus.success
+    assert called["spot"] == 1
+    assert result.raw_records[0]["raw_source_api"] == "stock_zh_a_spot_em"

@@ -18,6 +18,22 @@ def _json_default(obj: Any) -> str:
     return str(obj)
 
 
+def _normalize_adjust_alias(value: str) -> str:
+    """Normalize user-facing adjustment aliases to the internal enum values.
+
+    The internal schema uses ``none`` for unadjusted/raw bars. Many data
+    vendors and users call the same concept ``raw``. Keep both accepted at
+    the CLI boundary so examples and habits from Tushare/AKShare do not fail
+    before a request is built.
+    """
+    normalized = (value or "none").strip().lower()
+    return "none" if normalized == "raw" else normalized
+
+
+def _response_payload(resp: Any) -> dict[str, Any]:
+    return json.loads(resp.model_dump_json())
+
+
 def _build_database(config):  # type: ignore[no-untyped-def]
     from stock_data_ingestion.storage.database import Database
 
@@ -35,6 +51,27 @@ def _build_collector(config_dir: str | None = None) -> StockDataCollector:
     return StockDataCollector(runner)
 
 
+def _provider_args(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "providers": getattr(args, "providers", None),
+        "canonical_provider": getattr(args, "canonical_provider", None),
+    }
+
+
+def _add_provider_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--providers",
+        nargs="+",
+        default=None,
+        help="Providers for this request, e.g. tushare akshare. Overrides config/.env for this command.",
+    )
+    parser.add_argument(
+        "--canonical-provider",
+        default=None,
+        help="Canonical provider for this request. Defaults to config canonical or first selected provider.",
+    )
+
+
 def cmd_init_db(args: argparse.Namespace) -> None:
     config = load_config(args.config_dir)
     from stock_data_ingestion.storage.migrations import init_db
@@ -45,31 +82,51 @@ def cmd_init_db(args: argparse.Namespace) -> None:
 
 def cmd_fetch_security_master(args: argparse.Namespace) -> None:
     collector = _build_collector(args.config_dir)
-    resp = collector.fetch_security_master(args.tickers)
+    resp = collector.fetch_security_master(args.tickers, **_provider_args(args))
     print(resp.model_dump_json(indent=2))
 
 
 def cmd_fetch_trade_calendar(args: argparse.Namespace) -> None:
     collector = _build_collector(args.config_dir)
-    resp = collector.fetch_trade_calendar(args.exchange, args.start_date, args.end_date)
-    print(resp.model_dump_json(indent=2))
+    exchanges = list(args.exchanges or [])
+    if args.exchange:
+        exchanges.insert(0, args.exchange)
+    exchanges = list(dict.fromkeys(exchanges))
+    if not exchanges:
+        raise SystemExit("trade-calendar requires --exchange EXCHANGE or --exchanges EXCHANGE [EXCHANGE ...]")
+
+    responses = [collector.fetch_trade_calendar(exchange, args.start_date, args.end_date, **_provider_args(args)) for exchange in exchanges]
+    if len(responses) == 1:
+        print(responses[0].model_dump_json(indent=2))
+        return
+
+    payloads = [_response_payload(resp) for resp in responses]
+    statuses = [str(payload.get("status", "unknown")) for payload in payloads]
+    if all(status == "success" for status in statuses):
+        status = "success"
+    elif any(status in {"success", "partial_success"} for status in statuses):
+        status = "partial_success"
+    else:
+        status = "failed"
+    print(json.dumps({"status": status, "exchanges": exchanges, "responses": payloads}, ensure_ascii=False, indent=2, default=_json_default))
 
 
 def cmd_fetch_historical_bars(args: argparse.Namespace) -> None:
     collector = _build_collector(args.config_dir)
-    resp = collector.fetch_historical_bars(args.tickers, args.start_date, args.end_date, Frequency(args.frequency), Adjust(args.adjust), cross_validate=args.cross_validate)
+    adjust = Adjust(_normalize_adjust_alias(args.adjust))
+    resp = collector.fetch_historical_bars(args.tickers, args.start_date, args.end_date, Frequency(args.frequency), adjust, cross_validate=args.cross_validate, **_provider_args(args))
     print(resp.model_dump_json(indent=2))
 
 
 def cmd_fetch_valuation(args: argparse.Namespace) -> None:
     collector = _build_collector(args.config_dir)
-    resp = collector.fetch_valuation(args.tickers, args.start_date, args.end_date)
+    resp = collector.fetch_valuation(args.tickers, args.start_date, args.end_date, **_provider_args(args))
     print(resp.model_dump_json(indent=2))
 
 
 def cmd_fetch_financial_indicator(args: argparse.Namespace) -> None:
     collector = _build_collector(args.config_dir)
-    resp = collector.fetch_financial_indicator(args.tickers, args.start_date, args.end_date)
+    resp = collector.fetch_financial_indicator(args.tickers, args.start_date, args.end_date, **_provider_args(args))
     print(resp.model_dump_json(indent=2))
 
 
@@ -81,19 +138,20 @@ def cmd_fetch_financial_statement(args: argparse.Namespace) -> None:
         args.end_date,
         statement_types=args.statement_types,
         period=args.period,
+        **_provider_args(args),
     )
     print(resp.model_dump_json(indent=2))
 
 
 def cmd_fetch_money_flow(args: argparse.Namespace) -> None:
     collector = _build_collector(args.config_dir)
-    resp = collector.fetch_money_flow(args.tickers, args.start_date, args.end_date)
+    resp = collector.fetch_money_flow(args.tickers, args.start_date, args.end_date, **_provider_args(args))
     print(resp.model_dump_json(indent=2))
 
 
 def cmd_fetch_trading_status(args: argparse.Namespace) -> None:
     collector = _build_collector(args.config_dir)
-    resp = collector.fetch_trading_status(args.tickers, args.start_date, args.end_date)
+    resp = collector.fetch_trading_status(args.tickers, args.start_date, args.end_date, **_provider_args(args))
     print(resp.model_dump_json(indent=2))
 
 
@@ -106,6 +164,7 @@ def cmd_fetch_corporate_action(args: argparse.Namespace) -> None:
         args.end_date,
         action_types=action_types,
         event_date_field=args.event_date_field,
+        **_provider_args(args),
     )
     print(resp.model_dump_json(indent=2))
 
@@ -116,7 +175,7 @@ def cmd_query_bars(args: argparse.Namespace) -> None:
     from stock_data_ingestion.services.query_service import QueryService
 
     with db.session() as session:
-        df = QueryService(session).get_bars(args.ticker, args.start_date, args.end_date, args.frequency, args.adjust)
+        df = QueryService(session).get_bars(args.ticker, args.start_date, args.end_date, args.frequency, _normalize_adjust_alias(args.adjust))
     print(df.to_json(orient="records", force_ascii=False, date_format="iso"))
 
 
@@ -175,37 +234,44 @@ def build_parser() -> argparse.ArgumentParser:
     fetch_sub = fetch.add_subparsers(dest="fetch_command", required=True)
 
     sm = fetch_sub.add_parser("security-master")
+    _add_provider_args(sm)
     sm.add_argument("--tickers", nargs="*", default=[])
     sm.set_defaults(func=cmd_fetch_security_master)
 
     cal = fetch_sub.add_parser("trade-calendar")
-    cal.add_argument("--exchange", required=True)
+    _add_provider_args(cal)
+    cal.add_argument("--exchange", required=False, help="Single exchange, e.g. SSE. Kept for backward compatibility.")
+    cal.add_argument("--exchanges", nargs="+", default=None, help="One or more exchanges, e.g. SSE SZSE BSE.")
     cal.add_argument("--start-date", required=True)
     cal.add_argument("--end-date", required=True)
     cal.set_defaults(func=cmd_fetch_trade_calendar)
 
     bars = fetch_sub.add_parser("historical-bars")
+    _add_provider_args(bars)
     bars.add_argument("--tickers", nargs="+", required=True)
     bars.add_argument("--start-date", required=True)
     bars.add_argument("--end-date", required=True)
     bars.add_argument("--frequency", choices=["1m", "5m", "15m", "30m", "60m", "1d", "1w", "1mo"], default="1d")
-    bars.add_argument("--adjust", choices=["none", "qfq", "hfq"], default="none")
+    bars.add_argument("--adjust", choices=["none", "raw", "qfq", "hfq"], default="none", help="Adjustment mode. 'raw' is accepted as an alias of 'none'.")
     bars.add_argument("--cross-validate", action="store_true")
     bars.set_defaults(func=cmd_fetch_historical_bars)
 
-    val = fetch_sub.add_parser("valuation")
+    val = fetch_sub.add_parser("valuation", aliases=["valuation-metric"])
+    _add_provider_args(val)
     val.add_argument("--tickers", nargs="+", required=True)
     val.add_argument("--start-date", required=True)
     val.add_argument("--end-date", required=True)
     val.set_defaults(func=cmd_fetch_valuation)
 
     fin = fetch_sub.add_parser("financial-indicator")
+    _add_provider_args(fin)
     fin.add_argument("--tickers", nargs="+", required=True)
     fin.add_argument("--start-date", required=True)
     fin.add_argument("--end-date", required=True)
     fin.set_defaults(func=cmd_fetch_financial_indicator)
 
     fstmt = fetch_sub.add_parser("financial-statement")
+    _add_provider_args(fstmt)
     fstmt.add_argument("--tickers", nargs="+", required=True)
     fstmt.add_argument("--start-date", required=True, help="Announcement start date unless --period is supplied.")
     fstmt.add_argument("--end-date", required=True, help="Announcement end date unless --period is supplied.")
@@ -214,18 +280,21 @@ def build_parser() -> argparse.ArgumentParser:
     fstmt.set_defaults(func=cmd_fetch_financial_statement)
 
     money = fetch_sub.add_parser("money-flow")
+    _add_provider_args(money)
     money.add_argument("--tickers", nargs="+", required=True)
     money.add_argument("--start-date", required=True)
     money.add_argument("--end-date", required=True)
     money.set_defaults(func=cmd_fetch_money_flow)
 
     status = fetch_sub.add_parser("trading-status")
+    _add_provider_args(status)
     status.add_argument("--tickers", nargs="+", required=True)
     status.add_argument("--start-date", required=False)
     status.add_argument("--end-date", required=False)
     status.set_defaults(func=cmd_fetch_trading_status)
 
     corp = fetch_sub.add_parser("corporate-action")
+    _add_provider_args(corp)
     corp.add_argument("--tickers", nargs="+", required=True)
     corp.add_argument("--start-date", required=False, help="Optional event start date. If omitted, Tushare corporate-action endpoints default to full history.")
     corp.add_argument("--end-date", required=False, help="Optional event end date. If omitted, defaults to today for sparse event endpoints.")
@@ -241,7 +310,7 @@ def build_parser() -> argparse.ArgumentParser:
     qbars.add_argument("--start-date", required=True)
     qbars.add_argument("--end-date", required=True)
     qbars.add_argument("--frequency", default="1d")
-    qbars.add_argument("--adjust", default="none")
+    qbars.add_argument("--adjust", default="none", choices=["none", "raw", "qfq", "hfq"])
     qbars.set_defaults(func=cmd_query_bars)
 
     qconf = query_sub.add_parser("conflicts")

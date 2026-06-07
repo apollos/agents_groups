@@ -71,6 +71,10 @@ def build_comparison_key(record: BaseModel | dict[str, Any]) -> str:
     return "|".join(str(data.get(k)) for k in sorted(data.keys()) if k.endswith("_id") or k.endswith("code"))
 
 
+def _uses_tencent_hist(data: dict[str, Any]) -> bool:
+    return "stock_zh_a_hist_tx" in str(data.get("source_api", ""))
+
+
 def compare_standard_records(
     canonical: BaseModel,
     other: BaseModel,
@@ -95,6 +99,12 @@ def compare_standard_records(
         # richer Tushare fields. Canonical-missing/other-present remains a
         # supplement-candidate case handled by merge_policy, not comparison.
         if not _is_present(canonical_value) or not _is_present(other_value):
+            continue
+        # AKShare's Tencent daily fallback does not provide trading amount or
+        # true VWAP. The adapter supplies a marked estimate only to satisfy the
+        # current standard BarRecord shape. Do not let that estimate produce
+        # false amount/vwap conflicts against richer canonical providers.
+        if field in {"amount", "vwap"} and (_uses_tencent_hist(c) or _uses_tencent_hist(o)):
             continue
         checked.append(field)
         conflict = detect_field_conflict(

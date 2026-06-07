@@ -1,14 +1,68 @@
+# Data source selection.
+#
+# Use this file or .env to decide which providers are used for each run.
+# Common .env overrides:
+#   STOCK_DATA_PROVIDERS=tushare,akshare          # global provider list/order
+#   STOCK_DATA_PROVIDERS=akshare                  # single-source run
+#   STOCK_DATA_CANONICAL_PROVIDER=akshare         # canonical provider when using one source
+#   STOCK_DATA_DISABLED_PROVIDERS=joinquant       # exclude a provider
+#   STOCK_DATA_ENABLE_JOINQUANT=false             # provider-specific enable/disable
+#   STOCK_DATA_PROVIDERS_HISTORICAL_BARS=tushare,akshare # per request-type override
+#   STOCK_DATA_PROVIDERS_SECURITY_MASTER=akshare  # per request-type override
+# Provider aliases accepted in env/config: tushare/thushare/ts, akshare/ak, joinquant/jqdata/jq.
+
 canonical_provider: tushare
+
+# Global provider order. Only providers also listed in active_providers are actually used.
 provider_priority:
   - tushare
   - akshare
   - joinquant
+
+# Active providers for normal runs. JoinQuant is disabled by default here because
+# it requires a working JQData account/permission. Add joinquant back when ready.
+active_providers:
+  - tushare
+  - akshare
+  # - joinquant
+
+# Optional per request-type provider overrides. Uncomment or edit when you want
+# a specific data type to use a different set/order from active_providers.
+request_provider_overrides: {}
+#  security_master:
+#    - tushare
+#    - akshare
+#  historical_bars:
+#    - tushare
+#    - akshare
+#  valuation_metric:
+#    - tushare
+#    - akshare
+#  money_flow:
+#    - tushare
+#    - akshare
+#  financial_statement:
+#    - tushare
+#    - akshare
+#  financial_indicator:
+#    - tushare
+#    - akshare
+#  corporate_action:
+#    - tushare
+#    - akshare
+#  trade_calendar:
+#    - tushare
+#  realtime_quote:
+#    - akshare
+#  industry_concept:
+#    - akshare
+
 validator_providers:
   - akshare
-  - joinquant
+  # - joinquant
 supplement_providers:
   - akshare
-  - joinquant
+  # - joinquant
 allow_field_level_merge: true
 allow_fallback_when_canonical_missing: true
 allow_majority_override_canonical: false
@@ -43,7 +97,7 @@ providers:
     allow_cross_validation: true
     allow_field_level_supplement: true
   joinquant:
-    enabled: true
+    enabled: false
     role: validator_supplement
     auth_env:
       username: JQDATA_USERNAME

@@ -26,7 +26,7 @@ class AKShareAdapter(BaseDataAdapter):
 
     provider_name = "akshare"
     source_site = "akshare"
-    adapter_version = "0.3.0"
+    adapter_version = "0.4.0"
 
     def is_available(self) -> bool:
         return importlib.util.find_spec("akshare") is not None
@@ -236,6 +236,76 @@ class AKShareAdapter(BaseDataAdapter):
     def _ak_symbol(self, ticker: str) -> str:
         return to_akshare_symbol(ticker)[2:]
 
+    def _tx_symbol(self, ticker: str) -> str:
+        """Return the Tencent AKShare symbol, e.g. 000001.SZ -> sz000001."""
+        code, exchange = normalize_ticker(ticker).split(".")
+        return f"{exchange.lower()}{code}"
+
+    def _normalize_tencent_hist_row(self, row: dict[str, Any], *, normalized: str, tx_symbol: str, request: StockDataRequest) -> dict[str, Any]:
+        """Map stock_zh_a_hist_tx output to the common raw aliases used by the runner.
+
+        AKShare's Tencent daily endpoint is more stable in some WSL/proxy
+        environments, but its public schema is narrower than Eastmoney's
+        stock_zh_a_hist. It reliably provides OHLC and a field named
+        ``amount`` that represents trading volume in hands. It usually does
+        not provide trading amount in CNY or turnover rate. Since the current
+        standard BarRecord requires ``amount``, we provide a clearly-marked
+        estimate based on typical price * volume. Comparisons later skip
+        amount/vwap checks for Tencent-derived AKShare bars so this estimate
+        will not create false conflicts against Tushare.
+        """
+        mapped = dict(row)
+        date_value = self._value(row, "日期", "date")
+        open_value = self._value(row, "开盘", "open")
+        close_value = self._value(row, "收盘", "close")
+        high_value = self._value(row, "最高", "high")
+        low_value = self._value(row, "最低", "low")
+
+        # In stock_zh_a_hist_tx the column named ``amount`` is volume in hands.
+        volume_hands = self._value(row, "成交量", "volume", "vol", "amount")
+        actual_amount = self._value(row, "成交额", "turnover", "money", "amount_cny")
+
+        estimated_amount = None
+        if self._is_missing(actual_amount):
+            volume_number = self._numeric(volume_hands)
+            prices = [self._numeric(v) for v in [open_value, high_value, low_value, close_value]]
+            prices = [v for v in prices if v is not None]
+            if volume_number is not None and prices:
+                typical_price = sum(prices) / len(prices)
+                # Tencent volume is in hands, so multiply by 100 shares/hand.
+                estimated_amount = typical_price * volume_number * 100.0
+
+        mapped.update(
+            {
+                "日期": date_value,
+                "开盘": open_value,
+                "最高": high_value,
+                "最低": low_value,
+                "收盘": close_value,
+                "成交量": volume_hands,
+                "volume": volume_hands,
+                "volume_unit": "hand",
+                "provider_symbol": tx_symbol,
+                "normalized_ticker": normalized,
+                "trade_date": self._date_text(date_value),
+                "frequency": str(request.frequency or "1d"),
+                "adjust": str(request.adjust or "none"),
+                "raw_source_api": "stock_zh_a_hist_tx",
+                "source_site_detail": "tencent",
+            }
+        )
+        if not self._is_missing(actual_amount):
+            mapped["成交额"] = actual_amount
+            mapped["amount"] = actual_amount
+            mapped["amount_unit"] = "CNY"
+        elif estimated_amount is not None:
+            mapped["成交额"] = estimated_amount
+            mapped["amount"] = estimated_amount
+            mapped["amount_unit"] = "CNY"
+            mapped["amount_is_estimated"] = True
+            mapped["amount_estimation_method"] = "typical_price_x_tencent_volume_hands_x_100"
+        return mapped
+
     def _add_identity(self, row: dict[str, Any], ticker: str | None = None) -> dict[str, Any]:
         inferred = ticker or self._safe_normalize(
             self._value(row, "normalized_ticker", "ts_code", "代码", "股票代码", "证券代码", "code", "symbol")
@@ -365,33 +435,71 @@ class AKShareAdapter(BaseDataAdapter):
     # Fetch methods
     # ------------------------------------------------------------------
     def fetch_security_master(self, request: StockDataRequest) -> ProviderFetchResult:
-        source_api = "stock_info_a_code_name+stock_individual_info_em+exchange_stock_lists"
+        source_api = "exchange_stock_lists+stock_individual_info_em_optional"
         started = now_asia_shanghai()
         try:
             ak = self._import_ak(source_api, started)
-            base_rows = self._records(ak.stock_info_a_code_name())
+
+            # Prefer exchange official stock-list interfaces as the primary AKShare
+            # security-master source. stock_info_a_code_name is a convenience
+            # wrapper and can time out on szse.cn in WSL/proxy environments; it is
+            # therefore only a non-blocking supplement.
+            exchange_rows = self._exchange_list_rows_by_code(ak)
+
+            code_name_by_code: dict[str, dict[str, Any]] = {}
+            code_name_warning: str | None = None
+            try:
+                for row in self._records(ak.stock_info_a_code_name()):
+                    code = str(self._value(row, "code", "代码", default="")).strip()
+                    if re.fullmatch(r"\d{6}", code):
+                        code_name_by_code[code] = row
+            except Exception as exc:  # noqa: BLE001
+                code_name_warning = f"stock_info_a_code_name failed but exchange lists are primary: {exc}"
+
             if request.tickers:
                 wanted_codes = self._wanted_codes(request)
-                base_rows = [r for r in base_rows if str(self._value(r, "code", "代码")) in wanted_codes]
+            else:
+                wanted_codes = set(exchange_rows) | set(code_name_by_code)
 
-            exchange_rows = self._exchange_list_rows_by_code(ak)
             records: list[dict[str, Any]] = []
-            for row in base_rows:
-                code = str(self._value(row, "code", "代码", default="")).strip()
+            for code in sorted(wanted_codes):
+                exchange_row = exchange_rows.get(code)
+                code_name_row = code_name_by_code.get(code)
+                if not exchange_row and not code_name_row:
+                    continue
+
                 ticker = self._safe_normalize(code)
                 if not ticker:
                     continue
-                enriched = dict(row)
-                enriched["raw_source_api"] = "stock_info_a_code_name"
+
+                enriched: dict[str, Any] = {}
+                if code_name_row:
+                    enriched.update(code_name_row)
+                if exchange_row:
+                    enriched.update(exchange_row)
+
+                enriched["raw_source_api"] = (
+                    exchange_row.get("exchange_list_source_api")
+                    if exchange_row
+                    else "stock_info_a_code_name"
+                )
+                enriched["security_master_primary_source"] = "exchange_stock_lists" if exchange_row else "stock_info_a_code_name_fallback"
+                if code_name_warning:
+                    enriched["code_name_warning"] = code_name_warning
+
                 enriched = self._add_identity(enriched, ticker)
-                enriched.setdefault("name", self._value(row, "name", "名称", "股票简称"))
+                enriched["name"] = (
+                    self._value(enriched, "name", "名称", "证券简称", "A股简称", "股票简称")
+                    or enriched.get("name")
+                )
                 enriched.setdefault("list_status", "L")
-                enriched = self._merge_security_exchange_row(enriched, exchange_rows.get(code))
+                enriched = self._merge_security_exchange_row(enriched, exchange_row)
 
                 try:
                     info_rows = self._records(self._call_ak(ak.stock_individual_info_em, symbol=code))
                     info = {str(self._value(i, "item", "项目", default="")).strip(): self._value(i, "value", "值") for i in info_rows}
                     enriched["raw_detail_source_api"] = "stock_individual_info_em"
+                    enriched["raw_detail_source_site"] = "eastmoney"
                     enriched["raw_detail"] = info
                     enriched["industry"] = info.get("行业") or enriched.get("industry")
                     enriched["list_date"] = self._date_text(info.get("上市时间")) or enriched.get("list_date")
@@ -401,8 +509,9 @@ class AKShareAdapter(BaseDataAdapter):
                     enriched["float_market_value"] = self._numeric(info.get("流通市值"))
                     enriched["company_full_name"] = info.get("公司名称") or info.get("公司全称") or enriched.get("company_full_name")
                 except Exception as exc:  # noqa: BLE001
-                    # Detail endpoint is supplemental; keep exchange/code-name record and expose warning in raw row.
-                    enriched["detail_warning"] = f"stock_individual_info_em failed: {exc}"
+                    # Eastmoney detail endpoint is supplemental; exchange-list data
+                    # remains valid if this connection is rejected or times out.
+                    enriched["detail_warning"] = f"stock_individual_info_em optional supplement failed: {exc}"
 
                 records.append(enriched)
             return self._empty_result(source_api, records, started)
@@ -503,8 +612,10 @@ class AKShareAdapter(BaseDataAdapter):
             return self._error_result(source_api, started, exc, ErrorCode.UNKNOWN_ERROR, retryable=True)
 
     def fetch_historical_bars(self, request: StockDataRequest) -> ProviderFetchResult:
-        is_minute = str(request.frequency or "1d") in {"1m", "5m", "15m", "30m", "60m"}
-        source_api = "stock_zh_a_hist_min_em" if is_minute else "stock_zh_a_hist"
+        frequency = str(request.frequency or "1d")
+        is_minute = frequency in {"1m", "5m", "15m", "30m", "60m"}
+        use_tencent_daily = frequency == "1d"
+        source_api = "stock_zh_a_hist_min_em" if is_minute else ("stock_zh_a_hist_tx" if use_tencent_daily else "stock_zh_a_hist")
         started = now_asia_shanghai()
         try:
             ak = self._import_ak(source_api, started)
@@ -529,10 +640,31 @@ class AKShareAdapter(BaseDataAdapter):
                         row["trade_date"] = self._date_text(ts)
                         row["provider_symbol"] = symbol
                         row["normalized_ticker"] = normalized
-                        row["frequency"] = str(request.frequency or "1m")
+                        row["frequency"] = frequency
                         row["adjust"] = str(request.adjust or "none")
+                        row["raw_source_api"] = "stock_zh_a_hist_min_em"
                         records.append(row)
+                elif use_tencent_daily:
+                    tx_symbol = self._tx_symbol(normalized)
+                    if not hasattr(ak, "stock_zh_a_hist_tx"):
+                        raise RuntimeError("AKShare has no stock_zh_a_hist_tx; upgrade akshare or use Eastmoney fallback.")
+                    df = self._call_ak(
+                        ak.stock_zh_a_hist_tx,
+                        symbol=tx_symbol,
+                        start_date=self._start_date(request),
+                        end_date=self._end_date(request),
+                        adjust=self._adjust(request),
+                    )
+                    required_any = [{"date", "open", "high", "low", "close"}, {"日期", "开盘", "最高", "最低", "收盘"}]
+                    columns = set(str(c) for c in getattr(df, "columns", [])) if df is not None else set()
+                    if df is not None and columns and not any(required.issubset(columns) for required in required_any):
+                        raise KeyError(f"AKShare Tencent schema changed. Columns={sorted(columns)}")
+                    for row in self._records(df):
+                        records.append(self._normalize_tencent_hist_row(row, normalized=normalized, tx_symbol=tx_symbol, request=request))
                 else:
+                    # Weekly/monthly bars are still served by the Eastmoney AKShare endpoint.
+                    # stock_zh_a_hist_tx is a daily fallback and should not be used for
+                    # frequencies it does not document.
                     df = self._call_ak(
                         ak.stock_zh_a_hist,
                         symbol=symbol,
@@ -549,8 +681,9 @@ class AKShareAdapter(BaseDataAdapter):
                         row["provider_symbol"] = symbol
                         row["normalized_ticker"] = normalized
                         row["trade_date"] = self._date_text(self._value(row, "日期"))
-                        row["frequency"] = str(request.frequency or "1d")
+                        row["frequency"] = frequency
                         row["adjust"] = str(request.adjust or "none")
+                        row["raw_source_api"] = "stock_zh_a_hist"
                         records.append(row)
             return self._empty_result(source_api, records, started)
         except RuntimeError as exc:

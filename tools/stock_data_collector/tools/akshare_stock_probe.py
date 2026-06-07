@@ -27,6 +27,7 @@ STATUS_EMPTY = "EMPTY"
 STATUS_MISSING_COLUMNS = "MISSING_COLUMNS"
 STATUS_FAILED = "FAILED"
 STATUS_SKIPPED = "SKIPPED"
+STATUS_OPTIONAL_FAILED = "OPTIONAL_FAILED"
 
 
 class ProbeJSONEncoder(json.JSONEncoder):
@@ -64,6 +65,8 @@ class ProbeResult:
     params: dict[str, Any] = field(default_factory=dict)
     message: str | None = None
     traceback: str | None = None
+    optional: bool = False
+    optional_reason: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return self.__dict__.copy()
@@ -114,6 +117,8 @@ def call_case(
     ticker: str | None = None,
     expected_columns: list[str] | None = None,
     filter_fn: Callable[[dict[str, Any]], bool] | None = None,
+    optional: bool = False,
+    optional_reason: str | None = None,
 ) -> ProbeResult:
     params = dict(params or {})
     expected_columns = list(expected_columns or [])
@@ -122,11 +127,13 @@ def call_case(
         columns, rows = df_to_records(df)
         if filter_fn is not None:
             rows = [row for row in rows if filter_fn(row)]
-        missing = [col for col in expected_columns if col not in columns and not any(col in row for row in rows)]
+        missing = [] if not rows else [col for col in expected_columns if col not in columns and not any(col in row for row in rows)]
         status = STATUS_PASS
         message = None
         if not rows:
             status = STATUS_EMPTY
+            if optional_reason:
+                message = optional_reason
         elif missing:
             status = STATUS_MISSING_COLUMNS
             message = "Returned rows but missing expected columns. Check AKShare version or field mapping."
@@ -142,17 +149,21 @@ def call_case(
             sample=rows[:3],
             params=params,
             message=message,
+            optional=optional,
+            optional_reason=optional_reason,
         )
     except Exception as exc:  # noqa: BLE001
         return ProbeResult(
             name=name,
             api=api,
             ticker=ticker,
-            status=STATUS_FAILED,
+            status=STATUS_OPTIONAL_FAILED if optional else STATUS_FAILED,
             params=params,
             expected_columns=expected_columns,
             message=f"{type(exc).__name__}: {exc}",
             traceback=traceback.format_exc(limit=8),
+            optional=optional,
+            optional_reason=optional_reason,
         )
 
 
@@ -181,6 +192,11 @@ def code(ticker: str) -> str:
 def em_prefix_symbol(ticker: str) -> str:
     c, ex = normalize_ticker(ticker).split(".")
     return f"{ex}{c}"
+
+
+def tx_symbol(ticker: str) -> str:
+    c, ex = normalize_ticker(ticker).split(".")
+    return f"{ex.lower()}{c}"
 
 
 def market_code(ticker: str) -> str:
@@ -225,7 +241,26 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
     results: list[ProbeResult] = []
 
     # Cross-market/code lists and stock master enrichers.
-    results.append(call_case(name="security_master_code_name", api="stock_info_a_code_name", fn=ak.stock_info_a_code_name, expected_columns=["code", "name"]))
+    # Production code now treats exchange lists as the primary security-master path.
+    # stock_info_a_code_name is a convenience wrapper and is only probed when requested.
+    if args.include_code_name_diagnostic:
+        results.append(call_case(
+            name="security_master_code_name",
+            api="stock_info_a_code_name",
+            fn=ak.stock_info_a_code_name,
+            expected_columns=["code", "name"],
+            optional=not args.strict_eastmoney,
+            optional_reason="Diagnostic convenience wrapper; production code uses exchange-specific lists as primary.",
+        ))
+    else:
+        results.append(ProbeResult(
+            name="security_master_code_name",
+            api="stock_info_a_code_name",
+            status=STATUS_SKIPPED,
+            message="Skipped by default; pass --include-code-name-diagnostic to probe this convenience wrapper.",
+            optional=True,
+            optional_reason="Production code uses exchange-specific lists as primary.",
+        ).as_dict())
     results.append(call_case(name="security_master_sh_list", api="stock_info_sh_name_code", fn=ak.stock_info_sh_name_code, params={"symbol": "主板A股"}, expected_columns=["证券代码", "证券简称", "公司全称", "上市日期"]))
     results.append(call_case(name="security_master_sz_list", api="stock_info_sz_name_code", fn=ak.stock_info_sz_name_code, params={"symbol": "A股列表"}, expected_columns=["A股代码", "A股简称", "A股上市日期", "A股总股本", "A股流通股本", "所属行业"]))
     results.append(call_case(name="security_master_bj_list", api="stock_info_bj_name_code", fn=ak.stock_info_bj_name_code, expected_columns=["证券代码", "证券简称", "总股本", "流通股本", "上市日期", "所属行业"]))
@@ -235,30 +270,97 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
         ep = em_prefix_symbol(ticker)
         norm = normalize_ticker(ticker)
         market = market_code(ticker)
+        tx = tx_symbol(ticker)
 
-        results.append(call_case(name="security_master_individual", api="stock_individual_info_em", fn=ak.stock_individual_info_em, ticker=ticker, params={"symbol": c}, expected_columns=["item", "value"]))
-        results.append(call_case(name="historical_bars_daily", api="stock_zh_a_hist", fn=ak.stock_zh_a_hist, ticker=ticker, params={"symbol": c, "period": "daily", "start_date": start_text, "end_date": end_text, "adjust": ""}, expected_columns=["日期", "开盘", "最高", "最低", "收盘", "成交量", "成交额"]))
-        results.append(call_case(name="historical_bars_minute_5m", api="stock_zh_a_hist_min_em", fn=ak.stock_zh_a_hist_min_em, ticker=ticker, params={"symbol": c, "period": "5", "start_date": f"{start.isoformat()} 09:30:00", "end_date": f"{end.isoformat()} 15:00:00", "adjust": ""}, expected_columns=["时间", "开盘", "最高", "最低", "收盘", "成交量", "成交额"]))
+        results.append(call_case(
+            name="security_master_individual",
+            api="stock_individual_info_em",
+            fn=ak.stock_individual_info_em,
+            ticker=ticker,
+            params={"symbol": c},
+            expected_columns=["item", "value"],
+            optional=not args.strict_eastmoney,
+            optional_reason="Eastmoney-only optional detail supplement; Tencent has no equivalent security-master detail endpoint.",
+        ))
+        if hasattr(ak, "stock_zh_a_hist_tx"):
+            results.append(call_case(name="historical_bars_daily", api="stock_zh_a_hist_tx", fn=ak.stock_zh_a_hist_tx, ticker=ticker, params={"symbol": tx, "start_date": start_text, "end_date": end_text, "adjust": ""}, expected_columns=["date", "open", "high", "low", "close", "amount"]))
+        else:
+            results.append(ProbeResult(name="historical_bars_daily", api="stock_zh_a_hist_tx", ticker=ticker, status=STATUS_SKIPPED, message="AKShare version has no stock_zh_a_hist_tx; upgrade akshare.").as_dict())
+        if args.include_eastmoney_hist:
+            results.append(call_case(name="historical_bars_daily_eastmoney_diagnostic", api="stock_zh_a_hist", fn=ak.stock_zh_a_hist, ticker=ticker, params={"symbol": c, "period": "daily", "start_date": start_text, "end_date": end_text, "adjust": ""}, expected_columns=["日期", "开盘", "最高", "最低", "收盘", "成交量", "成交额"]))
+        results.append(call_case(
+            name="historical_bars_minute_5m",
+            api="stock_zh_a_hist_min_em",
+            fn=ak.stock_zh_a_hist_min_em,
+            ticker=ticker,
+            params={"symbol": c, "period": "5", "start_date": f"{start.isoformat()} 09:30:00", "end_date": f"{end.isoformat()} 15:00:00", "adjust": ""},
+            expected_columns=["时间", "开盘", "最高", "最低", "收盘", "成交量", "成交额"],
+            optional=not args.strict_eastmoney,
+            optional_reason="Eastmoney-only minute OHLC path; Tencent stock_zh_a_hist_tx supports daily bars only.",
+        ))
         results.append(call_case(name="valuation_metric", api="stock_value_em", fn=ak.stock_value_em, ticker=ticker, params={"symbol": c}, expected_columns=["数据日期", "当日收盘价", "总市值", "流通市值", "总股本", "流通股本", "PE(TTM)"]))
         results.append(call_case(name="financial_statement_income", api="stock_profit_sheet_by_report_em", fn=ak.stock_profit_sheet_by_report_em, ticker=ticker, params={"symbol": ep}, expected_columns=["SECUCODE", "SECURITY_CODE", "REPORT_DATE"]))
         results.append(call_case(name="financial_statement_balance", api="stock_balance_sheet_by_report_em", fn=ak.stock_balance_sheet_by_report_em, ticker=ticker, params={"symbol": ep}, expected_columns=["SECUCODE", "SECURITY_CODE", "REPORT_DATE"]))
         results.append(call_case(name="financial_statement_cashflow", api="stock_cash_flow_sheet_by_report_em", fn=ak.stock_cash_flow_sheet_by_report_em, ticker=ticker, params={"symbol": ep}, expected_columns=["SECUCODE", "SECURITY_CODE", "REPORT_DATE"]))
         results.append(call_case(name="financial_indicator_em", api="stock_financial_analysis_indicator_em", fn=ak.stock_financial_analysis_indicator_em, ticker=ticker, params={"symbol": norm, "indicator": "按报告期"}, expected_columns=["SECUCODE", "SECURITY_CODE", "REPORT_DATE", "EPSJB", "ROEJQ"]))
-        results.append(call_case(name="money_flow", api="stock_individual_fund_flow", fn=ak.stock_individual_fund_flow, ticker=ticker, params={"stock": c, "market": market}, expected_columns=["日期", "主力净流入-净额", "主力净流入-净占比"]))
+        results.append(call_case(
+            name="money_flow",
+            api="stock_individual_fund_flow",
+            fn=ak.stock_individual_fund_flow,
+            ticker=ticker,
+            params={"stock": c, "market": market},
+            expected_columns=["日期", "主力净流入-净额", "主力净流入-净占比"],
+            optional=not args.strict_eastmoney,
+            optional_reason="Eastmoney-only AKShare individual money-flow path; no Tencent equivalent in AKShare docs.",
+        ))
         results.append(call_case(name="corporate_action_dividend", api="stock_history_dividend_detail", fn=ak.stock_history_dividend_detail, ticker=ticker, params={"symbol": c, "indicator": "分红"}, expected_columns=["公告日期", "送股", "转增", "派息", "除权除息日", "股权登记日"]))
-        results.append(call_case(name="corporate_action_rights_issue", api="stock_history_dividend_detail", fn=ak.stock_history_dividend_detail, ticker=ticker, params={"symbol": c, "indicator": "配股"}, expected_columns=["公告日期"]))
+        results.append(call_case(
+            name="corporate_action_rights_issue",
+            api="stock_history_dividend_detail",
+            fn=ak.stock_history_dividend_detail,
+            ticker=ticker,
+            params={"symbol": c, "indicator": "配股"},
+            expected_columns=["公告日期"],
+            optional=True,
+            optional_reason="Event may be absent for the selected stock/date range.",
+        ))
 
     # Full-table APIs filtered locally.
     wanted_codes = {code(t) for t in tickers}
-    results.append(call_case(name="realtime_quote", api="stock_zh_a_spot_em", fn=ak.stock_zh_a_spot_em, expected_columns=["代码", "名称", "最新价", "成交量", "成交额", "总市值", "流通市值"], filter_fn=lambda row: str(row.get("代码")) in wanted_codes))
+    results.append(call_case(
+        name="realtime_quote",
+        api="stock_zh_a_spot_em",
+        fn=ak.stock_zh_a_spot_em,
+        expected_columns=["代码", "名称", "最新价", "成交量", "成交额", "总市值", "流通市值"],
+        filter_fn=lambda row: str(row.get("代码")) in wanted_codes,
+        optional=not args.strict_eastmoney,
+        optional_reason="Eastmoney-only all-A realtime quote path; Tencent AKShare realtime is A+H-only, not all requested A shares.",
+    ))
     if hasattr(ak, "stock_zh_a_st_em"):
-        results.append(call_case(name="trading_status_st", api="stock_zh_a_st_em", fn=ak.stock_zh_a_st_em, expected_columns=["代码", "名称"], filter_fn=lambda row: str(row.get("代码")) in wanted_codes))
+        results.append(call_case(
+            name="trading_status_st",
+            api="stock_zh_a_st_em",
+            fn=ak.stock_zh_a_st_em,
+            expected_columns=["代码", "名称"],
+            filter_fn=lambda row: str(row.get("代码")) in wanted_codes,
+            optional=not args.strict_eastmoney,
+            optional_reason="Eastmoney-only ST/risk-warning path; no Tencent all-A ST list equivalent in AKShare docs.",
+        ))
     else:
         results.append(ProbeResult(name="trading_status_st", api="stock_zh_a_st_em", status=STATUS_SKIPPED, message="AKShare version has no stock_zh_a_st_em").as_dict())
 
     for offset in range(min(args.max_trading_status_days, max((end - start).days + 1, 1))):
         day = end - timedelta(days=offset)
-        results.append(call_case(name=f"trading_status_suspend:{day:%Y%m%d}", api="stock_tfp_em", fn=ak.stock_tfp_em, params={"date": day.strftime("%Y%m%d")}, expected_columns=["代码", "名称", "停牌时间", "停牌原因"], filter_fn=lambda row: str(row.get("代码")) in wanted_codes))
+        results.append(call_case(
+            name=f"trading_status_suspend:{day:%Y%m%d}",
+            api="stock_tfp_em",
+            fn=ak.stock_tfp_em,
+            params={"date": day.strftime("%Y%m%d")},
+            expected_columns=["代码", "名称", "停牌时间", "停牌原因"],
+            filter_fn=lambda row: str(row.get("代码")) in wanted_codes,
+            optional=True,
+            optional_reason="Sparse event API; EMPTY usually means no suspension event for selected tickers/date.",
+        ))
 
     # Board membership: potentially slow, capped by --max-boards.
     if args.include_boards:
@@ -324,6 +426,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--include-boards", action="store_true", help="Probe industry/concept board membership. This can be slow.")
     parser.add_argument("--max-boards", type=int, default=5, help="Max industry/concept boards to scan when --include-boards is set.")
     parser.add_argument("--include-index", action="store_true", help="Probe index bars/constituents as well.")
+    parser.add_argument("--include-eastmoney-hist", action="store_true", help="Also probe Eastmoney stock_zh_a_hist as a diagnostic. Daily bars now use Tencent stock_zh_a_hist_tx by default.")
+    parser.add_argument("--include-code-name-diagnostic", action="store_true", help="Also probe stock_info_a_code_name; production code uses exchange-specific lists as primary.")
+    parser.add_argument("--strict-eastmoney", action="store_true", help="Treat Eastmoney-only optional probes as FAILED instead of OPTIONAL_FAILED.")
     parser.add_argument("--index-codes", nargs="*", default=["000300"], help="Index codes for --include-index.")
     parser.add_argument("--max-trading-status-days", type=int, default=3, help="Number of latest dates in range to query stock_tfp_em.")
     return parser

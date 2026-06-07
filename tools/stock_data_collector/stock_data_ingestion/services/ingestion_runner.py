@@ -11,7 +11,7 @@ from stock_data_ingestion.adapters.akshare_adapter import AKShareAdapter
 from stock_data_ingestion.adapters.base import BaseDataAdapter
 from stock_data_ingestion.adapters.joinquant_adapter import JoinQuantAdapter
 from stock_data_ingestion.adapters.tushare_adapter import TushareAdapter
-from stock_data_ingestion.config import AppConfig
+from stock_data_ingestion.config import AppConfig, KNOWN_PROVIDERS, parse_provider_list
 from stock_data_ingestion.normalization.datetime_utils import (
     build_quote_time_bucket,
     infer_bar_start_end,
@@ -271,7 +271,52 @@ class IngestionRunner:
             "joinquant": JoinQuantAdapter(),
         }
 
+    def _request_with_configured_providers(self, request: StockDataRequest) -> StockDataRequest:
+        """Resolve providers from config/.env unless the caller selected them.
+
+        StockDataRequest defaults to all providers. Runtime provider selection is
+        controlled by config/data_sources.yaml and STOCK_DATA_* env variables.
+        If a caller explicitly passes provider_priority/canonical_provider, those
+        values are kept but filtered through the active provider allow-list.
+        """
+
+        default_provider_settings = (
+            request.provider_priority == list(KNOWN_PROVIDERS)
+            and request.canonical_provider == "tushare"
+        )
+        request_type = str(request.request_type)
+        if default_provider_settings:
+            provider_priority = self.config.data_sources.providers_for_request(request_type)
+            canonical = self.config.data_sources.canonical_for_request(request_type)
+        else:
+            provider_priority = [
+                provider
+                for provider in parse_provider_list(request.provider_priority)
+                if self.config.data_sources.provider_is_enabled(provider)
+            ]
+            if not provider_priority:
+                provider_priority = self.config.data_sources.providers_for_request(request_type)
+            canonical = request.canonical_provider
+            if canonical not in provider_priority:
+                canonical = provider_priority[0] if provider_priority else self.config.data_sources.canonical_for_request(request_type)
+
+        payload = request.model_dump()
+        payload["provider_priority"] = provider_priority
+        payload["canonical_provider"] = canonical
+        payload["cross_validate"] = bool(request.cross_validate and len(provider_priority) > 1)
+        payload["extra_params"] = {
+            **dict(payload.get("extra_params") or {}),
+            "resolved_provider_priority": provider_priority,
+            "resolved_canonical_provider": canonical,
+        }
+        if default_provider_settings:
+            # Regenerate idempotency key so changing providers via config/.env
+            # cannot accidentally reuse a previous provider-set key.
+            payload["idempotency_key"] = None
+        return StockDataRequest.model_validate(payload)
+
     def run(self, request: StockDataRequest) -> StockDataResponse:
+        request = self._request_with_configured_providers(request)
         ingestion_run_id = f"run_{now_asia_shanghai().strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:8]}"
         created_at = now_asia_shanghai()
         provider_results: list[ProviderFetchResult] = []
@@ -284,6 +329,16 @@ class IngestionRunner:
         warnings: list[str] = []
         persisted_tables: list[str] = []
         parquet_refs: list[str] = []
+
+        if not request.provider_priority:
+            errors.append(
+                ErrorRecord(
+                    error_code=ErrorCode.INVALID_REQUEST,
+                    error_message="No active data providers are configured for this request type.",
+                    retryable=False,
+                    suggested_action="Set active_providers in config/data_sources.yaml or STOCK_DATA_ACTIVE_PROVIDERS in .env.",
+                )
+            )
 
         self._start_persistence(request, ingestion_run_id, created_at, errors)
         if self._is_idempotent_success(request, errors):
@@ -427,11 +482,10 @@ class IngestionRunner:
 
     def _provider_order(self, request: StockDataRequest) -> list[str]:
         order = list(dict.fromkeys([request.canonical_provider, *request.provider_priority]))
-        return [provider for provider in order if provider in self.adapters]
+        return [provider for provider in order if provider in self.adapters and self._provider_enabled(provider)]
 
     def _provider_enabled(self, provider: str) -> bool:
-        cfg = self.config.data_sources.providers.get(provider)
-        return True if cfg is None else cfg.enabled
+        return self.config.data_sources.provider_is_enabled(provider)
 
     def _should_fetch_supplement(self, provider: str, request: StockDataRequest, canonical_returned_rows: bool) -> bool:
         if RequestType(str(request.request_type)) in PROVIDER_SPECIFIC_REQUEST_TYPES:
@@ -1153,16 +1207,31 @@ class IngestionRunner:
 
     def _normalize_corporate_action(self, result: ProviderFetchResult, raw: dict[str, Any], idx: int, request: StockDataRequest, run_id: str) -> list[StandardRecord]:
         identity = self._stock_identity(raw, request)
+        action_type = _value(raw, "action_type", "类型", default="dividend")
+
+        # Tushare corporate-action endpoints use endpoint-specific names:
+        # dividend: cash_div/cash_div_tax, stk_div/stk_bo_rate/stk_co_rate, pay_date
+        # share_float: ann_date, float_date, float_share, float_ratio
+        # Map the fields that fit the common CorporateActionRecord without losing
+        # the original raw row in Raw Object Store. Endpoint-specific fields remain
+        # traceable through raw_payload_ref/raw_row_index.
+        stock_bonus_ratio = _float(raw, "stock_bonus_ratio", "stk_div", "送股比例")
+        if stock_bonus_ratio is None:
+            stk_bo_rate = _float(raw, "stk_bo_rate") or 0.0
+            stk_co_rate = _float(raw, "stk_co_rate") or 0.0
+            summed = stk_bo_rate + stk_co_rate
+            stock_bonus_ratio = summed if summed else None
+
         domain = {
             **identity,
             "currency": normalize_currency(_value(raw, "currency", default="CNY")),
-            "action_type": _value(raw, "action_type", "类型", default="dividend"),
+            "action_type": action_type,
             "announcement_date": _date(raw, "announcement_date", "ann_date", "公告日期"),
             "record_date": _date(raw, "record_date", "股权登记日"),
-            "ex_date": _date(raw, "ex_date", "除权除息日"),
-            "dividend_payment_date": _date(raw, "dividend_payment_date", "派息日"),
-            "cash_dividend_per_share": _float(raw, "cash_dividend_per_share", "每股现金分红"),
-            "stock_bonus_ratio": _float(raw, "stock_bonus_ratio", "送股比例"),
+            "ex_date": _date(raw, "ex_date", "float_date", "除权除息日", "解禁日期"),
+            "dividend_payment_date": _date(raw, "dividend_payment_date", "pay_date", "派息日"),
+            "cash_dividend_per_share": _float(raw, "cash_dividend_per_share", "cash_div_tax", "cash_div", "每股现金分红"),
+            "stock_bonus_ratio": stock_bonus_ratio,
             "rights_issue_ratio": _float(raw, "rights_issue_ratio", "配股比例"),
             "rights_issue_price": _float(raw, "rights_issue_price", "配股价格"),
         }
