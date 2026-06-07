@@ -7,6 +7,19 @@ from pydantic import BaseModel
 from stock_data_ingestion.schemas.records import BarRecord, ProviderComparisonResult
 from stock_data_ingestion.validation.conflict import detect_field_conflict
 
+
+
+def _is_present(value: Any) -> bool:
+    if value is None or value == "":
+        return False
+    if isinstance(value, (list, dict)) and not value:
+        return False
+    try:
+        # pandas/float NaN should not be treated as a comparable value.
+        return not (value != value)
+    except Exception:  # noqa: BLE001
+        return True
+
 DEFAULT_BAR_FIELDS = [
     "open",
     "high",
@@ -73,15 +86,25 @@ def compare_standard_records(
     for field in fields:
         if field not in c and field not in o:
             continue
+        canonical_value = c.get(field)
+        other_value = o.get(field)
+        # Missing values are not evidence of a conflict. A field can only be
+        # cross-validated when both providers actually supplied comparable
+        # values. This prevents lightweight AKShare endpoints, such as
+        # stock_info_a_code_name, from generating false conflicts against
+        # richer Tushare fields. Canonical-missing/other-present remains a
+        # supplement-candidate case handled by merge_policy, not comparison.
+        if not _is_present(canonical_value) or not _is_present(other_value):
+            continue
         checked.append(field)
         conflict = detect_field_conflict(
             record_type=str(c.get("record_type")),
             comparison_key=comparison_key,
             field_name=field,
             canonical_provider=str(c.get("provider")),
-            canonical_value=c.get(field),
+            canonical_value=canonical_value,
             other_provider=str(o.get("provider")),
-            other_value=o.get(field),
+            other_value=other_value,
             tolerances=tolerances,
             request_id=c.get("request_id"),
             ingestion_run_id=c.get("ingestion_run_id"),

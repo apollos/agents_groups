@@ -8,6 +8,8 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field
 
+from stock_data_ingestion.env import ensure_env_loaded, load_env, load_env_if_missing
+
 
 class ProviderConfig(BaseModel):
     enabled: bool = True
@@ -71,6 +73,10 @@ def _load_yaml(path: Path) -> dict[str, Any]:
 
 
 def find_config_dir(config_dir: str | Path | None = None) -> Path:
+    # Load .env before reading STOCK_DATA_CONFIG_DIR, so config location itself
+    # can be supplied from .env.
+    ensure_env_loaded()
+
     if config_dir:
         return Path(config_dir)
     env_dir = os.getenv("STOCK_DATA_CONFIG_DIR")
@@ -84,7 +90,12 @@ def find_config_dir(config_dir: str | Path | None = None) -> Path:
 
 @lru_cache(maxsize=8)
 def load_config(config_dir: str | Path | None = None) -> AppConfig:
+    # First pass loads .env from cwd/project root. After config dir is resolved,
+    # second pass also allows config/.env and parent .env to participate.
+    ensure_env_loaded(config_dir=config_dir)
     root = find_config_dir(config_dir)
+    ensure_env_loaded(config_dir=root)
+
     data_sources = DataSourcesConfig.model_validate(_load_yaml(root / "data_sources.yaml"))
     storage_data = _load_yaml(root / "storage.yaml")
     if os.getenv("STOCK_DATA_SQLITE_PATH"):

@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Any, Optional
 
+from stock_data_ingestion.env import ensure_env_loaded
 from stock_data_ingestion.normalization.datetime_utils import now_asia_shanghai
 from stock_data_ingestion.schemas.errors import ErrorCode, ErrorRecord
 from stock_data_ingestion.schemas.records import AdapterFetchStatus, ProviderFetchResult
@@ -16,6 +17,9 @@ class BaseDataAdapter(ABC):
     source_site: str
 
     def __init__(self) -> None:
+        # Adapter constructors may be used directly by application code, bypassing
+        # CLI and load_config(). Load .env here as a final credential/config fallback.
+        ensure_env_loaded()
         self._authenticated = False
 
     @abstractmethod

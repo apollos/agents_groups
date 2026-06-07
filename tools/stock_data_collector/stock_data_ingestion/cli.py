@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from stock_data_ingestion.config import load_config
+from stock_data_ingestion.env import ensure_env_loaded
 from stock_data_ingestion.logging_config import setup_logging
 from stock_data_ingestion.schemas.requests import Adjust, Frequency
 from stock_data_ingestion.services.collector import StockDataCollector
@@ -69,6 +70,43 @@ def cmd_fetch_valuation(args: argparse.Namespace) -> None:
 def cmd_fetch_financial_indicator(args: argparse.Namespace) -> None:
     collector = _build_collector(args.config_dir)
     resp = collector.fetch_financial_indicator(args.tickers, args.start_date, args.end_date)
+    print(resp.model_dump_json(indent=2))
+
+
+def cmd_fetch_financial_statement(args: argparse.Namespace) -> None:
+    collector = _build_collector(args.config_dir)
+    resp = collector.fetch_financial_statement(
+        args.tickers,
+        args.start_date,
+        args.end_date,
+        statement_types=args.statement_types,
+        period=args.period,
+    )
+    print(resp.model_dump_json(indent=2))
+
+
+def cmd_fetch_money_flow(args: argparse.Namespace) -> None:
+    collector = _build_collector(args.config_dir)
+    resp = collector.fetch_money_flow(args.tickers, args.start_date, args.end_date)
+    print(resp.model_dump_json(indent=2))
+
+
+def cmd_fetch_trading_status(args: argparse.Namespace) -> None:
+    collector = _build_collector(args.config_dir)
+    resp = collector.fetch_trading_status(args.tickers, args.start_date, args.end_date)
+    print(resp.model_dump_json(indent=2))
+
+
+def cmd_fetch_corporate_action(args: argparse.Namespace) -> None:
+    collector = _build_collector(args.config_dir)
+    action_types = args.action_types or None
+    resp = collector.fetch_corporate_action(
+        args.tickers,
+        args.start_date,
+        args.end_date,
+        action_types=action_types,
+        event_date_field=args.event_date_field,
+    )
     print(resp.model_dump_json(indent=2))
 
 
@@ -167,6 +205,34 @@ def build_parser() -> argparse.ArgumentParser:
     fin.add_argument("--end-date", required=True)
     fin.set_defaults(func=cmd_fetch_financial_indicator)
 
+    fstmt = fetch_sub.add_parser("financial-statement")
+    fstmt.add_argument("--tickers", nargs="+", required=True)
+    fstmt.add_argument("--start-date", required=True, help="Announcement start date unless --period is supplied.")
+    fstmt.add_argument("--end-date", required=True, help="Announcement end date unless --period is supplied.")
+    fstmt.add_argument("--statement-types", nargs="*", choices=["income", "balancesheet", "cashflow", "income_statement", "balance_sheet", "cash_flow"], default=None)
+    fstmt.add_argument("--period", required=False, help="Optional report period, e.g. 20250331. When set, Tushare period is used instead of start/end.")
+    fstmt.set_defaults(func=cmd_fetch_financial_statement)
+
+    money = fetch_sub.add_parser("money-flow")
+    money.add_argument("--tickers", nargs="+", required=True)
+    money.add_argument("--start-date", required=True)
+    money.add_argument("--end-date", required=True)
+    money.set_defaults(func=cmd_fetch_money_flow)
+
+    status = fetch_sub.add_parser("trading-status")
+    status.add_argument("--tickers", nargs="+", required=True)
+    status.add_argument("--start-date", required=False)
+    status.add_argument("--end-date", required=False)
+    status.set_defaults(func=cmd_fetch_trading_status)
+
+    corp = fetch_sub.add_parser("corporate-action")
+    corp.add_argument("--tickers", nargs="+", required=True)
+    corp.add_argument("--start-date", required=False, help="Optional event start date. If omitted, Tushare corporate-action endpoints default to full history.")
+    corp.add_argument("--end-date", required=False, help="Optional event end date. If omitted, defaults to today for sparse event endpoints.")
+    corp.add_argument("--action-types", nargs="*", choices=["dividend", "share_float", "repurchase"], default=None)
+    corp.add_argument("--event-date-field", choices=["ann_date", "record_date", "ex_date", "imp_ann_date", "pay_date", "div_listdate", "base_date", "end_date"], default=None)
+    corp.set_defaults(func=cmd_fetch_corporate_action)
+
     query = sub.add_parser("query", help="Query data")
     query_sub = query.add_subparsers(dest="query_command", required=True)
 
@@ -194,6 +260,9 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
+    # CLI entry point: load all .env variables before command handlers construct
+    # config, database, collectors, or provider adapters.
+    ensure_env_loaded(config_dir=getattr(args, "config_dir", None))
     args.func(args)
 
 
