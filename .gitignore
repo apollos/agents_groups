@@ -225,3 +225,6 @@ data/
 
 # local logs
 logs/
+
+# .cursor config
+.cursor/

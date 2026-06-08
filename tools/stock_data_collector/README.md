@@ -1,143 +1,216 @@
 # stock_data_collector / stock_data_ingestion
 
-A 股与港股通日频结构化数据获取程序。它定位为量化系统最底层的数据底座：负责从 Tushare Pro、AKShare 腾讯路径、BaoStock 以及未来可选的 JoinQuant/JQData 获取结构化数据，保存原始响应，标准化字段，执行多源校验，记录冲突，给数据质量评分，并把可追溯的标准化数据写入 SQLite / Parquet。
+A 股与港股通日频结构化数据获取工具。它是量化系统的数据底座，不是交易 Agent：负责从 Tushare Pro、AKShare（东方财富 + 腾讯）、BaoStock 等数据源获取数据，保存 raw payload，标准化字段，做多源交叉校验，记录冲突，计算质量分，并把可追溯的数据写入 SQLite / Parquet，供后续 Agent、因子系统和回测系统查询。
 
+当前代码版本：`0.3.0`。AKShare adapter：`0.4.0`。
 
-## 本版优化摘要（v0.3.0 / BaoStock + 日频生产化基线）
+测试基准：完整依赖环境 `python -m pytest -q` 为 **105 passed**。在缺少 `pyarrow` / `SQLAlchemy` 的轻量环境里，Parquet 与部分 SQLite/QueryService 测试会被 skip，可能看到类似 `99 passed, 6 skipped`。
 
-本版在 v0.2.0 的可靠性基础上，按“日频盘后因子系统”目标补齐了 BaoStock 与轻量生产化能力：
+---
 
-- 新增 `BaoStockAdapter`，作为 A 股 validator + supplement provider，覆盖证券基本资料、交易日历、全市场交易状态、A 股日线、日频估值字段、复权因子、季频财务指标、行业分类、指数成分和分红送转；
-- 明确 BaoStock 只用于其文档支持的 `sh./sz.` A 股范围；北交所和港股通港股日线不通过 BaoStock 拉取，港股通股票本身的港股日线走 Tushare HK 接口；
-- `TushareAdapter` 增加 HK daily 路由，用于港股通股票日线行情和因子计算；
-- `config/data_sources.yaml` 更新为 Tushare canonical、AKShare Tencent + BaoStock supplement/validation、JQData 默认 disabled；
-- 新增 `market_data_lookback_days=400`、`financial_lookback_quarters=8`、`default_daily_update_time=20:30` 配置；
-- `StockDataRequest` 的幂等键加入 provider set，区分“只拉 Tushare”和“Tushare + AKShare + BaoStock 交叉验证”的不同请求；
-- `QueryService` 新增 trading-ready 查询入口，默认排除 `validation_status=quarantined` 且要求 `data_quality >= minimum_quality_for_trading_use`；
-- 查询层支持从 raw bars + adj_factor 动态计算 qfq/hfq 视图，底层标准存储仍保留原始未复权 OHLCV；
-- `ParquetStore` 改为按业务主键去重，而不是整行去重，避免 `record_id` / `ingested_at` 变化导致业务重复；
-- 新增 `tools/baostock_stock_probe.py`，可直接探测 BaoStock live API 的字段、空结果和错误原因；
-- 交付包应排除 `.env`、`data/`、`logs/`、`*.egg-info/`、`__pycache__/`、`.pytest_cache/` 等敏感或运行产物。
+## 0. 给运维 Agent 的 TL;DR
 
-## 1. 程序定位
+你是调度 Agent，目标是每天盘后自动拉取“当天 / 前一交易日”的数据，并在凭证、Cookie、落盘、质量冲突或供应商异常时提醒用户。
 
-本程序只做四件事：
+记住 6 件事：
 
-1. 数据获取；
-2. 数据校验；
-3. 数据存储；
-4. 数据查询。
+1. **工作目录**：`tools/stock_data_collector/`。
+2. **环境**：先激活项目所用的 Python 虚拟环境（需包含核心依赖与所需 provider SDK），不要擅自新建 venv：
+   ```bash
+   source <你的虚拟环境>/bin/activate
+   ```
+3. **CLI 入口**：
+   ```bash
+   python -m stock_data_ingestion.cli <group> <command>
+   ```
+   不确定参数时使用 `--help`，例如：
+   ```bash
+   python -m stock_data_ingestion.cli fetch historical-bars --help
+   ```
+4. **全局 `--config-dir` 必须放在子命令前面**，推荐所有生产/测试命令都显式传入：
+   ```bash
+   python -m stock_data_ingestion.cli --config-dir config fetch historical-bars --help
+   ```
+5. **跑数据前先检查 Cookie，跑完后查健康摘要**：
+   ```bash
+   python -m stock_data_ingestion.cli --config-dir config verify eastmoney-cookie
+   python -m stock_data_ingestion.cli --config-dir config query meta-summary --ticker 600519.SH
+   ```
+6. **每条 `fetch` 都输出一个 `StockDataResponse` JSON**。Agent 判断成败至少检查：
+   - `status`
+   - `errors[].error_code`
+   - `persistence.saved`
+   - `provider_results[]`
+   - `quality_report.conflicts[].severity`
 
-它不是 Agent，不调用 LLM，不做投资分析，不生成买入/卖出/加仓/减仓/目标价/止损价，不做风控审批，不做订单生成，不做模拟撮合，不接券商接口，不做真实交易。
-
-后续模块应只读取本程序产生的标准化数据、原始数据索引、冲突记录和质量报告，不应绕过本程序直接访问外部数据源。
-
-第一阶段默认数据类型：股票基础信息、交易日历、A 股日线、港股通股票港股日线、复权因子、估值、财务报表、财务指标、资金流向。行情、估值、复权因子和资金流默认回看 400 个自然日；财务报表和财务指标默认保留最近 8 个季度。
-
-## 2. 数据源角色
-
-数据源不是平等关系：
-
-| 数据源 | 默认角色 | 默认用途 | 当前状态 |
-|---|---|---|---|
-| Tushare Pro | canonical provider / 主数据源 | A 股主标准记录、港股通港股日线、复权因子、估值、财务、资金流 | 默认启用 |
-| AKShare Tencent | validator + supplement provider | 免费公开补充、行情交叉验证、缺失字段补足 | 默认启用 |
-| BaoStock | validator + supplement provider | A 股基础资料、日线、估值、复权因子、季频财务指标、行业/指数/分红补充 | 默认启用 |
-| JoinQuant/JQData | optional future provider | 未来研究验证、更多历史对照 | 默认关闭 |
-
-核心原则：即使 AKShare 和 BaoStock 同时不同意 Tushare，也不能自动覆盖 Tushare。程序只会记录冲突、标记 `canonical_value_suspect=true`，并在 high/critical 关键冲突时隔离或要求人工复核。
-
-第一阶段目标是“日频盘后因子系统”，不是分钟线、tick、Level-2 或实时盘中交易系统。默认股票池为全 A 股正常上市股票，包含主板、创业板、科创板、北交所，不含 ETF/可转债，不主动维护退市股票；另包含港股通股票本身的港股日线行情，并用于因子计算。
-
-## 3. 非目标
-
-本程序明确不做：
-
-- Agent / LLM 调用；
-- 投资建议；
-- 新闻、公告、政策、舆情、社交平台采集；
-- 行情特征工程；
-- 异动事件生成；
-- 交易、下单、撮合、券商接口；
-- 把 AKShare / BaoStock / JoinQuant 无痕覆盖 Tushare；
-- 把原始大字段直接塞入数据库；
-- 把行业、概念、资金流等不同口径数据强行合并为唯一真值。
-
-## 4. 安装方式
+最小每日序列如下，适合滚动更新。多数行情类命令不传日期时，会按配置自动回看窗口并幂等去重。
 
 ```bash
-cd stock_data_collector
-python -m venv .venv
-source .venv/bin/activate
+CFG="config"
+U="600519.SH 000001.SZ"   # 当日股票池示例；生产中应替换为真实股票池
+
+python -m stock_data_ingestion.cli --config-dir "$CFG" verify eastmoney-cookie || echo "Eastmoney Cookie may need refresh"
+
+python -m stock_data_ingestion.cli --config-dir "$CFG" fetch trading-status  --tickers $U
+python -m stock_data_ingestion.cli --config-dir "$CFG" fetch historical-bars --tickers $U --frequency 1d --adjust none --cross-validate
+python -m stock_data_ingestion.cli --config-dir "$CFG" fetch adj-factor      --tickers $U --cross-validate
+python -m stock_data_ingestion.cli --config-dir "$CFG" fetch valuation       --tickers $U
+python -m stock_data_ingestion.cli --config-dir "$CFG" fetch money-flow     --tickers $U
+
+python -m stock_data_ingestion.cli --config-dir "$CFG" query meta-summary --ticker 600519.SH
+```
+
+关键纪律：**Tushare 是 canonical provider；AKShare / BaoStock 只做验证、补充、fallback 或 provider-specific 保存，不能因为辅源不一致就无痕覆盖 Tushare。** 出现 `high` / `critical` 冲突时，Agent 应提醒用户复核，不要自行改数据。给下游使用时优先走 `trading-ready` 查询。
+
+---
+
+## 1. 程序定位与边界
+
+本工具只做四件事：**获取 → 校验 → 存储 → 查询**。
+
+明确不做：
+
+- 不做 LLM Agent 决策；
+- 不生成投资建议；
+- 不交易、不下单、不接券商接口；
+- 不做新闻舆情采集；
+- 不把原始大字段塞进 SQLite；
+- 不把不同供应商口径的数据强行合并为唯一真值；
+- 不自动用多数投票覆盖 canonical provider。
+
+第一阶段范围是“日频盘后因子系统”：
+
+- 股票池：全 A 股正常上市股票，包括主板、创业板、科创板、北交所；不含 ETF / 可转债；默认不维护退市股；外加港股通股票本身的港股日线。
+- 数据类型：基础信息、交易日历、交易状态、A 股日线、港股通港股日线、复权因子、估值、财报、财务指标、资金流、分红送转、指数成分。
+- 窗口：行情、估值、复权、资金流默认回看 `market_data_lookback_days = 400` 自然日；财务默认覆盖 `financial_lookback_quarters = 8` 个季度。
+- 复权：标准层只存未复权 OHLCV + `adj_factor`；`qfq` / `hfq` 在查询层按需动态计算。
+- 默认不是分钟线、tick、Level-2 或实时盘中系统。
+
+---
+
+## 2. 安装与环境
+
+进入项目目录并激活项目所用的 Python 虚拟环境（需 Python >=3.11，包含核心依赖、`pytest` 及所需 provider SDK：`tushare` / `akshare` / `baostock` / `jqdatasdk`）。**不要新建 venv**；若发现缺依赖，先与维护者确认再安装：
+
+```bash
+cd tools/stock_data_collector
+source <你的虚拟环境>/bin/activate
+```
+
+如需在其它环境从源码安装开发依赖：
+
+```bash
 pip install -e .[dev,providers]
 ```
 
-只运行无外部 API 的测试时，`providers` 可不安装；真实拉取数据时需要安装对应 SDK。
+只运行不依赖真实外部 API 的单元测试时：
 
 ```bash
 pip install -e .[dev]
-pytest
+python -m pytest -q
 ```
 
-## 5. 环境变量
-
-复制 `.env.example` 后填写真实凭证，不要提交真实 `.env`。
+凭证写入 `.env`，不要提交真实 `.env`：
 
 ```bash
 cp .env.example .env
-export TUSHARE_TOKEN="your_tushare_token"
-export JQDATA_USERNAME="your_joinquant_username"
-export JQDATA_PASSWORD="your_joinquant_password"
-export STOCK_DATA_ENABLE_JOINQUANT=false
-export STOCK_DATA_ENABLE_BAOSTOCK=true
 ```
 
-凭证读取规则：
+`.env` 会被 CLI 自动加载。CLI 当前没有 `--env-file` 参数；如需指定 env 文件，使用环境变量：
 
-- Tushare token 从 `TUSHARE_TOKEN` 读取；
-- JoinQuant 账号从 `JQDATA_USERNAME`、`JQDATA_PASSWORD` 读取，但默认关闭；
-- AKShare 通常不需要认证；
-- BaoStock 需要 `baostock` SDK 登录，但不需要用户凭证；
-- 凭证不会硬编码，不会写入日志，不会写入 raw payload。
+```bash
+export STOCK_DATA_ENV_FILE=/path/to/.env
+```
 
-## 6. 配置文件
+自动发现顺序大致为：
 
-### `config/data_sources.yaml`
+1. `STOCK_DATA_ENV_FILE`；
+2. `--config-dir DIR` 对应的 `DIR/.env` 与 `DIR/../.env`；
+3. 当前目录及父目录中的 `.env` / `config/.env`；
+4. 包根目录附近的 `.env` / `config/.env`。
 
-关键默认值：
+默认不覆盖已有非空环境变量。需要覆盖时：
+
+```bash
+export STOCK_DATA_ENV_OVERRIDE=true
+```
+
+需要禁用自动加载时：
+
+```bash
+export STOCK_DATA_DISABLE_ENV_AUTOLOAD=true
+```
+
+关键环境变量：
+
+| 变量 | 用途 | 必需性 |
+|---|---|---|
+| `TUSHARE_TOKEN` | Tushare Pro token | 主流程必需 |
+| `EASTMONEY_COOKIE` | 东方财富 Cookie，AKShare 资金流 fallback 用 | 资金流走东财时需要 |
+| `EASTMONEY_USER_AGENT` | 与 Cookie 对应的 User-Agent | 可选，建议复制同一浏览器请求头 |
+| `EASTMONEY_ACCEPT_LANGUAGE` | Eastmoney 请求语言 | 可选 |
+| `JQDATA_USERNAME` / `JQDATA_PASSWORD` | JoinQuant/JQData 账号 | 默认不用，仅启用 JQData 时需要 |
+| `STOCK_DATA_CONFIG_DIR` | 配置目录 | 可选 |
+| `STOCK_DATA_SQLITE_PATH` | SQLite 路径覆盖 | 仅未显式传 `--config-dir` 时生效 |
+| `STOCK_DATA_PROVIDERS` | 启用 provider 硬白名单 | 可选，常用 `tushare,akshare,baostock` |
+| `STOCK_DATA_CANONICAL_PROVIDER` | canonical provider | 推荐 `tushare` |
+| `STOCK_DATA_DISABLED_PROVIDERS` | 禁用 provider | 推荐 `joinquant` |
+| `STOCK_DATA_PROVIDERS_<REQUEST_TYPE>` | 按请求类型覆盖 provider | 可选，例如 `STOCK_DATA_PROVIDERS_MONEY_FLOW=tushare,akshare` |
+
+---
+
+## 3. 配置文件
+
+默认配置目录是 `config/`。也可以通过 `--config-dir DIR` 或 `STOCK_DATA_CONFIG_DIR` 指定。
+
+注意：显式传入 `--config-dir` 后，该目录下的 `storage.yaml` 优先于 `.env` 中的 `STOCK_DATA_SQLITE_PATH`。这可以避免 smoke test 误写默认生产库。
+
+### 3.1 `config/data_sources.yaml`
+
+典型配置：
 
 ```yaml
 canonical_provider: tushare
-provider_priority:
-  - tushare
-  - akshare
-  - baostock
-  - joinquant
 active_providers:
   - tushare
-  - akshare
-  - baostock
-validator_providers:
-  - akshare
-  - baostock
-supplement_providers:
   - akshare
   - baostock
 market_data_lookback_days: 400
 financial_lookback_quarters: 8
 default_daily_update_time: "20:30"
-allow_field_level_merge: true
-allow_fallback_when_canonical_missing: true
 allow_majority_override_canonical: false
-quarantine_on_critical_conflict: true
-manual_review_on_trading_critical_conflict: true
-minimum_quality_for_supplement: 0.65
 minimum_quality_for_trading_use: 0.80
 ```
 
-`allow_majority_override_canonical` 默认且必须为 `false`。
+主要 request type provider override：
 
-### `config/storage.yaml`
+```yaml
+security_master: [tushare, baostock, akshare]
+trade_calendar: [tushare, baostock]
+trading_status: [tushare, baostock, akshare]
+historical_bars: [tushare, akshare, baostock]
+adj_factor: [tushare, baostock]
+valuation_metric: [tushare, baostock, akshare]
+financial_statement: [tushare, baostock]
+financial_indicator: [tushare, baostock]
+money_flow: [tushare, akshare]
+corporate_action: [tushare, baostock]
+industry_concept: [akshare, baostock]
+index_data: [tushare, baostock]
+```
+
+Provider 别名会自动规范化，例如：
+
+```text
+tushare / ts / thushare
+akshare / ak / tencent
+baostock / bao_stock / bs
+joinquant / jqdata / jq
+```
+
+### 3.2 `config/storage.yaml`
+
+默认存储：
 
 ```yaml
 sqlite_path: data/stock_data.db
@@ -150,15 +223,1350 @@ timezone: Asia/Shanghai
 log_path: logs/stock_data_ingestion.log
 ```
 
-### `config/data_quality.yaml`
+### 3.3 `config/data_quality.yaml`
 
-定义字段容忍阈值、数据源初始可靠性、评分权重、冲突严重度规则、关键字段、可补充字段白名单。
+用于配置：
 
-## 7. 项目结构
+- 字段容忍阈值；
+- provider 可靠性初始分；
+- 质量评分权重；
+- 冲突严重度规则；
+- 关键字段列表；
+- 可由 supplement provider 补充的字段白名单。
+
+默认 trading-ready 阈值来自 `minimum_quality_for_trading_use = 0.80`。
+
+---
+
+## 4. 数据源策略
+
+| 数据源 | 默认角色 | 用途 | 认证 | 主要边界 |
+|---|---|---|---|---|
+| Tushare Pro | canonical | A 股主记录、交易日历、日线、港股通港股日线、复权因子、估值、财务、资金流、公司行动 | `TUSHARE_TOKEN` | 受 token、积分、接口权限影响 |
+| AKShare（东方财富 + 腾讯） | validator + supplement | A 股行情交叉验证、腾讯 fallback、资金流、行业/概念、部分实时快照 | 通常无；东财资金流建议 Cookie | 东财接口可能触发浏览器校验；无独立复权因子表 |
+| BaoStock | validator + supplement | SH/SZ A 股基础资料、交易日历、日线、估值、复权、季频财务、行业、指数成分、分红 | SDK `bs.login()` | 不作为港股源；无个股 money-flow |
+| JoinQuant/JQData | optional future provider | 未来研究验证 | 账号密码 | 默认关闭，Agent 不应默认启用 |
+
+铁律：
+
+- `allow_majority_override_canonical` 默认且应保持 `false`。
+- 辅源永不无痕覆盖 Tushare。
+- 主源缺字段时，只能按补充字段白名单补缺。
+- 行业、概念、资金流等天然口径差异大的数据，优先 provider-specific 保存，不强行合成唯一真值。
+- 港股通港股日线只走 Tushare HK 接口；AKShare / BaoStock 不作为当前港股日线源。
+
+---
+
+## 5. Eastmoney Cookie 运维
+
+AKShare 通常不需要登录，但东方财富部分接口会触发浏览器验证。个股资金流尤其常见。当前策略：
+
+1. `AKShareAdapter.fetch_money_flow()` 先尝试 AKShare 原生 `stock_individual_fund_flow`；
+2. 请求 Eastmoney 时注入 `EASTMONEY_COOKIE`、UA、Referer 等浏览器请求头；
+3. 如果原生路径失败且存在 Cookie，则 fallback 到 direct Eastmoney `fflow/daykline`；
+4. Cookie 过期时，资金流可能失败，并提示类似 “Eastmoney browser cookie may be expired”。
+
+### 5.1 更新 Cookie
+
+1. 浏览器打开：
+   ```text
+   https://data.eastmoney.com/zjlx/detail.html
+   ```
+2. 如果出现验证/验证码，手动完成验证。
+3. 同一浏览器打开校验 API，确认能返回 JSON：
+   ```text
+   https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get?lmt=0&klt=101&secid=1.600519&fields1=f1,f2,f3,f7&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65&ut=b2884a393a59ad64002292a3e90d46a5
+   ```
+4. DevTools → Network → 选中该请求 → Headers → Request Headers → 复制 `Cookie:` 后面的整串值，或复制完整 “Copy as cURL”。
+5. 写入 `.env`：
+   ```bash
+   python tools/update_eastmoney_cookie.py --cookie '<cookie 或 curl>'
+   ```
+   也支持从管道输入：
+   ```bash
+   cat cookie.txt | python tools/update_eastmoney_cookie.py
+   ```
+
+### 5.2 验证 Cookie
+
+```bash
+python -m stock_data_ingestion.cli --config-dir config verify eastmoney-cookie
+```
+
+也可指定测试股票和日期：
+
+```bash
+python -m stock_data_ingestion.cli --config-dir config verify eastmoney-cookie \
+  --ticker 600519.SH \
+  --start-date 2026-06-01 \
+  --end-date 2026-06-05
+```
+
+解释：
+
+- 输出 `true`，退出码 `0`：Cookie 当前可用。
+- 输出 `false`，退出码 `1`：Cookie 缺失、失效、验证未通过或接口失败。
+
+Agent 职责：每日跑资金流前先验证 Cookie；失败时提醒用户刷新 Cookie，本轮可以跳过或标记 `money_flow`，其余 Tushare / BaoStock 任务仍可继续。Agent 绝不能伪造 Cookie，不能绕过验证码，不能把完整 Cookie 写入日志或回复。
+
+---
+
+## 6. CLI 总览
+
+全局帮助：
+
+```bash
+python -m stock_data_ingestion.cli --help
+python -m stock_data_ingestion.cli --config-dir config init-db
+python -m stock_data_ingestion.cli --config-dir config fetch --help
+python -m stock_data_ingestion.cli --config-dir config query --help
+python -m stock_data_ingestion.cli --config-dir config verify --help
+```
+
+当前 `fetch` 命令：
+
+```text
+security-master
+trade-calendar
+historical-bars
+valuation / valuation-metric
+adj-factor
+financial-indicator
+financial-statement
+money-flow
+trading-status
+corporate-action
+```
+
+当前 `query` 命令：
+
+```text
+bars
+conflicts
+meta-summary
+```
+
+当前 `verify` 命令：
+
+```text
+raw
+eastmoney-cookie
+```
+
+### 6.1 初始化数据库
+
+```bash
+python -m stock_data_ingestion.cli --config-dir config init-db
+```
+
+### 6.2 基础信息
+
+```bash
+python -m stock_data_ingestion.cli --config-dir config fetch security-master \
+  --tickers 600519.SH 000001.SZ \
+  --providers tushare baostock akshare \
+  --canonical-provider tushare
+```
+
+`--tickers` 可为空；具体是否返回全市场取决于 provider adapter 实现与权限。
+
+### 6.3 交易日历
+
+`trade-calendar` 必须传日期范围：
+
+```bash
+python -m stock_data_ingestion.cli --config-dir config fetch trade-calendar \
+  --exchanges SSE SZSE BSE \
+  --start-date 2026-01-01 \
+  --end-date 2026-12-31 \
+  --providers tushare baostock \
+  --canonical-provider tushare
+```
+
+兼容单交易所：
+
+```bash
+python -m stock_data_ingestion.cli --config-dir config fetch trade-calendar \
+  --exchange SSE \
+  --start-date 2026-06-01 \
+  --end-date 2026-06-05
+```
+
+### 6.4 日线 / 周线 / 月线 / 分钟线行情
+
+```bash
+python -m stock_data_ingestion.cli --config-dir config fetch historical-bars \
+  --tickers 600519.SH 000001.SZ \
+  --start-date 2026-06-01 \
+  --end-date 2026-06-05 \
+  --frequency 1d \
+  --adjust raw \
+  --providers tushare akshare baostock \
+  --canonical-provider tushare \
+  --cross-validate
+```
+
+说明：
+
+- `--adjust raw` 是 CLI alias，内部规范化为 `none`。
+- 标准层建议保存未复权数据；`qfq` / `hfq` 查询层动态计算。
+- `--start-date` 省略时默认按 `market_data_lookback_days` 回看。
+- `--end-date` 省略时默认今天。
+- 港股通港股使用 `.HK` 代码，当前主要通过 Tushare HK 日线。
+
+### 6.5 复权因子
+
+```bash
+python -m stock_data_ingestion.cli --config-dir config fetch adj-factor \
+  --tickers 600519.SH \
+  --start-date 2026-06-01 \
+  --end-date 2026-06-05 \
+  --providers tushare baostock \
+  --canonical-provider tushare \
+  --cross-validate
+```
+
+### 6.6 估值
+
+```bash
+python -m stock_data_ingestion.cli --config-dir config fetch valuation \
+  --tickers 600519.SH \
+  --start-date 2026-06-01 \
+  --end-date 2026-06-05
+```
+
+`valuation-metric` 是 `valuation` 的 alias。
+
+### 6.7 资金流
+
+```bash
+python -m stock_data_ingestion.cli --config-dir config fetch money-flow \
+  --tickers 600519.SH \
+  --start-date 2026-06-01 \
+  --end-date 2026-06-05 \
+  --providers tushare akshare \
+  --canonical-provider tushare
+```
+
+资金流建议先运行：
+
+```bash
+python -m stock_data_ingestion.cli --config-dir config verify eastmoney-cookie
+```
+
+### 6.8 交易状态
+
+```bash
+python -m stock_data_ingestion.cli --config-dir config fetch trading-status \
+  --tickers 600519.SH 000001.SZ \
+  --start-date 2026-06-01 \
+  --end-date 2026-06-05
+```
+
+包含停复牌、ST、涨跌停、可交易状态等。
+
+### 6.9 公司行动
+
+```bash
+python -m stock_data_ingestion.cli --config-dir config fetch corporate-action \
+  --tickers 600519.SH \
+  --start-date 2026-01-01 \
+  --end-date 2026-06-08 \
+  --action-types dividend share_float repurchase \
+  --event-date-field ann_date
+```
+
+`--action-types` 可选：`dividend`、`share_float`、`repurchase`。
+
+`--event-date-field` 可选：`ann_date`、`record_date`、`ex_date`、`imp_ann_date`、`pay_date`、`div_listdate`、`base_date`、`end_date`。
+
+### 6.10 财务指标
+
+```bash
+python -m stock_data_ingestion.cli --config-dir config fetch financial-indicator \
+  --tickers 600519.SH \
+  --start-date 2025-01-01 \
+  --end-date 2026-06-08
+```
+
+省略日期时默认覆盖最近 `financial_lookback_quarters` 个季度附近窗口。
+
+### 6.11 财务报表
+
+```bash
+python -m stock_data_ingestion.cli --config-dir config fetch financial-statement \
+  --tickers 600519.SH \
+  --statement-types income balancesheet cashflow \
+  --period 20250331
+```
+
+`--statement-types` 支持：
+
+```text
+income
+balancesheet
+cashflow
+income_statement
+balance_sheet
+cash_flow
+```
+
+`--period` 设置后，Tushare 会优先按报告期查询；否则按公告日期窗口查询。
+
+### 6.12 查询行情
+
+```bash
+python -m stock_data_ingestion.cli --config-dir config query bars \
+  --ticker 600519.SH \
+  --start-date 2026-06-01 \
+  --end-date 2026-06-05 \
+  --frequency 1d \
+  --adjust raw
+```
+
+给因子 / 回测用的 trading-ready qfq 查询：
+
+```bash
+python -m stock_data_ingestion.cli --config-dir config query bars \
+  --ticker 600519.SH \
+  --start-date 2026-06-01 \
+  --end-date 2026-06-05 \
+  --frequency 1d \
+  --adjust qfq \
+  --trading-ready \
+  --minimum-quality 0.80
+```
+
+`trading-ready` 会排除隔离记录，并要求 `data_quality >= minimum_quality`。
+
+### 6.13 查询冲突
+
+```bash
+python -m stock_data_ingestion.cli --config-dir config query conflicts
+python -m stock_data_ingestion.cli --config-dir config query conflicts --ticker 600519.SH
+```
+
+### 6.14 查询健康摘要
+
+```bash
+python -m stock_data_ingestion.cli --config-dir config query meta-summary --ticker 600519.SH
+```
+
+测试目录统计可传：
+
+```bash
+python -m stock_data_ingestion.cli --config-dir "$CFG" query meta-summary \
+  --ticker "$TICKER" \
+  --test-root "$TEST_ROOT"
+```
+
+### 6.15 验证 raw 完整性
+
+```bash
+python -m stock_data_ingestion.cli --config-dir config verify raw \
+  --raw-payload-id raw_tushare_historical_bars_20260605_req_xxx
+```
+
+也可以传 `raw://local/...` 引用：
+
+```bash
+python -m stock_data_ingestion.cli --config-dir config verify raw \
+  --raw-payload-id 'raw://local/provider=tushare/request_type=historical_bars/date=2026-06-05/raw_xxx.jsonl.gz'
+```
+
+如果知道期望 hash：
+
+```bash
+python -m stock_data_ingestion.cli --config-dir config verify raw \
+  --raw-payload-id raw_tushare_historical_bars_20260605_req_xxx \
+  --expected-hash 'sha256:...'
+```
+
+未传 `--expected-hash` 时，命令会优先从 SQLite `raw_payload_index` 查 `raw_hash`，失败时回退到 raw 文件 metadata。输出形如：
+
+```json
+{
+  "raw_payload_id": "...",
+  "raw_payload_ref": "raw://local/...",
+  "computed_hash": "sha256:...",
+  "expected_hash": "sha256:...",
+  "verified": true
+}
+```
+
+---
+
+## 7. Agent 每日运维手册
+
+盘后建议时间：`default_daily_update_time = 20:30`，按 `Asia/Shanghai` 理解；如果外层调度器使用 `Asia/Tokyo`，相当于日本时间 21:30。
+
+### 7.1 目标交易日判断
+
+本工具不会自动判断“今天是否交易日”，只按传入日期范围或滚动窗口取数。外层 Agent / 调度器负责决定目标日期。
+
+推荐规则：
+
+1. 先维护或查询 `trade_calendar`。
+2. 如果当前时间已过 `Asia/Shanghai 20:30`，且今天是目标市场交易日，则 `TARGET_DATE = 今天`。
+3. 否则 `TARGET_DATE = 最近一个已开市交易日`。
+4. 如果用户要求“当天/前一交易日精准单日”，Agent 应显式传：
+   ```bash
+   --start-date "$TARGET_DATE" --end-date "$TARGET_DATE"
+   ```
+5. 如果用户要求“滚动补齐”，可省略日期，让工具按 400 天 / 8 季窗口幂等更新。
+
+### 7.2 首次仅一次
+
+```bash
+python -m stock_data_ingestion.cli --config-dir config init-db
+```
+
+### 7.3 每日推荐顺序
+
+```bash
+CFG="config"
+TARGET_DATE="2026-06-08"
+U="600519.SH 000001.SZ"
+
+# 0) 凭证体检
+python -m stock_data_ingestion.cli --config-dir "$CFG" verify eastmoney-cookie || echo "Eastmoney Cookie may need refresh"
+
+# 1) 低频：基础信息 + 交易日历
+python -m stock_data_ingestion.cli --config-dir "$CFG" fetch security-master --tickers $U
+python -m stock_data_ingestion.cli --config-dir "$CFG" fetch trade-calendar --exchanges SSE SZSE BSE \
+  --start-date "2026-01-01" --end-date "$TARGET_DATE"
+
+# 2) 交易状态
+python -m stock_data_ingestion.cli --config-dir "$CFG" fetch trading-status --tickers $U \
+  --start-date "$TARGET_DATE" --end-date "$TARGET_DATE"
+
+# 3) 行情
+python -m stock_data_ingestion.cli --config-dir "$CFG" fetch historical-bars --tickers $U \
+  --start-date "$TARGET_DATE" --end-date "$TARGET_DATE" \
+  --frequency 1d --adjust none --cross-validate
+
+# 4) 复权因子
+python -m stock_data_ingestion.cli --config-dir "$CFG" fetch adj-factor --tickers $U \
+  --start-date "$TARGET_DATE" --end-date "$TARGET_DATE" --cross-validate
+
+# 5) 估值 / 资金流 / 公司行动
+python -m stock_data_ingestion.cli --config-dir "$CFG" fetch valuation --tickers $U \
+  --start-date "$TARGET_DATE" --end-date "$TARGET_DATE"
+python -m stock_data_ingestion.cli --config-dir "$CFG" fetch money-flow --tickers $U \
+  --start-date "$TARGET_DATE" --end-date "$TARGET_DATE"
+python -m stock_data_ingestion.cli --config-dir "$CFG" fetch corporate-action --tickers $U \
+  --start-date "$TARGET_DATE" --end-date "$TARGET_DATE"
+
+# 6) 财务：季频，可每天跑，也可财报季加密
+python -m stock_data_ingestion.cli --config-dir "$CFG" fetch financial-indicator --tickers $U
+python -m stock_data_ingestion.cli --config-dir "$CFG" fetch financial-statement --tickers $U
+
+# 7) 收尾健康检查
+python -m stock_data_ingestion.cli --config-dir "$CFG" query meta-summary --ticker 600519.SH
+python tools/daily_mvp_smoke.py --config-dir "$CFG" --as-of "$TARGET_DATE"
+```
+
+### 7.4 Agent 决策要点
+
+- `verify eastmoney-cookie` 返回 false：提醒用户刷新 Cookie，本轮资金流可跳过或标记失败；其他数据照常跑。
+- `TOKEN_MISSING` / `AUTH_FAILED` / `PERMISSION_DENIED`：提醒补充或更换 `TUSHARE_TOKEN`，并确认接口权限。
+- `RATE_LIMITED`：降速、分批、稍后重试。
+- `PROVIDER_UNAVAILABLE` / `PROVIDER_TIMEOUT`：记录并稍后重试，其余源继续。
+- `EMPTY_RESULT`：不一定是错误，非交易日、停牌、事件型数据无事件、短财务窗口都可能为空。
+- `provider_fetch_summary` 某源长期失败：提醒维护者。
+- `conflict_summary` 或 `quality_report.conflicts` 出现 `high` / `critical`：提醒人类复核，不要改数据。
+
+---
+
+## 8. 理解 `StockDataResponse`
+
+每条 `fetch` 向 stdout 打印一个 JSON，结构示意如下：
+
+```jsonc
+{
+  "schema_version": "stock_data_response.v0.1",
+  "request_id": "req_xxx",
+  "status": "success",                  // success | partial_success | failed
+  "created_at": "...",
+  "completed_at": "...",
+  "timezone": "Asia/Shanghai",
+  "canonical_provider": "tushare",
+  "request": { "request_type": "historical_bars", "...": "..." },
+  "provider_results": [
+    {
+      "provider": "tushare",
+      "source_api": "daily",
+      "status": "success",
+      "rows_fetched": 21,
+      "raw_payload_id": "raw_tushare_historical_bars_...",
+      "raw_payload_ref": "raw://local/...",
+      "raw_hash": "sha256:...",
+      "error": null
+    }
+  ],
+  "provider_comparisons": [],
+  "data": {
+    "bars": [],
+    "valuation_metrics": [],
+    "money_flow": [],
+    "securities": []
+  },
+  "quality_report": {
+    "data_quality_score": 0.94,
+    "completeness_score": 1.0,
+    "consistency_score": 1.0,
+    "conflicts": [
+      { "severity": "high", "field_name": "close", "...": "..." }
+    ],
+    "warnings": []
+  },
+  "persistence": {
+    "saved": true,
+    "tables_written": ["daily_bars", "source_fetch_logs", "raw_payload_index"],
+    "parquet_refs": [],
+    "raw_payload_ids": ["..."],
+    "raw_payload_refs": ["raw://local/..."]
+  },
+  "errors": [
+    {
+      "error_code": "RATE_LIMITED",
+      "provider": "tushare",
+      "error_message": "...",
+      "retryable": true,
+      "suggested_action": "..."
+    }
+  ]
+}
+```
+
+Agent 每条 fetch 后按这个顺序解析：
+
+1. 读 `status`：
+   - `success`：正常；
+   - `partial_success`：部分源失败或非致命问题，继续但记录；
+   - `failed`：该数据类型未成功获取，按错误码处置。
+2. 读 `errors[].error_code`：判断是否需要用户介入。
+3. 读 `provider_results[]`：确认哪些源成功、失败、空结果或不可用。
+4. 读 `persistence.saved` 与 `tables_written`：确认确实落库。
+5. 读 `quality_report.conflicts[].severity`：`high` / `critical` 必须提醒。
+6. 需要审计时记录 `persistence.raw_payload_ids`，再用 `verify raw` 校验完整性。
+
+不要只看 shell 退出码。某些非关键源失败会让整体变成 `partial_success`，但主源数据可能已经成功落库。
+
+其它命令输出：
+
+- `query bars` / `query conflicts`：JSON records 数组。
+- `query meta-summary`：全库清单、行数、冲突、磁盘和 provider 摘要。
+- `verify eastmoney-cookie`：`true` / `false`。
+- `verify raw`：`computed_hash`、`expected_hash`、`verified`。
+
+---
+
+## 9. 查询数据
+
+### 9.1 CLI 查询
+
+未复权原始行情：
+
+```bash
+python -m stock_data_ingestion.cli --config-dir config query bars \
+  --ticker 600519.SH \
+  --start-date 2024-01-01 \
+  --end-date 2026-05-29 \
+  --frequency 1d \
+  --adjust none
+```
+
+给因子 / 回测用的 trading-ready 前复权视图：
+
+```bash
+python -m stock_data_ingestion.cli --config-dir config query bars \
+  --ticker 600519.SH \
+  --start-date 2024-01-01 \
+  --end-date 2026-05-29 \
+  --frequency 1d \
+  --adjust qfq \
+  --trading-ready \
+  --minimum-quality 0.80
+```
+
+查冲突：
+
+```bash
+python -m stock_data_ingestion.cli --config-dir config query conflicts --ticker 600519.SH
+```
+
+查健康摘要：
+
+```bash
+python -m stock_data_ingestion.cli --config-dir config query meta-summary --ticker 600519.SH
+```
+
+### 9.2 Python 查询
+
+CLI 是首选。需要 Python 调用时：
+
+```python
+from stock_data_ingestion.storage.database import Database
+from stock_data_ingestion.services.query_service import QueryService
+
+with Database("data/stock_data.db").session() as session:
+    qs = QueryService(session)
+    bars = qs.get_trading_ready_bars(
+        "600519.SH",
+        "2024-01-01",
+        "2026-05-29",
+        frequency="1d",
+        adjust="qfq",
+        minimum_quality=0.80,
+    )
+    conflicts = qs.get_conflicts("600519.SH")
+```
+
+QueryService 能力包括：基础信息、行情、trading-ready bars、动态复权、估值、财务指标、行业/概念、资金流、指数成分、溯源查询、隔离状态查询等。返回 pandas DataFrame，并保留来源字段。
+
+---
+
+## 10. `meta-summary` 快速盘点
+
+```bash
+python -m stock_data_ingestion.cli --config-dir config query meta-summary --ticker 600519.SH
+```
+
+返回节选：
+
+```jsonc
+{
+  "ticker": "600519.SH",
+  "sqlite_path": "data/stock_data.db",
+  "daily_bar_trading_days": 480,
+  "daily_bar_date_range": {"min": "2024-01-02", "max": "2026-06-06"},
+  "rows_by_table": {
+    "daily_bars": 12345,
+    "valuation_metrics": 4567,
+    "money_flow": 4567
+  },
+  "standard_rows_total": 99999,
+  "metadata_rows_total": 888,
+  "disk_usage_bytes": {
+    "sqlite": 123,
+    "raw_objects": 456,
+    "parquet": 789,
+    "logs": 10
+  },
+  "provider_fetch_summary": [
+    {"provider": "tushare", "source_api": "daily", "status": "success", "calls": 3, "rows_fetched": 63}
+  ],
+  "provider_comparison_summary": [
+    {"record_type": "bar", "compared_provider": "akshare", "status": "matched", "comparisons": 42}
+  ],
+  "conflict_summary": [
+    {"record_type": "bar", "field_name": "close", "severity": "high", "conflicts": 1}
+  ]
+}
+```
+
+Agent 用它判断：
+
+- 当天是否落库：看 `daily_bar_date_range.max` 与 `rows_by_table`。
+- 哪些源失败或空结果：看 `provider_fetch_summary`。
+- 是否有高严重度冲突：看 `conflict_summary`。
+- 数据/日志/Parquet/raw 是否异常膨胀：看 `disk_usage_bytes`。
+
+---
+
+## 11. 数据结构总览
+
+### 11.1 request / record / 表映射
+
+| request_type / record_type | 响应桶 `data.*` | SQLite 表 | Parquet data_type | 业务唯一键核心 |
+|---|---|---|---|---|
+| `security_master` | `securities` | `securities` | `securities` | `normalized_ticker + effective_provider` |
+| `trade_calendar` | `trade_calendar` | `trade_calendar` | `trade_calendar` | `exchange + calendar_date + effective_provider` |
+| `trading_status` | `trading_status` | `trading_status` | `trading_status` | `normalized_ticker + trade_date + effective_provider` |
+| `historical_bars` 1d | `bars` | `daily_bars` | `bars` | `normalized_ticker + frequency + trade_date + adjust + effective_provider` |
+| `historical_bars` 1w/1mo | `bars` | `weekly_bars` | `bars` | 同上 |
+| `historical_bars` 分钟 | `bars` | `minute_bars` | `bars` | 同上 |
+| `realtime_quote` | `realtime_quotes` | `realtime_quotes` | `realtime_quotes` | `normalized_ticker + quote_time_bucket + effective_provider` |
+| `adj_factor` | `adj_factors` | `adj_factors` | `adj_factors` | `normalized_ticker + trade_date + effective_provider` |
+| `financial_statement` | `financial_statements` | `financial_statements` | `financial_statements` | `normalized_ticker + report_period + statement_type + report_type + announcement_date + effective_provider` |
+| `financial_indicator` | `financial_indicators` | `financial_indicators` | `financial_indicators` | `normalized_ticker + report_period + effective_provider` |
+| `valuation_metric` | `valuation_metrics` | `valuation_metrics` | `valuation_metrics` | `normalized_ticker + trade_date + effective_provider` |
+| `industry_concept` | `industry_memberships` / `concept_memberships` | 同名 | 同名 | provider-specific |
+| `money_flow` | `money_flow` | `money_flow` | `money_flow` | `normalized_ticker + trade_date + effective_provider` 或 source methodology |
+| `index_data` | `indices` / `index_bars` / `index_constituents` | 同名 | 同名 | 见各表 |
+| `corporate_action` | `corporate_actions` | `corporate_actions` | `corporate_actions` | `normalized_ticker + action_type + announcement_date + ex_date + effective_provider` |
+
+元数据表包括：`source_fetch_logs`、`provider_comparisons`、`data_quality_conflicts`、`raw_payload_index`、`ingestion_requests`、`ingestion_runs`、`ticker_mappings` 等。
+
+### 11.2 标准记录公共字段
+
+所有标准记录都带：
+
+```text
+record_id
+record_type
+schema_version
+adapter_version
+provider
+effective_provider
+canonical_provider
+source_api
+source_site
+source_role
+merge_method
+validation_status
+conflict_ids
+canonical_value_suspect
+supplement_flags
+data_quality
+quality_flags
+field_provenance
+raw_payload_id
+raw_payload_ref
+raw_hash
+raw_row_index
+raw_format
+request_id
+ingestion_run_id
+idempotency_key
+request_params_hash
+fetch_time
+ingested_at
+```
+
+涉股记录还包含：
+
+```text
+normalized_ticker
+provider_symbol
+exchange
+market
+asset_type
+```
+
+涉时记录统一使用 `Asia/Shanghai` 语义；涉金额字段保留 `currency`；行情记录含 `adjust`。
+
+### 11.3 常用记录字段
+
+BarRecord：`trade_date`、`timestamp`、`frequency`、`is_complete`、`open/high/low/close`、`pre_close`、`change`、`pct_change`、`volume`、`amount`、`vwap`、`turnover_rate`、`turnover_rate_free_float`、`adjust`、`adj_factor`。
+
+TradingStatusRecord：`trade_date`、`is_trading`、`is_suspended`、`is_st`、`is_star_st`、`has_delisting_risk`、`limit_up_price`、`limit_down_price`、`hit_limit_up`、`hit_limit_down`、`tradability_status`。
+
+ValuationMetricRecord：`trade_date`、`pe`、`pe_ttm`、`pb`、`ps`、`ps_ttm`、`pcf_ncf_ttm`、`dividend_yield`、`total_market_value`、`float_market_value`、`turnover_rate`、`volume_ratio`、`amount`。
+
+AdjFactorRecord：`trade_date`、`adj_factor`，以及 BaoStock 事件型因子字段 `fore_adjust_factor`、`back_adjust_factor`、`event_adjust_factor`、`factor_method`。
+
+FinancialIndicatorRecord：`report_period`、`roe`、`roa`、`gross_margin`、`net_margin`、`revenue_yoy`、`net_profit_yoy`、`debt_asset_ratio`、`current_ratio`、`ocf_to_net_profit`、`eps`、`bps`。
+
+MoneyFlowRecord：`trade_date`、`main_net_inflow`、`super_large_net_inflow`、`large_net_inflow`、`medium_net_inflow`、`small_net_inflow`、`main_net_inflow_ratio`、`source_methodology`。
+
+---
+
+## 12. 存储、raw 与幂等
+
+### 12.1 幂等
+
+`idempotency_key` 不包含 `request_id`，而由 request type、ticker、日期范围、frequency、adjust、fields、provider set 等语义参数生成。
+
+完全相同语义的成功请求再次执行时，runner 会跳过重复写入，可能返回 warning：
+
+```text
+idempotency_key already succeeded; skipped duplicate write
+```
+
+### 12.2 Raw Object Store
+
+原始响应存 gzip JSON Lines（`.jsonl.gz`）：第一行 metadata，后续每行一条 raw record。
+
+典型布局：
+
+```text
+data/raw_objects/provider=<provider>/request_type=<type>/date=<YYYY-MM-DD>/<raw_payload_id>.jsonl.gz
+```
+
+`raw_payload_ref` 形如：
+
+```text
+raw://local/provider=tushare/request_type=historical_bars/date=2026-06-05/raw_xxx.jsonl.gz
+```
+
+设计原则：
+
+- raw 是审计留痕，不覆盖；
+- SQLite 只存 `raw_payload_index`，不存大字段；
+- 完全相同语义的成功请求通常被幂等检查拦住，不会新增 raw；
+- 新语义请求、失败后重试或不同 idempotency key 可能新增 raw 文件。
+
+### 12.3 SQLite
+
+SQLite 使用 SQLAlchemy 2.x，开启 WAL。标准表使用业务唯一键与 insert-skip-duplicate。重复业务键不会更新旧行，也不会无限增行。
+
+典型唯一键：
+
+- bars：`normalized_ticker + frequency + trade_date + timestamp + adjust + effective_provider`
+- adj_factors：`normalized_ticker + trade_date + effective_provider`
+- valuation_metrics：`normalized_ticker + trade_date + effective_provider`
+- money_flow：`normalized_ticker + trade_date + frequency + source_methodology + provider/effective_provider`
+
+### 12.4 Parquet
+
+Parquet 只存清洗后数据。写入时读取旧分区，合并新数据，按 business key 去重，然后重写对应 `part-000.parquet`。
+
+典型分区：
+
+```text
+bars/frequency=1d/trade_date=2026-06-05/effective_provider=tushare/part-000.parquet
+```
+
+如果 `pyarrow` 缺失，SQLite/raw 可能成功，但 Parquet 导出会失败或 response 变为 `partial_success`。
+
+---
+
+## 13. 校验、合并与质量评分
+
+### 13.1 标准化后比较
+
+比较前会统一：
+
+- ticker；
+- 日期 / 时间 / 时区；
+- frequency；
+- adjust；
+- 量额单位；
+- 币种。
+
+Bar 比较键示例：
+
+```text
+normalized_ticker + frequency + trade_date/timestamp + adjust
+```
+
+### 13.2 容忍阈值
+
+默认容忍阈值示例：
+
+| 字段类型 | 容忍 |
+|---|---|
+| 价格 | 绝对 ≤ 0.01 或相对 ≤ 0.01% |
+| 成交量 | 相对 ≤ 0.5% |
+| 成交额 | 相对 ≤ 1.0% |
+| 换手率 | 绝对 ≤ 0.05pct |
+| 复权因子 | 相对 ≤ 0.01% |
+| 市值 / PE / PB / PS | 相对 ≤ 1.0% |
+| 财报金额 | 相对 ≤ 0.1%，或绝对 ≤ 10000 |
+| 财务比率 | 绝对 ≤ 0.01 或相对 ≤ 1.0% |
+
+### 13.3 冲突严重度
+
+- `low`：小数精度、名称格式、轻微四舍五入。
+- `medium`：成交量、成交额、估值、财务指标明显差异。
+- `high`：收盘价、复权因子、停复牌、ST、涨跌停、交易日历、财报核心字段明显不一致。
+- `critical`：影响交易可用性的关键矛盾。critical 数据不得进入可交易层。
+
+### 13.4 合并方法
+
+`MergeMethod` 包括：
+
+```text
+canonical_only
+canonical_validated
+canonical_with_warning
+fill_missing_from_supplement
+fallback_single_source
+fallback_multi_source_agreed
+provider_specific_append
+quarantined_due_to_conflict
+manual_review_required
+```
+
+原则：主源永不被自动覆盖；缺失字段只能按白名单补；行业/概念/资金流按 provider 分别保存；critical 冲突触发隔离或人工复核。
+
+### 13.5 质量评分
+
+默认权重：
+
+```text
+0.25 * completeness
+0.30 * consistency
+0.15 * timeliness
+0.10 * provider_reliability
+0.10 * anomaly
+0.10 * provenance
+```
+
+Provider 初始可靠性：
+
+```text
+tushare 0.90
+joinquant 0.85
+akshare 0.75
+baostock 0.70
+manual_import 0.60
+unknown 0.30
+```
+
+常见调整：
+
+- 双源验证：`+0.08`
+- 单源验证：`+0.04`
+- 未验证：`-0.05`
+- 单源 fallback：`-0.15`
+- 多源 fallback 一致：`-0.08`
+- low / medium / high / critical 冲突：`-0.05 / -0.12 / -0.25 / -0.50`
+- 缺 `raw_payload_ref`：`-0.30`
+- 缺 `field_provenance`：`-0.20`
+
+---
+
+## 14. Ticker、日期与单位规范
+
+内部 ticker：
+
+```text
+600519.SH
+000001.SZ
+430047.BJ
+00005.HK
+```
+
+支持常见输入：
+
+```text
+600519
+sh600519
+sh.600519
+sz000001
+hk00005
+600519.XSHG
+000001.XSHE
+```
+
+无法识别或交易所后缀与代码前缀冲突时抛 `INVALID_TICKER`，不静默猜测。
+
+日期支持：
+
+```text
+YYYY-MM-DD
+YYYYMMDD
+```
+
+内部时间按 `Asia/Shanghai` 处理。
+
+单位归一化：
+
+- 成交量统一到股（`share`）。
+- 成交额统一到 `CNY` / `HKD`。
+- Tushare `vol` 通常按“手”转股。
+- Tushare `amount` 通常按“千元”转 CNY。
+- BaoStock 成交量通常已是股，成交额为 CNY。
+- 标准 bars 可计算 `vwap = amount / volume`。
+
+---
+
+## 15. Smoke Test 标准流程
+
+下面以 `600519.SH` 和 `2026-06-01` 到 `2026-06-05` 为例。Agent 可以按这个流程验证一套独立测试库，不污染默认 `data/stock_data.db`。
+
+```bash
+cd tools/stock_data_collector
+source <你的虚拟环境>/bin/activate
+
+export TICKER="600519.SH"
+export START="2026-06-01"
+export END="2026-06-05"
+export TEST_ROOT="data/smoke_600519_20260601_20260605"
+export CFG="$TEST_ROOT/config"
+
+rm -rf "$TEST_ROOT"
+mkdir -p "$CFG"
+cp config/data_sources.yaml "$CFG/data_sources.yaml"
+cp config/data_quality.yaml "$CFG/data_quality.yaml"
+cat > "$CFG/storage.yaml" <<YAML
+sqlite_path: $TEST_ROOT/stock_data.db
+enable_wal: true
+raw_object_root: $TEST_ROOT/raw_objects
+parquet_root: $TEST_ROOT/parquet
+compress_raw_payload: true
+raw_format: jsonl.gz
+timezone: Asia/Shanghai
+log_path: $TEST_ROOT/logs/stock_data_ingestion.log
+YAML
+```
+
+初始化：
+
+```bash
+python -m stock_data_ingestion.cli --config-dir "$CFG" init-db
+```
+
+Cookie 检查：
+
+```bash
+python -m stock_data_ingestion.cli --config-dir "$CFG" verify eastmoney-cookie \
+  || echo "Eastmoney Cookie may need refresh"
+```
+
+拉取并保存 stdout：
+
+```bash
+python -m stock_data_ingestion.cli --config-dir "$CFG" fetch security-master \
+  --tickers "$TICKER" --providers tushare baostock akshare --canonical-provider tushare \
+  | tee "$TEST_ROOT/01_security_master.json"
+
+python -m stock_data_ingestion.cli --config-dir "$CFG" fetch trade-calendar \
+  --exchange SSE --start-date "$START" --end-date "$END" \
+  --providers tushare baostock --canonical-provider tushare \
+  | tee "$TEST_ROOT/02_trade_calendar.json"
+
+python -m stock_data_ingestion.cli --config-dir "$CFG" fetch historical-bars \
+  --tickers "$TICKER" --start-date "$START" --end-date "$END" \
+  --frequency 1d --adjust raw \
+  --providers tushare akshare baostock --canonical-provider tushare --cross-validate \
+  | tee "$TEST_ROOT/03_historical_bars.json"
+
+python -m stock_data_ingestion.cli --config-dir "$CFG" fetch adj-factor \
+  --tickers "$TICKER" --start-date "$START" --end-date "$END" \
+  --providers tushare baostock --canonical-provider tushare --cross-validate \
+  | tee "$TEST_ROOT/04_adj_factor.json"
+
+python -m stock_data_ingestion.cli --config-dir "$CFG" fetch valuation \
+  --tickers "$TICKER" --start-date "$START" --end-date "$END" \
+  --providers tushare baostock akshare --canonical-provider tushare \
+  | tee "$TEST_ROOT/05_valuation.json"
+
+python -m stock_data_ingestion.cli --config-dir "$CFG" fetch money-flow \
+  --tickers "$TICKER" --start-date "$START" --end-date "$END" \
+  --providers tushare akshare --canonical-provider tushare \
+  | tee "$TEST_ROOT/06_money_flow.json"
+
+python -m stock_data_ingestion.cli --config-dir "$CFG" fetch corporate-action \
+  --tickers "$TICKER" --start-date "$START" --end-date "$END" \
+  --providers tushare baostock --canonical-provider tushare \
+  | tee "$TEST_ROOT/07_corporate_action.json"
+
+python -m stock_data_ingestion.cli --config-dir "$CFG" fetch financial-statement \
+  --tickers "$TICKER" --start-date "$START" --end-date "$END" \
+  --providers tushare baostock --canonical-provider tushare \
+  | tee "$TEST_ROOT/08_financial_statement.json"
+
+python -m stock_data_ingestion.cli --config-dir "$CFG" fetch financial-indicator \
+  --tickers "$TICKER" --start-date "$START" --end-date "$END" \
+  --providers tushare baostock --canonical-provider tushare \
+  | tee "$TEST_ROOT/09_financial_indicator.json"
+```
+
+查询验证：
+
+```bash
+python -m stock_data_ingestion.cli --config-dir "$CFG" query bars \
+  --ticker "$TICKER" --start-date "$START" --end-date "$END" \
+  --frequency 1d --adjust raw \
+  | tee "$TEST_ROOT/20_query_raw_bars.json"
+
+python -m stock_data_ingestion.cli --config-dir "$CFG" query bars \
+  --ticker "$TICKER" --start-date "$START" --end-date "$END" \
+  --frequency 1d --adjust qfq --trading-ready --minimum-quality 0.80 \
+  | tee "$TEST_ROOT/21_query_qfq_trading_ready.json"
+
+python -m stock_data_ingestion.cli --config-dir "$CFG" query meta-summary \
+  --ticker "$TICKER" --test-root "$TEST_ROOT" \
+  | tee "$TEST_ROOT/99_meta_summary.json"
+```
+
+正常偏差：
+
+- `daily_bar_trading_days` 可能小于自然日天数，因为周末、节假日或数据源缺失。
+- `financial_statements` / `financial_indicators` 在短日期区间可能为 0。
+- `corporate_actions` 无事件时可能为 0。
+- BaoStock 事件型复权因子在无除权除息区间可能为空；Tushare `adj_factor` 通常按交易日返回。
+- `money_flow` 若 AKShare/Eastmoney 失败但 Tushare 成功，通常是 `partial_success`，应检查 Cookie 与 provider results。
+
+---
+
+## 16. 诊断工具
+
+### 16.1 AKShare probe
+
+```bash
+python tools/akshare_stock_probe.py \
+  --tickers 600519.SH \
+  --start-date 20260601 \
+  --end-date 20260605 \
+  --output-dir data/smoke_600519_20260601_20260605/akshare_probe \
+  --include-eastmoney-hist \
+  --strict-eastmoney
+```
+
+该 probe 输出 JSON 和 Markdown，统计 `PASS`、`FAILED`、`EMPTY`、`SKIPPED`、`OPTIONAL_FAILED` 等。它按生产逻辑探测：默认 AKShare + Cookie，Eastmoney 请求注入 Cookie，失败时支持腾讯或 direct Eastmoney fallback。
+
+### 16.2 BaoStock probe
+
+```bash
+python tools/baostock_stock_probe.py \
+  --tickers 600519.SH 000001.SZ \
+  --start-date 2026-06-01 \
+  --end-date 2026-06-05
+```
+
+BaoStock 不需要用户凭证，但需要 SDK login。当前生产路径主要用于 SH/SZ A 股补充与验证。
+
+### 16.3 Tushare probe
+
+```bash
+python tools/tushare_stock_probe.py \
+  --tickers 600519.SH 000001.SZ \
+  --start-date 2026-05-01 \
+  --end-date 2026-05-29
+```
+
+### 16.4 Tushare 空结果调试
+
+```bash
+python tools/tushare_empty_debug.py --tickers 600519.SH 000001.SZ
+```
+
+用于区分 token / 权限 / 日期 / 股票代码 / 接口空结果等问题。
+
+### 16.5 Daily MVP 配置体检
+
+```bash
+python tools/daily_mvp_smoke.py --config-dir config --as-of 2026-06-08
+python tools/daily_mvp_smoke.py --config-dir config --as-of 2026-06-08 --use-env-overrides
+```
+
+该工具不访问外部 API，不写行情数据，只检查配置是否符合“日频盘后 MVP”：Tushare canonical，AKShare + BaoStock 启用，JoinQuant 关闭，lookback 窗口合理，资金流不使用 BaoStock。
+
+---
+
+## 17. 请求模型
+
+`StockDataRequest` 使用 Pydantic v2，`extra="forbid"`。
+
+支持的 request type：
+
+```text
+security_master
+trade_calendar
+trading_status
+historical_bars
+realtime_quote
+adj_factor
+financial_statement
+financial_indicator
+valuation_metric
+industry_concept
+money_flow
+index_data
+corporate_action
+batch_refresh
+cross_validation
+```
+
+支持的 frequency：
+
+```text
+1m
+5m
+15m
+30m
+60m
+1d
+1w
+1mo
+realtime
+```
+
+支持的 adjust：
+
+```text
+none
+qfq
+hfq
+```
+
+CLI 额外接受 `raw` 作为 `none` 的 alias。
+
+要求：
+
+- `historical_bars` / `realtime_quote` / `valuation_metric` / `financial_indicator` 必须带 tickers；
+- `save_cleaned=true` 要求 `save_raw=true`；
+- 幂等键包含 provider set；
+- 通过 `StockDataCollector` 构造请求时，会自动套用配置里的滚动窗口和 provider 选择。
+
+---
+
+## 18. Python 采集用法
+
+CLI 是首选。需要在 Python 中调用采集器时：
+
+```python
+from stock_data_ingestion.config import load_config
+from stock_data_ingestion.logging_config import setup_logging
+from stock_data_ingestion.services.collector import StockDataCollector
+from stock_data_ingestion.services.ingestion_runner import IngestionRunner
+from stock_data_ingestion.storage.database import Database
+from stock_data_ingestion.storage.raw_object_store import RawObjectStore
+
+config = load_config("config")
+setup_logging(config.storage.log_path)
+
+db = Database(config.storage.sqlite_path, enable_wal=config.storage.enable_wal)
+db.init()
+raw_store = RawObjectStore(config.storage.raw_object_root)
+runner = IngestionRunner(config, raw_store, database=db)
+collector = StockDataCollector(runner)
+
+response = collector.fetch_historical_bars(
+    ["600519.SH", "000001.SZ"],
+    start_date="2026-06-05",
+    end_date="2026-06-05",
+    frequency="1d",
+    adjust="none",
+    cross_validate=True,
+)
+print(response.status)
+print(response.persistence.saved)
+```
+
+Agent 日常任务优先用 CLI，不要绕过 runner 直接调用 provider SDK，否则会丢失 raw、质量评分、冲突、幂等和落库逻辑。
+
+---
+
+## 19. 常见问题
+
+### 19.1 `query bars` 返回 `[]`
+
+通常原因：
+
+- 还没跑 `fetch historical-bars`；
+- query 使用了不同 `--config-dir` / SQLite；
+- 日期范围不含交易日；
+- qfq/hfq 查询缺少 raw bars 或 adj_factor；
+- 记录被 `trading-ready` 过滤。
+
+先查：
+
+```bash
+python -m stock_data_ingestion.cli --config-dir "$CFG" query meta-summary --ticker "$TICKER" --test-root "$TEST_ROOT"
+```
+
+### 19.2 `money_flow` 是 `partial_success`
+
+看 `provider_results` 和 `errors`。如果 Tushare 成功、AKShare 失败，常见原因是 Eastmoney 连接问题或 Cookie 过期。先跑：
+
+```bash
+python -m stock_data_ingestion.cli --config-dir "$CFG" verify eastmoney-cookie
+```
+
+### 19.3 `verify eastmoney-cookie` 返回 false
+
+提醒用户刷新 Cookie。Agent 不应自动处理验证码，不应尝试绕过风控。
+
+### 19.4 财务报表 / 财务指标为空
+
+短日期区间没有公告或报告期数据时正常。日常任务可使用较长财务窗口，例如最近 8 个季度。
+
+### 19.5 BaoStock 某些接口为空
+
+事件型接口在无事件日期范围内为空是正常的，例如配股、分红、停牌、部分复权事件。
+
+### 19.6 `PROVIDER_SCHEMA_CHANGED`
+
+供应商字段变了。用对应 probe 查看真实返回字段，然后提醒维护者更新 adapter 字段映射。
+
+### 19.7 Parquet 失败但 SQLite/raw 成功
+
+检查是否安装 `pyarrow`。缺失时可能出现 Parquet 相关失败或 skip。
+
+---
+
+## 20. 错误码与处置
+
+常见 `ErrorCode`：
+
+```text
+AUTH_FAILED
+PERMISSION_DENIED
+TOKEN_MISSING
+RATE_LIMITED
+PROVIDER_TIMEOUT
+PROVIDER_UNAVAILABLE
+PROVIDER_SCHEMA_CHANGED
+EMPTY_RESULT
+INVALID_REQUEST
+INVALID_TICKER
+INVALID_DATE_RANGE
+NORMALIZATION_FAILED
+CROSS_VALIDATION_FAILED
+RAW_SAVE_FAILED
+STORAGE_FAILED
+IDEMPOTENCY_CONFLICT
+UNKNOWN_ERROR
+```
+
+| 现象 | error_code | Agent 处置 |
+|---|---|---|
+| Tushare token 缺失 | `TOKEN_MISSING` | 提醒补 `TUSHARE_TOKEN` |
+| Tushare 鉴权失败 | `AUTH_FAILED` / `PERMISSION_DENIED` | 提醒检查 token、积分、接口权限 |
+| 资金流失败 | AKShare/Eastmoney 异常 | 跑 `verify eastmoney-cookie`，提醒刷新 Cookie |
+| 限频 | `RATE_LIMITED` | 降速、分批、稍后重试 |
+| 源不可用 | `PROVIDER_UNAVAILABLE` / `PROVIDER_TIMEOUT` | 记录并稍后重试，其他源继续 |
+| 字段变化 | `PROVIDER_SCHEMA_CHANGED` | 用 probe 排查，提醒更新字段映射 |
+| 空结果 | `EMPTY_RESULT` | 非阻塞；非交易日、停牌、事件稀疏都可能正常 |
+| SQLite / Parquet 写入失败 | `STORAGE_FAILED` | 检查路径、权限、依赖、磁盘 |
+| raw 保存失败 | `RAW_SAVE_FAILED` | 检查 raw root 路径、权限、磁盘 |
+
+`EMPTY_RESULT` 通常不应单独视为任务失败；非空错误或 provider failed/unavailable 才需要更高优先级处置。
+
+---
+
+## 21. 测试
+
+运行：
+
+```bash
+python -m pytest -q
+python -m pytest -ra
+```
+
+常用聚焦测试：
+
+```bash
+python -m pytest tests/test_cli.py
+python -m pytest tests/test_akshare_adapter_manual_coverage.py tests/test_env_loading.py
+python -m pytest tests/test_provider_selection.py tests/test_provider_selection_config.py
+```
+
+本地缺少 `pyarrow` 时，Parquet 测试会 skip。缺少 `SQLAlchemy` 时，SQLite / QueryService 相关测试会 skip。真实外部 API 可用性不要靠单元测试判断，使用 `tools/*_probe.py`。
+
+---
+
+## 22. 已知限制
+
+- 无内置 scheduler；Agent 或外部调度系统负责定时。
+- 工具本身不判断今天是否交易日；Agent / 调度器负责目标交易日计算。
+- 默认目标是日频盘后数据；分钟线能力依赖具体 provider 接口，不作为第一阶段生产主路径。
+- CLI 尚未把底层所有 schema 都暴露成 fetch 子命令，例如 `index_data`、`industry_concept`、`realtime_quote` 目前主要是底层能力 / 未来扩展。
+- Tushare 权限、积分和字段权限会影响返回；空结果不一定是程序错误。
+- Eastmoney Cookie 会过期，需要周期性刷新。
+- AKShare/Eastmoney 可能因网站防护、Cookie 过期、接口变更而失败。
+- AKShare 无独立复权因子表；qfq/hfq 主要依赖 Tushare/BaoStock 复权因子在查询层动态生成。
+- BaoStock 当前主要用于 SH/SZ A 股补充与验证；HK 不走 BaoStock，BJ/BSE 依实际 adapter 能力处理。
+- BaoStock 无个股 money-flow。
+- 港股通港股日线主要通过 Tushare HK daily；不要直接请求 HK qfq/hfq bars。
+- 供应商口径不同的数据，如行业、概念、资金流，不应强行合并成单一真值。
+- Raw Object Store 当前为本地目录；未来迁移对象存储时应保持 `raw_payload_ref` 抽象。
+- 生产接入前应根据真实权限和返回样例继续固化 provider-specific 字段映射。
+
+---
+
+## 23. 项目结构
 
 ```text
 stock_data_collector/
   pyproject.toml
+  requirements.txt
   README.md
   .env.example
   config/
@@ -166,9 +1574,9 @@ stock_data_collector/
     storage.yaml
     data_quality.yaml
   stock_data_ingestion/
-    __init__.py
     cli.py
     config.py
+    env.py
     logging_config.py
     adapters/
       base.py
@@ -208,808 +1616,45 @@ stock_data_collector/
       idempotency.py
       retry.py
   tests/
-    test_ticker_normalization.py
-    test_idempotency.py
-    test_raw_object_store.py
-    test_bar_record_schema.py
-    test_merge_policy.py
-    test_conflict_detection.py
-    test_quality_score.py
-    test_sqlite_schema.py
-    test_query_service.py
-    test_request_response_schema.py
-    test_baostock_adapter.py
-    test_baostock_ingestion_runner.py
-    test_tushare_hk_daily_adapter.py
-    test_parquet_business_key_dedupe.py
-    test_cli.py
   tools/
     tushare_stock_probe.py
     akshare_stock_probe.py
     baostock_stock_probe.py
+    tushare_empty_debug.py
+    daily_mvp_smoke.py
+    update_eastmoney_cookie.py
 ```
-
-## 8. StockDataRequest
-
-`StockDataRequest` 由 `pydantic v2` 定义，负责统一输入校验、ticker 标准化、日期范围校验和幂等键生成。
-
-示例：
-
-```json
-{
-  "request_id": "req_20260529_000001",
-  "schema_version": "stock_data_request.v0.1",
-  "request_type": "historical_bars",
-  "tickers": ["600519.SH", "000001.SZ"],
-  "names": ["贵州茅台", "平安银行"],
-  "universe_id": "trading_candidates_v0",
-  "market": "A_share",
-  "exchanges": ["SSE", "SZSE", "BSE"],
-  "start_date": "2024-01-01",
-  "end_date": "2026-05-29",
-  "frequency": "1d",
-  "adjust": "qfq",
-  "fields": ["open", "high", "low", "close", "volume", "amount"],
-  "provider_priority": ["tushare", "akshare", "baostock", "joinquant"],
-  "canonical_provider": "tushare",
-  "fallback_enabled": true,
-  "cross_validate": true,
-  "save_raw": true,
-  "save_cleaned": true,
-  "export_parquet": true,
-  "requested_by": "manual",
-  "created_at": "2026-05-29T10:00:00+08:00"
-}
-```
-
-支持的 `request_type`：
-
-- `security_master`
-- `trade_calendar`
-- `trading_status`
-- `historical_bars`
-- `realtime_quote`
-- `adj_factor`
-- `financial_statement`
-- `financial_indicator`
-- `valuation_metric`
-- `industry_concept`
-- `money_flow`
-- `index_data`
-- `corporate_action`
-- `batch_refresh`
-- `cross_validation`
-
-支持的 `frequency`：`1m`、`5m`、`15m`、`30m`、`60m`、`1d`、`1w`、`1mo`、`realtime`。
-
-支持的 `adjust`：`none`、`qfq`、`hfq`。
-
-## 9. StockDataResponse
-
-`StockDataResponse` 包含：
-
-- 请求信息；
-- provider 拉取结果；
-- provider 比较结果；
-- 标准化数据；
-- 质量报告；
-- 持久化结果；
-- 结构化错误。
-
-`status` 取值：
-
-- `success`
-- `partial_success`
-- `failed`
-
-## 10. 标准记录字段字典
-
-所有标准记录都继承 `StandardRecord`，必须具备：
-
-| 字段 | 含义 |
-|---|---|
-| `record_id` | 标准记录 ID |
-| `schema_version` | 记录 schema 版本 |
-| `record_type` | 记录类型 |
-| `provider` | 实际返回该条数据的数据源 |
-| `source_api` | 数据源 API 名称 |
-| `source_site` | 数据源站点或底层来源 |
-| `adapter_version` | Adapter 版本 |
-| `canonical_provider` | 主源，默认 Tushare |
-| `effective_provider` | 最终有效 provider |
-| `source_role` | canonical / validator / supplement / fallback_canonical / provider_specific |
-| `merge_method` | 合并策略 |
-| `validation_status` | 校验状态 |
-| `field_provenance` | 字段级来源追踪 |
-| `supplement_flags` | 补充标记 |
-| `conflict_ids` | 关联冲突 ID |
-| `canonical_value_suspect` | 主源值是否可疑 |
-| `fetch_time` | 拉取完成时间 |
-| `provider_update_time` | 数据源更新时间 |
-| `ingested_at` | 入库时间 |
-| `request_id` | 请求 ID |
-| `ingestion_run_id` | 本次执行 ID |
-| `request_params_hash` | 请求参数哈希 |
-| `idempotency_key` | 幂等键 |
-| `raw_payload_id` | 原始数据对象 ID |
-| `raw_payload_ref` | 原始数据对象引用 |
-| `raw_hash` | 原始对象哈希 |
-| `raw_format` | 固定为 `jsonl.gz` |
-| `raw_row_index` | 原始对象中的行号 |
-| `data_quality` | 数据质量分 |
-| `quality_flags` | 质量标记 |
-
-涉及股票的记录额外包含：
-
-- `normalized_ticker`
-- `provider_symbol`
-- `exchange`
-- `market`
-- `asset_type`
-
-涉及时间的记录包含 `timezone`；涉及金额的记录包含 `currency`；涉及行情的记录包含 `adjust`。
-
-## 11. BarRecord 字段字典
-
-BarRecord 是行情数据核心模型，包含：
-
-| 字段 | 含义 |
-|---|---|
-| `normalized_ticker` | 内部统一代码，如 `600519.SH` |
-| `provider_symbol` | provider 原始代码 |
-| `exchange` | `SH` / `SZ` / `BJ` |
-| `market` | 默认 `A_share` |
-| `asset_type` | 默认 `stock` |
-| `currency` | 默认 `CNY` |
-| `trade_date` | 交易日期 |
-| `timestamp` | K 线时间戳 |
-| `timezone` | 默认 `Asia/Shanghai` |
-| `frequency` | `1m` / `5m` / `15m` / `30m` / `60m` / `1d` / `1w` / `1mo` |
-| `bar_start_time` | K 线开始时间 |
-| `bar_end_time` | K 线结束时间 |
-| `trading_session` | 交易时段 |
-| `is_complete` | 是否完整 K 线 |
-| `open` | 开盘价 |
-| `high` | 最高价 |
-| `low` | 最低价 |
-| `close` | 收盘价 |
-| `pre_close` | 前收盘价 |
-| `change` | 涨跌额 |
-| `pct_change` | 涨跌幅 |
-| `volume` | 统一后的成交量 |
-| `volume_unit` | 默认 `share` |
-| `amount` | 统一后的成交额 |
-| `amount_unit` | 默认 `CNY` |
-| `vwap` | 成交额 / 成交量 |
-| `turnover_rate` | 换手率 |
-| `turnover_rate_free_float` | 自由流通换手率 |
-| `adjust` | `none` / `qfq` / `hfq` |
-| `adj_factor` | 复权因子 |
-
-BarRecord 会校验：
-
-- `adjust` 必须合法；
-- high/low 价格逻辑必须合理；
-- volume/amount 不能为负；
-- 必须有 `field_provenance`；
-- 必须能追溯到 raw payload。
-
-## 12. Raw Object Store
-
-所有外部数据源原始响应必须保存到 Raw Object Store。本项目第一阶段使用本地目录，未来可迁移到 S3、OSS、COS、MinIO。
-
-约束：
-
-- 原始数据统一为 gzip 压缩 JSON Lines；
-- 扩展名固定 `.jsonl.gz`；
-- 第一行是 metadata；
-- 第二行以后是 raw_record；
-- SQLite 不保存原始大字段，只保存 `raw_payload_index`；
-- Parquet 只保存清洗后的结构化数据，不作为 raw 原始格式；
-- `RawObjectStore.save_raw_payload()` 不覆盖已存在 raw object，同一 raw payload ID 会返回已有对象索引。
-
-目录示例：
-
-```text
-data/raw_objects/
-  provider=tushare/
-    request_type=historical_bars/
-      date=2026-05-29/
-        raw_tushare_historical_bars_20260529_req_20260529_000001.jsonl.gz
-```
-
-`RawObjectStore` 提供：
-
-- `save_raw_payload`
-- `load_raw_payload`
-- `compute_raw_hash`
-- `verify_raw_hash`
-- `build_raw_payload_ref`
-- `parse_raw_payload_ref`
-- `list_raw_payloads`
-- `read_raw_record_by_index`
-
-## 13. RawPayloadIndexRecord 字段字典
-
-| 字段 | 含义 |
-|---|---|
-| `raw_payload_id` | 原始数据对象 ID |
-| `raw_payload_ref` | 本地 raw:// 引用 |
-| `provider` | provider 名称 |
-| `source_api` | API 名称 |
-| `source_site` | 数据来源站点 |
-| `adapter_version` | Adapter 版本 |
-| `request_id` | 请求 ID |
-| `ingestion_run_id` | 执行 ID |
-| `request_type` | 请求类型 |
-| `sanitized_request_params` | 已脱敏请求参数 |
-| `request_params_hash` | 请求参数哈希 |
-| `idempotency_key` | 幂等键 |
-| `fetch_started_at` | 开始拉取时间 |
-| `fetch_completed_at` | 完成拉取时间 |
-| `provider_update_time` | provider 更新时间 |
-| `raw_format` | `jsonl.gz` |
-| `content_encoding` | `gzip` |
-| `timezone` | 时区 |
-| `raw_hash` | 原始文件哈希 |
-| `rows_fetched` | raw_record 行数 |
-
-## 14. ProviderFetchResult 字段字典
-
-| 字段 | 含义 |
-|---|---|
-| `provider` | 数据源 |
-| `source_api` | API 名称 |
-| `source_site` | 来源站点 |
-| `adapter_version` | Adapter 版本 |
-| `status` | success / partial_success / failed / unavailable / empty_result |
-| `raw_payload_id` | 原始对象 ID |
-| `raw_payload_ref` | 原始对象引用 |
-| `raw_hash` | 原始对象哈希 |
-| `raw_records` | Adapter 返回的行级原始数据，不直接入库大字段 |
-| `rows_fetched` | 行数 |
-| `started_at` | 开始时间 |
-| `completed_at` | 完成时间 |
-| `error` | 结构化 ErrorRecord |
-
-代码中也提供别名 `AdapterFetchResult = ProviderFetchResult`，以符合 Adapter 层语义。
-
-## 15. ProviderComparisonResult 字段字典
-
-| 字段 | 含义 |
-|---|---|
-| `comparison_id` | 比较 ID |
-| `record_type` | 记录类型 |
-| `comparison_key` | 标准化比较键 |
-| `canonical_provider` | 主源 |
-| `compared_provider` | 对照源 |
-| `status` | matched / conflicted |
-| `checked_fields` | 已检查字段 |
-| `matched_fields` | 一致字段 |
-| `conflicted_fields` | 冲突字段 |
-| `conflicts` | DataQualityConflict 列表 |
-| `created_at` | 创建时间 |
-| `request_id` | 请求 ID |
-| `ingestion_run_id` | 执行 ID |
-
-## 16. DataQualityConflict 字段字典
-
-| 字段 | 含义 |
-|---|---|
-| `conflict_id` | 冲突 ID |
-| `record_type` | 记录类型 |
-| `comparison_key` | 比较键 |
-| `field_name` | 冲突字段 |
-| `canonical_provider` | 主源 |
-| `canonical_value` | 主源值 |
-| `other_provider` | 对照源 |
-| `other_value` | 对照源值 |
-| `severity` | low / medium / high / critical |
-| `tolerance` | 容忍阈值与实际差异 |
-| `reason` | 冲突原因 |
-| `resolution` | 解决方式 |
-| `created_at` | 创建时间 |
-| `request_id` | 请求 ID |
-| `ingestion_run_id` | 执行 ID |
-| `canonical_record_id` | 主源记录 ID |
-| `other_record_id` | 对照源记录 ID |
-
-## 17. ErrorRecord 字段字典
-
-| 字段 | 含义 |
-|---|---|
-| `error_id` | 错误 ID |
-| `provider` | provider |
-| `source_api` | API |
-| `source_site` | 来源站点 |
-| `error_code` | 错误码 |
-| `error_message` | 错误消息 |
-| `retryable` | 是否可重试 |
-| `retry_count` | 重试次数 |
-| `suggested_action` | 建议动作 |
-| `created_at` | 创建时间 |
-
-错误码包括：
-
-- `AUTH_FAILED`
-- `PERMISSION_DENIED`
-- `TOKEN_MISSING`
-- `RATE_LIMITED`
-- `PROVIDER_TIMEOUT`
-- `PROVIDER_UNAVAILABLE`
-- `PROVIDER_SCHEMA_CHANGED`
-- `EMPTY_RESULT`
-- `INVALID_REQUEST`
-- `INVALID_TICKER`
-- `INVALID_DATE_RANGE`
-- `NORMALIZATION_FAILED`
-- `CROSS_VALIDATION_FAILED`
-- `RAW_SAVE_FAILED`
-- `STORAGE_FAILED`
-- `IDEMPOTENCY_CONFLICT`
-- `UNKNOWN_ERROR`
-
-## 18. SQLite 表结构
-
-使用 SQLAlchemy 2.x 定义模型，SQLite 开启 WAL。表包括：
-
-- `securities`
-- `ticker_mappings`
-- `trade_calendar`
-- `trading_status`
-- `daily_bars`
-- `weekly_bars`
-- `minute_bars`
-- `realtime_quotes`
-- `adj_factors`
-- `financial_statements`
-- `financial_indicators`
-- `valuation_metrics`
-- `industry_memberships`
-- `concept_memberships`
-- `money_flow`
-- `indices`
-- `index_bars`
-- `index_constituents`
-- `corporate_actions`
-- `source_fetch_logs`
-- `provider_comparisons`
-- `data_quality_conflicts`
-- `raw_payload_index`
-- `ingestion_requests`
-- `ingestion_runs`
-
-每张标准数据表包含：主键、唯一键、常用索引、`created_at`、`updated_at`、`provider`、`raw_payload_id`、`data_quality`、`validation_status`。
-
-典型唯一键：
-
-- Bar：`normalized_ticker + frequency + trade_date + timestamp + adjust + effective_provider`
-- TradeCalendar：`exchange + calendar_date + effective_provider`
-- AdjFactor：`normalized_ticker + trade_date + effective_provider`
-- ValuationMetric：`normalized_ticker + trade_date + effective_provider`
-- FinancialStatement：`normalized_ticker + report_period + statement_type + report_type + effective_provider`
-
-## 19. Parquet 导出
-
-`ParquetStore` 只用于清洗后的结构化数据，不用于 raw 原始响应。
-
-推荐分区：
-
-```text
-data/parquet/
-  bars/
-    frequency=1d/
-      trade_date=2026-05-29/
-        part-000.parquet
-  valuation_metrics/
-    trade_date=2026-05-29/
-      part-000.parquet
-  financial_indicators/
-    report_period=2025Q4/
-      part-000.parquet
-```
-
-能力：
-
-- 按表导出；
-- 支持增量写入；
-- 支持日期范围读取；
-- 支持股票列表读取；
-- 支持校验 Parquet 行数与 SQLite 行数。
-
-## 20. 股票代码标准化
-
-内部统一格式：
-
-- `600519.SH`
-- `000001.SZ`
-- `430047.BJ`
-- `00005.HK`
-
-支持输入：
-
-- `600519.SH`
-- `000001.SZ`
-- `430047.BJ`
-- `00005.HK`
-- `hk00005`
-- `600519`
-- `sz000001`
-- `sh600519`
-- `600519.XSHG`
-- `000001.XSHE`
-
-函数：
-
-- `normalize_ticker`
-- `infer_exchange`
-- `to_tushare_symbol`
-- `to_akshare_symbol`
-- `to_baostock_symbol`
-- `to_joinquant_symbol`
-- `validate_a_share_ticker`
-- `validate_hk_ticker`
-
-无法识别时抛出包含 `INVALID_TICKER` 的结构化异常，不静默猜测。
-
-## 21. 时间、单位和复权
-
-`datetime_utils.py` 提供：
-
-- `normalize_trade_date`
-- `normalize_timestamp`
-- `infer_bar_start_end`
-- `to_asia_shanghai`
-- `validate_date_range`
-- `build_quote_time_bucket`
-
-`units.py` 提供：
-
-- `normalize_volume`
-- `normalize_amount`
-- `normalize_currency`
-- `compute_vwap`
-- `normalize_turnover_rate`
-
-复权方式统一为：
-
-- `none`
-- `qfq`
-- `hfq`
-
-BarRecord 必须显式写入 `adjust`。
-
-## 22. 多源比较与冲突处理
-
-比较前先标准化：股票代码、日期、时间、频率、复权方式、成交量单位、成交额单位、币种。
-
-核心比较键：
-
-| 记录 | comparison_key |
-|---|---|
-| SecurityMasterRecord | `normalized_ticker` |
-| TradeCalendarRecord | `exchange + calendar_date` |
-| TradingStatusRecord | `normalized_ticker + trade_date` |
-| BarRecord | `normalized_ticker + frequency + trade_date/timestamp + adjust` |
-| RealtimeQuoteRecord | `normalized_ticker + quote_time_bucket` |
-| AdjFactorRecord | `normalized_ticker + trade_date` |
-| FinancialStatementRecord | `normalized_ticker + report_period + statement_type + report_type` |
-| FinancialIndicatorRecord | `normalized_ticker + report_period` |
-| ValuationMetricRecord | `normalized_ticker + trade_date` |
-| IndustryMembershipRecord | `normalized_ticker + industry_system + effective_date` |
-| ConceptMembershipRecord | `normalized_ticker + concept_code/concept_name + provider` |
-| MoneyFlowRecord | `normalized_ticker + trade_date + frequency + source_methodology` |
-| IndexConstituentRecord | `index_code + normalized_ticker + effective_date` |
-| CorporateActionRecord | `normalized_ticker + action_type + announcement_date + ex_date` |
-
-数值容忍阈值默认实现：
-
-- 价格：绝对差异 ≤ 0.01 或相对差异 ≤ 0.01%；
-- 成交量：相对差异 ≤ 0.5%；
-- 成交额：相对差异 ≤ 1.0%；
-- 换手率：绝对差异 ≤ 0.05 个百分点；
-- 复权因子：相对差异 ≤ 0.01%；
-- 市值：相对差异 ≤ 1.0%；
-- PE / PB / PS：相对差异 ≤ 1.0%；
-- 财报金额：相对差异 ≤ 0.1% 或绝对差异低于阈值；
-- 财务比率：绝对差异 ≤ 0.01 或相对差异 ≤ 1.0%。
-
-严重度：
-
-- `low`：小数精度差异、公司名称格式差异、轻微四舍五入差异；
-- `medium`：成交量/成交额/估值/财务指标明显差异；
-- `high`：收盘价、复权因子、停复牌、ST、涨跌停、交易日历、财报核心字段明显不一致；
-- `critical`：主源显示可交易但辅助源显示停牌，主源非 ST 但辅助源 ST/*ST，主源未跌停但辅助源跌停，价格严重不合理，复权因子导致收益曲线严重异常，财报核心字段数量级不一致。
-
-critical 冲突数据不得进入可交易数据层。
-
-## 23. 合并策略
-
-实现的 `merge_method`：
-
-- `canonical_only`
-- `canonical_validated`
-- `canonical_with_warning`
-- `fill_missing_from_supplement`
-- `fallback_single_source`
-- `fallback_multi_source_agreed`
-- `provider_specific_append`
-- `quarantined_due_to_conflict`
-- `manual_review_required`
-
-规则：
-
-1. Tushare 有数据且辅助源一致：使用 Tushare，`canonical_validated`，质量分提高；
-2. Tushare 有数据但辅助源不一致：保留 Tushare，记录冲突，不自动覆盖；关键 high/critical 冲突隔离或人工复核；
-3. Tushare 缺失但辅助源有数据：只允许白名单字段或 fallback 记录补充，质量分不能满分；
-4. 行业、概念、资金流等口径不同数据：`provider_specific_append`，按 provider 分别保存。
-
-## 24. 数据质量评分
-
-公式：
-
-```text
-data_quality_score =
-  0.25 * completeness_score
-+ 0.30 * consistency_score
-+ 0.15 * timeliness_score
-+ 0.10 * provider_reliability_score
-+ 0.10 * anomaly_score
-+ 0.10 * provenance_score
-```
-
-初始 provider 可靠性：
-
-| provider | reliability |
-|---|---:|
-| tushare | 0.90 |
-| joinquant | 0.85 |
-| akshare | 0.75 |
-| baostock | 0.70 |
-| manual_import | 0.60 |
-| unknown | 0.30 |
-
-调整规则：
-
-| 规则 | 调整 |
-|---|---:|
-| canonical_validated_by_two_sources | +0.08 |
-| canonical_validated_by_one_source | +0.04 |
-| canonical_only_not_validated | -0.05 |
-| single_source_fallback | -0.15 |
-| multi_source_fallback_agreed | -0.08 |
-| low_conflict | -0.05 |
-| medium_conflict | -0.12 |
-| high_conflict | -0.25 |
-| critical_conflict | -0.50 |
-| missing_raw_payload_ref | -0.30 |
-| missing_field_provenance | -0.20 |
-
-所有分数限制在 0 到 1。
-
-## 25. 命令行示例
-
-初始化数据库：
-
-```bash
-python -m stock_data_ingestion.cli init-db
-```
-
-拉取股票基础信息：
-
-```bash
-python -m stock_data_ingestion.cli fetch security-master --tickers 600519.SH 000001.SZ
-```
-
-拉取交易日历：
-
-```bash
-python -m stock_data_ingestion.cli fetch trade-calendar --exchange SSE --start-date 2024-01-01 --end-date 2026-05-29
-```
-
-拉取历史行情：
-
-```bash
-python -m stock_data_ingestion.cli fetch historical-bars \
-  --tickers 600519.SH 000001.SZ \
-  --start-date 2024-01-01 \
-  --end-date 2026-05-29 \
-  --frequency 1d \
-  --adjust qfq \
-  --cross-validate
-```
-
-拉取估值指标：
-
-```bash
-python -m stock_data_ingestion.cli fetch valuation --tickers 600519.SH --start-date 2024-01-01 --end-date 2026-05-29
-```
-
-拉取财务指标：
-
-```bash
-python -m stock_data_ingestion.cli fetch financial-indicator --tickers 600519.SH --start-date 2020-01-01 --end-date 2026-05-29
-```
-
-查询行情：
-
-```bash
-python -m stock_data_ingestion.cli query bars --ticker 600519.SH --start-date 2024-01-01 --end-date 2026-05-29 --frequency 1d --adjust qfq
-```
-
-查询冲突：
-
-```bash
-python -m stock_data_ingestion.cli query conflicts --ticker 600519.SH
-```
-
-校验 raw hash：
-
-```bash
-python -m stock_data_ingestion.cli verify raw --raw-payload-id raw_tushare_daily_20260529_req_000001 --expected-hash sha256:...
-```
-
-## 26. 查询服务示例
-
-```python
-from stock_data_ingestion.storage.database import Database
-from stock_data_ingestion.services.query_service import QueryService
-
-_db = Database("data/stock_data.db")
-with _db.session() as session:
-    qs = QueryService(session)
-    bars = qs.get_bars("600519.SH", "2024-01-01", "2026-05-29", "1d", "qfq")
-    conflicts = qs.get_conflicts("600519.SH")
-```
-
-QueryService 支持：
-
-1. 按股票代码查询基础信息；
-2. 按股票列表查询基础信息；
-3. 按股票代码、日期范围、频率、复权方式查询历史行情；
-4. 按股票代码、交易日查询估值指标；
-5. 按股票代码、报告期查询财务指标；
-6. 按股票代码查询行业归属；
-7. 按股票代码查询概念归属；
-8. 按股票代码、日期范围查询资金流；
-9. 按指数代码查询指数成分；
-10. 按 raw_payload_id 查询原始数据索引；
-11. 按 record_id 反查 raw_payload_ref 和 raw_row_index；
-12. 查询 data_quality_conflicts；
-13. 查询某个数据是否 `validation_status = quarantined`；
-14. 查询某条记录的 `field_provenance`。
-
-查询返回 pandas DataFrame 或字典，并保留来源字段。
-
-## 27. Adapter 设计
-
-`BaseDataAdapter` 定义统一接口：
-
-- `provider_name`
-- `adapter_version`
-- `is_available`
-- `authenticate`
-- `fetch_security_master`
-- `fetch_trade_calendar`
-- `fetch_trading_status`
-- `fetch_historical_bars`
-- `fetch_realtime_quote`
-- `fetch_adj_factor`
-- `fetch_financial_statement`
-- `fetch_financial_indicator`
-- `fetch_valuation_metric`
-- `fetch_industry_membership`
-- `fetch_concept_membership`
-- `fetch_money_flow`
-- `fetch_index_data`
-- `fetch_corporate_action`
-- `normalize_raw_data`
-- `map_provider_symbol_to_normalized_ticker`
-- `map_normalized_ticker_to_provider_symbol`
-
-每个 fetch 方法都返回 `ProviderFetchResult` / `AdapterFetchResult`，上层服务不直接接收 pandas DataFrame。
-
-### BaoStock 适配说明
-
-`BaoStockAdapter` 只把 BaoStock 用作 A 股补充/校验源。其日线接口返回成交量单位为股、成交额单位为人民币元；复权因子采用 BaoStock 文档中的涨跌幅复权法，因此不会把 `foreAdjustFactor` 伪装成 Tushare 的通用 `adj_factor`，而是保留 `fore_adjust_factor`、`back_adjust_factor`、`event_adjust_factor`、`factor_method` 和 raw payload。标准比较和冲突处理仍以 Tushare 为主。
-
-诊断工具：
-
-```bash
-python tools/baostock_stock_probe.py --tickers 600519.SH 000001.SZ --start-date 2026-05-01 --end-date 2026-05-29
-```
-
-该工具会输出 JSON 和 Markdown 报告，检查 `query_stock_basic`、`query_trade_dates`、`query_all_stock`、`query_history_k_data_plus`、`query_adjust_factor`、`query_dividend_data` 和季频财务接口是否返回数据及必需字段。
-
-## 28. 测试方式
-
-测试不依赖真实外部 API。Fake / 固定数据用于校验标准化、幂等、Raw Object Store、冲突、质量评分、CLI 参数等。
-
-```bash
-pytest
-```
-
-本版代码复核时已运行：
-
-```text
-97 tests collected
-92 passed
-5 skipped
-```
-
-本次执行环境中，4 个数据库相关测试因未安装 `SQLAlchemy` 跳过，1 个 Parquet 测试因未安装 `pyarrow` 跳过；安装完整依赖后应把 SQLite/Parquet 集成测试纳入 CI。
-
-## 29. 已知限制
-
-- 真实 provider API 的字段在未来可能变化，AKShare / BaoStock 字段变化会返回 `PROVIDER_SCHEMA_CHANGED` 或在 probe 工具中暴露为缺字段；
-- BaoStock 文档覆盖 A 股、指数、估值、复权、季频财务、行业和部分指数成分；港股通股票本身的港股日线不走 BaoStock，而走 Tushare HK 接口；
-- JQData 默认关闭，生产环境可在 Adapter 内扩展具体字段，但上层服务不得直接调用 JQData；
-- 当前 Raw Object Store 为本地目录实现；迁移对象存储时应保持 `raw_payload_ref` 抽象；
-- Parquet 写入依赖 `pyarrow`；
-- 本项目已打通所有 request_type 的统一标准化入口和 response 路径，但真实 provider 的不同权限、不同 SDK 版本可能导致字段命名差异；生产接入前应按实际 Tushare/AKShare/BaoStock 权限和返回样例继续固化 provider-specific 字段映射；
-- 当前执行环境如未安装 `SQLAlchemy` / `pyarrow`，数据库和 Parquet 相关测试会自动跳过；完整依赖环境下应纳入 CI 强制执行。
-
-## 30. 后续扩展方向
-
-- 对每类 request_type 补齐 provider-specific 字段映射；
-- 增加 Alembic 迁移；
-- 增加对象存储后端；
-- 增加调度器接入层，但调度器不应绕过 Adapter 和 Raw Object Store；
-- 增加更多财务报表字段和指数数据字段；
-- 增加数据质量 Dashboard；
-- 增加人工复核工作流，但不改变“不得自动覆盖主源”的原则。
 
 ---
 
-## 追加说明：v0.3.0 BaoStock 与第一阶段日频盘后方案
+## 24. 交付与安全
 
-本版在原有 Tushare / AKShare / JoinQuant 基础上新增 **BaoStock** 数据源，并把第一阶段目标收敛为“日频盘后数据系统”：用于全 A 股与港股通股票的日频因子计算，不做分钟线、tick、Level-2、实时盘中交易数据。
+源码交付应排除：
 
-### 第一阶段默认范围
-
-- **A 股股票池**：全 A 股，包含主板、创业板、科创板、北交所；不含 ETF、不含可转债；默认只取正常上市股票。
-- **港股通**：不是只记录名单；需要抓取港股通股票本身的港股日线行情，并纳入因子计算。港股日线默认走 Tushare `hk_daily` 或其它 HK-capable provider，BaoStock 不作为港股行情源。
-- **数据类型**：股票基础信息、交易日历、A 股日线、港股通港股日线、复权因子、估值、财务报表、财务指标、资金流向、公司行动/分红送转。
-- **历史窗口**：行情、估值、复权因子、资金流默认回看约 400 个自然日；财务默认保留最近 8 个季度。
-- **复权口径**：标准层保存原始未复权 OHLCV + adj_factor；查询/因子层按需生成 qfq，raw 真实成交价始终保留，hfq 作为可选能力。
-
-### 数据源角色
-
-| 数据源 | 默认状态 | 角色 | 第一阶段用途 |
-|---|---:|---|---|
-| Tushare Pro | enabled | canonical provider | A 股主源、港股通港股日线主源、财务/估值/资金流主源 |
-| AKShare | enabled | validator + supplement | 主要使用腾讯接口做 A 股行情补充与交叉验证 |
-| BaoStock | enabled | validator + supplement | A 股基础资料、交易日历、日线、估值、复权因子、季频财务、行业/指数成分、分红送转补充验证 |
-| JoinQuant/JQData | disabled | optional future provider | 暂不默认使用，未来需要时再启用 |
-
-核心规则保持不变：**Tushare 是 canonical provider**。AKShare 和 BaoStock 可以补缺和发现冲突，但默认不自动覆盖 Tushare 的价格、财务、复权等关键字段。
-
-### BaoStock 支持范围
-
-`BaoStockAdapter` 当前实现：
-
-- `fetch_security_master()` -> `query_stock_basic()`，并尝试用 `query_stock_industry()` 补行业；过滤 `type=1` 股票和 `status=1` 上市状态。
-- `fetch_trade_calendar()` -> `query_trade_dates()`。
-- `fetch_trading_status()` -> `query_all_stock()`。
-- `fetch_historical_bars()` -> `query_history_k_data_plus()`，默认 `adjustflag=3` 保存不复权日线；`volume` 归一为股，`amount` 归一为人民币元。
-- `fetch_valuation_metric()` -> `query_history_k_data_plus()` 的 `peTTM/pbMRQ/psTTM/pcfNcfTTM`。
-- `fetch_adj_factor()` -> `query_adjust_factor()`，同时保存 `fore_adjust_factor/back_adjust_factor/event_adjust_factor/factor_method`；不把 BaoStock 的事件型前复权因子当作 Tushare 通用 `adj_factor`。
-- `fetch_financial_indicator()` -> 合并 `query_profit_data/query_operation_data/query_growth_data/query_balance_data/query_cash_flow_data/query_dupont_data` 的季频指标。
-- `fetch_financial_statement()` -> 用 `query_profit_data()` 作为轻量 income-statement proxy。
-- `fetch_corporate_action()` -> `query_dividend_data()`。
-- `fetch_index_data()` -> `query_sz50_stocks/query_hs300_stocks/query_zz500_stocks`。
-
-BaoStock 文档没有列出港股日线和个股资金流接口，所以 `BaoStockAdapter.fetch_money_flow()` 会返回 `empty_result`，港股通股票日线不走 BaoStock。
-
-### 新增工具
-
-```bash
-# 调用 BaoStock SDK 的真实接口探针；需要先 pip install baostock
-python tools/baostock_stock_probe.py --tickers 600000.SH 000001.SZ \
-  --start-date 2025-01-01 --end-date 2025-12-31 \
-  --year 2025 --quarter 3
+```text
+.env
+data/
+logs/
+*.db
+*.sqlite
+*.parquet
+*.jsonl.gz
+*.egg-info/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
 ```
 
-### 交付包注意事项
+安全要求：
 
-正式交付源码包不应包含：`.env`、`data/`、`logs/`、`*.egg-info/`、`__pycache__/`、`.pytest_cache/`、`.coverage`、`htmlcov/`。真实凭证只保留在本地 `.env`，交付包只保留 `.env.example`。
+- 不要把真实 token、账号、密码、手机号、Cookie 写入 README、commit message、PR 描述、日志或 Agent 回复。
+- `.env.example` 只保留空值和操作说明。
+- Agent 需要提醒用户时，只说明哪个变量缺失或疑似过期，例如：
+  ```text
+  EASTMONEY_COOKIE 可能已过期，请从已验证的浏览器会话复制 Cookie，并运行 tools/update_eastmoney_cookie.py 更新。
+  ```
+- Agent 不应尝试绕过验证码、破解风控、伪造 Cookie 或保存用户完整 Cookie 到外部系统。
