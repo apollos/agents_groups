@@ -33,22 +33,24 @@ def generate_idempotency_key(
     frequency: Optional[str] = None,
     adjust: Optional[str] = None,
     fields: Iterable[str] | None = None,
+    provider_set: Iterable[str] | None = None,
     schema_version: str = "v0.1",
 ) -> str:
-    return ":".join(
-        [
-            module_name,
-            request_type,
-            provider,
-            _sorted_join(tickers) if tickers else (universe_id or "none"),
-            _fmt_date(start_date),
-            _fmt_date(end_date),
-            frequency or "none",
-            adjust or "none",
-            _sorted_join(fields),
-            schema_version,
-        ]
-    )
+    parts = [
+        module_name,
+        request_type,
+        provider,
+        _sorted_join(tickers) if tickers else (universe_id or "none"),
+        _fmt_date(start_date),
+        _fmt_date(end_date),
+        frequency or "none",
+        adjust or "none",
+        _sorted_join(fields),
+    ]
+    if provider_set is not None:
+        parts.append(_sorted_join(provider_set))
+    parts.append(schema_version)
+    return ":".join(parts)
 
 
 def assert_same_key(expected: str, actual: str) -> None:

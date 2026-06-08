@@ -24,6 +24,7 @@ provider_reliability:
   tushare: 0.90
   joinquant: 0.85
   akshare: 0.75
+  baostock: 0.70
   manual_import: 0.60
   unknown: 0.30
 quality_weights:
@@ -37,6 +38,7 @@ quality_adjustments:
   canonical_validated_by_two_sources: 0.08
   canonical_validated_by_one_source: 0.04
   canonical_only_not_validated: -0.05
+  baostock_adjust_factor_method_mismatch: -0.02
   single_source_fallback: -0.15
   multi_source_fallback_agreed: -0.08
   low_conflict: -0.05
@@ -63,6 +65,8 @@ critical_fields:
   - limit_up_price
   - limit_down_price
   - adj_factor
+  - fore_adjust_factor
+  - back_adjust_factor
   - close
   - volume
   - amount
@@ -71,6 +75,11 @@ supplement_field_whitelist:
   - turnover_rate_free_float
   - vwap
   - source_methodology
+  - pcf_ncf_ttm
+  - fore_adjust_factor
+  - back_adjust_factor
+  - event_adjust_factor
+  - factor_method
   - money_flow_main_net_inflow
   - money_flow_super_large_net_inflow
   - money_flow_large_net_inflow

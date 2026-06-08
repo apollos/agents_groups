@@ -63,7 +63,7 @@ class StockDataRequest(BaseModel):
     frequency: Optional[Frequency] = None
     adjust: Optional[Adjust] = Adjust.none
     fields: list[str] = Field(default_factory=list)
-    provider_priority: list[str] = Field(default_factory=lambda: ["tushare", "akshare", "joinquant"])
+    provider_priority: list[str] = Field(default_factory=lambda: ["tushare", "akshare", "baostock", "joinquant"])
     canonical_provider: str = "tushare"
     fallback_enabled: bool = True
     cross_validate: bool = True
@@ -109,6 +109,7 @@ class StockDataRequest(BaseModel):
                 frequency=str(self.frequency) if self.frequency else None,
                 adjust=str(self.adjust) if self.adjust else None,
                 fields=self.fields,
+                provider_set=self.provider_priority,
                 schema_version="v0.1",
             )
         return self

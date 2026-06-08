@@ -1,68 +1,94 @@
-# Data source selection.
+# Data source selection for the daily post-market stock-data ingestion system.
 #
-# Use this file or .env to decide which providers are used for each run.
+# Phase-one scope:
+#   - A-share daily/post-market data for factors.
+#   - HK Stock Connect constituent HK daily bars via Tushare HK interfaces.
+#   - No minute/tick/Level-2/real-time intraday trading data in the default profile.
+#
 # Common .env overrides:
-#   STOCK_DATA_PROVIDERS=tushare,akshare          # global provider list/order
-#   STOCK_DATA_PROVIDERS=akshare                  # single-source run
-#   STOCK_DATA_CANONICAL_PROVIDER=akshare         # canonical provider when using one source
-#   STOCK_DATA_DISABLED_PROVIDERS=joinquant       # exclude a provider
-#   STOCK_DATA_ENABLE_JOINQUANT=false             # provider-specific enable/disable
-#   STOCK_DATA_PROVIDERS_HISTORICAL_BARS=tushare,akshare # per request-type override
-#   STOCK_DATA_PROVIDERS_SECURITY_MASTER=akshare  # per request-type override
-# Provider aliases accepted in env/config: tushare/thushare/ts, akshare/ak, joinquant/jqdata/jq.
+#   STOCK_DATA_PROVIDERS=tushare,akshare,baostock
+#   STOCK_DATA_PROVIDER_PRIORITY=tushare,akshare,baostock
+#   STOCK_DATA_CANONICAL_PROVIDER=tushare
+#   STOCK_DATA_DISABLED_PROVIDERS=joinquant
+#   STOCK_DATA_ENABLE_BAOSTOCK=true
+#   STOCK_DATA_ENABLE_JOINQUANT=false
+#   STOCK_DATA_PROVIDERS_HISTORICAL_BARS=tushare,akshare,baostock
+# Provider aliases accepted in env/config: tushare/thushare/ts, akshare/ak/akshare_tencent,
+# baostock/bao/bs, joinquant/jqdata/jq.
 
 canonical_provider: tushare
 
-# Global provider order. Only providers also listed in active_providers are actually used.
+# Tushare is the canonical provider. AKShare's Tencent path and BaoStock are
+# validator/supplement providers. JQData remains disabled because of cost.
 provider_priority:
   - tushare
   - akshare
+  - baostock
   - joinquant
 
-# Active providers for normal runs. JoinQuant is disabled by default here because
-# it requires a working JQData account/permission. Add joinquant back when ready.
 active_providers:
   - tushare
   - akshare
+  - baostock
   # - joinquant
 
-# Optional per request-type provider overrides. Uncomment or edit when you want
-# a specific data type to use a different set/order from active_providers.
-request_provider_overrides: {}
-#  security_master:
-#    - tushare
-#    - akshare
-#  historical_bars:
-#    - tushare
-#    - akshare
-#  valuation_metric:
-#    - tushare
-#    - akshare
-#  money_flow:
-#    - tushare
-#    - akshare
-#  financial_statement:
-#    - tushare
-#    - akshare
-#  financial_indicator:
-#    - tushare
-#    - akshare
-#  corporate_action:
-#    - tushare
-#    - akshare
-#  trade_calendar:
-#    - tushare
-#  realtime_quote:
-#    - akshare
-#  industry_concept:
-#    - akshare
+# Rolling windows for the daily MVP. Market data keeps about one year plus buffer;
+# financial data keeps enough quarters for TTM/year-over-year factors.
+market_data_lookback_days: 400
+financial_lookback_quarters: 8
+default_daily_update_time: "20:30"
+
+request_provider_overrides:
+  security_master:
+    - tushare
+    - baostock
+    - akshare
+  trade_calendar:
+    - tushare
+    - baostock
+  trading_status:
+    - tushare
+    - baostock
+    - akshare
+  historical_bars:
+    - tushare
+    - akshare
+    - baostock
+  adj_factor:
+    - tushare
+    - baostock
+  valuation_metric:
+    - tushare
+    - baostock
+    - akshare
+  financial_statement:
+    - tushare
+    - baostock
+  financial_indicator:
+    - tushare
+    - baostock
+  money_flow:
+    - tushare
+    - akshare
+  corporate_action:
+    - tushare
+    - baostock
+  industry_concept:
+    - akshare
+    - baostock
+  index_data:
+    - tushare
+    - baostock
 
 validator_providers:
   - akshare
+  - baostock
   # - joinquant
 supplement_providers:
   - akshare
+  - baostock
   # - joinquant
+
 allow_field_level_merge: true
 allow_fallback_when_canonical_missing: true
 allow_majority_override_canonical: false
@@ -70,6 +96,7 @@ quarantine_on_critical_conflict: true
 manual_review_on_trading_critical_conflict: true
 minimum_quality_for_supplement: 0.65
 minimum_quality_for_trading_use: 0.80
+
 providers:
   tushare:
     enabled: true
@@ -87,6 +114,21 @@ providers:
   akshare:
     enabled: true
     role: validator_supplement
+    source_preference: tencent
+    auth_env: {}
+    retry_attempts: 3
+    timeout_seconds: 30
+    rate_limit:
+      requests_per_minute: 60
+      burst: 10
+    allow_fallback: true
+    allow_cross_validation: true
+    allow_field_level_supplement: true
+  baostock:
+    enabled: true
+    role: validator_supplement
+    source_scope: a_share_only
+    supports_hk_daily: false
     auth_env: {}
     retry_attempts: 3
     timeout_seconds: 30
@@ -98,7 +140,7 @@ providers:
     allow_field_level_supplement: true
   joinquant:
     enabled: false
-    role: validator_supplement
+    role: optional_future_provider
     auth_env:
       username: JQDATA_USERNAME
       password: JQDATA_PASSWORD

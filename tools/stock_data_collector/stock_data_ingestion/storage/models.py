@@ -211,7 +211,12 @@ class AdjFactorModel(StandardColumnsMixin, StockColumnsMixin, Base):
     __tablename__ = "adj_factors"
     __table_args__ = (UniqueConstraint("normalized_ticker", "trade_date", "effective_provider", name="uq_adj_factor"),)
     trade_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
-    adj_factor: Mapped[float] = mapped_column(Float, nullable=False)
+    adj_factor: Mapped[Optional[float]] = mapped_column(Float)
+    fore_adjust_factor: Mapped[Optional[float]] = mapped_column(Float)
+    back_adjust_factor: Mapped[Optional[float]] = mapped_column(Float)
+    event_adjust_factor: Mapped[Optional[float]] = mapped_column(Float)
+    factor_event_date: Mapped[Optional[date]] = mapped_column(Date)
+    factor_method: Mapped[Optional[str]] = mapped_column(String(128))
 
 
 class FinancialStatementModel(StandardColumnsMixin, StockColumnsMixin, Base):
@@ -264,6 +269,7 @@ class ValuationMetricModel(StandardColumnsMixin, StockColumnsMixin, Base):
     pb: Mapped[Optional[float]] = mapped_column(Float)
     ps: Mapped[Optional[float]] = mapped_column(Float)
     ps_ttm: Mapped[Optional[float]] = mapped_column(Float)
+    pcf_ncf_ttm: Mapped[Optional[float]] = mapped_column(Float)
     dividend_yield: Mapped[Optional[float]] = mapped_column(Float)
     total_market_value: Mapped[Optional[float]] = mapped_column(Float)
     float_market_value: Mapped[Optional[float]] = mapped_column(Float)

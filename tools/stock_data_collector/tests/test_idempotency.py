@@ -30,3 +30,33 @@ def test_idempotency_key_is_order_insensitive_for_tickers_and_fields():
     )
     assert a == b
     assert a == "stock_data_ingestion:historical_bars:tushare:000001.SZ,600519.SH:20240101:20260529:1d:qfq:amount,close,high,low,open,volume:v0.1"
+
+
+def test_idempotency_key_includes_provider_set_when_supplied():
+    base = generate_idempotency_key(
+        module_name="stock_data_ingestion",
+        request_type="historical_bars",
+        provider="tushare",
+        tickers=["600519.SH"],
+        start_date="2026-05-01",
+        end_date="2026-05-29",
+        frequency="1d",
+        adjust="none",
+        fields=["open", "close"],
+        schema_version="v0.1",
+    )
+    with_provider_set = generate_idempotency_key(
+        module_name="stock_data_ingestion",
+        request_type="historical_bars",
+        provider="tushare",
+        tickers=["600519.SH"],
+        start_date="2026-05-01",
+        end_date="2026-05-29",
+        frequency="1d",
+        adjust="none",
+        fields=["open", "close"],
+        provider_set=["baostock", "tushare", "akshare"],
+        schema_version="v0.1",
+    )
+    assert base != with_provider_set
+    assert with_provider_set.endswith(":akshare,baostock,tushare:v0.1")

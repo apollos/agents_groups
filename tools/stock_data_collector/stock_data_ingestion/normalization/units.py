@@ -36,8 +36,10 @@ def normalize_amount(value: Any, unit: str | None = None, provider: str | None =
     u = (unit or "").lower()
     if not u and provider == "tushare":
         u = "thousand_cny"
-    if u in {"cny", "yuan", "元", ""}:
+    if u in {"cny", "yuan", "rmb", "元", ""}:
         return number, "CNY"
+    if u in {"hkd", "hk_dollar", "hong_kong_dollar", "港元", "港币"}:
+        return number, "HKD"
     if u in {"thousand_cny", "千元"}:
         return number * 1000.0, "CNY"
     if u in {"ten_thousand_cny", "万", "万元"}:
@@ -49,7 +51,7 @@ def normalize_currency(value: str | None) -> str:
     if value is None or not value.strip():
         return "CNY"
     upper = value.strip().upper()
-    aliases = {"RMB": "CNY", "人民币": "CNY", "YUAN": "CNY"}
+    aliases = {"RMB": "CNY", "人民币": "CNY", "YUAN": "CNY", "港元": "HKD", "HK_DOLLAR": "HKD", "港币": "HKD"}
     return aliases.get(upper, upper)
 
 

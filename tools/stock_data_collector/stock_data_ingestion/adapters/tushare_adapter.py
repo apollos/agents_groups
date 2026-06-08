@@ -7,7 +7,7 @@ from typing import Any, Iterable
 
 from stock_data_ingestion.adapters.base import BaseDataAdapter
 from stock_data_ingestion.normalization.datetime_utils import now_asia_shanghai
-from stock_data_ingestion.normalization.ticker import normalize_ticker, to_tushare_symbol
+from stock_data_ingestion.normalization.ticker import is_hk_ticker, normalize_ticker, to_tushare_symbol
 from stock_data_ingestion.schemas.errors import ErrorCode
 from stock_data_ingestion.schemas.records import AdapterFetchStatus, ProviderFetchResult
 from stock_data_ingestion.schemas.requests import StockDataRequest
@@ -48,6 +48,11 @@ class TushareAdapter(BaseDataAdapter):
         "sell_lg_vol,sell_lg_amount,buy_elg_vol,buy_elg_amount,sell_elg_vol,sell_elg_amount,"
         "net_mf_vol,net_mf_amount"
     )
+
+    # HK daily bars are used for the project's HK Stock Connect factor universe.
+    # Tushare documents hk_daily as a separate-permission endpoint.
+    _HK_DAILY_FIELDS = "ts_code,trade_date,open,high,low,close,pre_close,change,pct_chg,vol,amount"
+    _HK_BASIC_FIELDS = "ts_code,name,fullname,enname,market,list_status,list_date,delist_date"
 
     # Financial endpoints checked against Tushare Pro manual: income, balancesheet,
     # cashflow and fina_indicator. The statement fields are the minimum required to
@@ -135,6 +140,20 @@ class TushareAdapter(BaseDataAdapter):
 
     def _request_start_end(self, request: StockDataRequest) -> tuple[str | None, str | None]:
         return self._date_to_tushare(request.start_date), self._date_to_tushare(request.end_date)
+
+    @staticmethod
+    def _is_hk_ticker(value: Any) -> bool:
+        try:
+            return normalize_ticker(str(value)).endswith(".HK")
+        except Exception:  # noqa: BLE001
+            return False
+
+    @staticmethod
+    def _is_a_share_ticker(value: Any) -> bool:
+        try:
+            return not normalize_ticker(str(value)).endswith(".HK")
+        except Exception:  # noqa: BLE001
+            return False
 
     def _event_start_end(self, request: StockDataRequest) -> tuple[str, str]:
         """Return event date range for sparse corporate-action/event endpoints.
@@ -326,6 +345,24 @@ class TushareAdapter(BaseDataAdapter):
                 rows.append(row)
         return rows
 
+    def _fetch_hk_basic_rows(self, hk_tickers: Iterable[str]) -> list[dict[str, Any]]:
+        raw_records: list[dict[str, Any]] = []
+        if not hasattr(self._pro, "hk_basic"):
+            return raw_records
+        for ticker in hk_tickers:
+            ts_code = to_tushare_symbol(ticker)
+            df = self._pro.hk_basic(ts_code=ts_code, fields=self._HK_BASIC_FIELDS)
+            for row in self._dataframe_to_records(df):
+                row = dict(row)
+                row.setdefault("provider_symbol", ts_code)
+                row.setdefault("ts_code", ts_code)
+                row.setdefault("exchange", "HK")
+                row.setdefault("market", "HK")
+                row.setdefault("currency", "HKD")
+                row.setdefault("asset_type", "stock")
+                raw_records.append(row)
+        return raw_records
+
     def fetch_security_master(self, request: StockDataRequest) -> ProviderFetchResult:
         source_api = "stock_basic"
         started = now_asia_shanghai()
@@ -335,7 +372,12 @@ class TushareAdapter(BaseDataAdapter):
         try:
             fields = self._STOCK_BASIC_FIELDS
             if request.tickers:
-                raw_records = self._fetch_stock_basic_rows_for_requested_tickers(fields, set(request.tickers))
+                hk_tickers = [ticker for ticker in request.tickers if self._is_hk_ticker(ticker)]
+                a_share_tickers = {ticker for ticker in request.tickers if self._is_a_share_ticker(ticker)}
+                raw_records = self._fetch_stock_basic_rows_for_requested_tickers(fields, a_share_tickers) if a_share_tickers else []
+                if hk_tickers:
+                    raw_records.extend(self._fetch_hk_basic_rows(hk_tickers))
+                    source_api = "hk_basic" if not a_share_tickers else "stock_basic+hk_basic"
             else:
                 raw_records = self._fetch_full_security_master_rows(fields)
             return self._success_result(source_api, raw_records, started)
@@ -444,7 +486,13 @@ class TushareAdapter(BaseDataAdapter):
 
     def fetch_historical_bars(self, request: StockDataRequest) -> ProviderFetchResult:
         frequency = request.frequency or "1d"
+        hk_tickers = [ticker for ticker in request.tickers if self._is_hk_ticker(ticker)]
+        a_share_tickers = [ticker for ticker in request.tickers if not self._is_hk_ticker(ticker)]
         source_api = {"1d": "daily", "1w": "weekly", "1mo": "monthly"}.get(str(frequency), "pro_bar")
+        if hk_tickers and not a_share_tickers:
+            source_api = "hk_daily"
+        elif hk_tickers and a_share_tickers:
+            source_api = f"{source_api}+hk_daily"
         started = now_asia_shanghai()
         unavailable = self._ensure_ready(source_api, started)
         if unavailable is not None:
@@ -453,11 +501,38 @@ class TushareAdapter(BaseDataAdapter):
             records: list[dict[str, Any]] = []
             import tushare as ts  # type: ignore
 
+            start, end = self._request_start_end(request)
             for ticker in request.tickers:
                 ts_code = to_tushare_symbol(ticker)
-                start, end = self._request_start_end(request)
-                if source_api in {"daily", "weekly", "monthly"} and str(request.adjust or "none") == "none":
-                    df = getattr(self._pro, source_api)(ts_code=ts_code, start_date=start, end_date=end)
+                if self._is_hk_ticker(ticker):
+                    if str(frequency) != "1d":
+                        continue
+                    if str(request.adjust or "none") != "none":
+                        raise ValueError("Tushare hk_daily provides raw daily HK bars; request raw bars plus adj_factor for adjusted views")
+                    df = self._pro.hk_daily(ts_code=ts_code, start_date=start, end_date=end, fields=self._HK_DAILY_FIELDS)
+                    for row in self._dataframe_to_records(df):
+                        row = dict(row)
+                        row.update(
+                            {
+                                "provider_symbol": ts_code,
+                                "normalized_ticker": ts_code,
+                                "exchange": "HK",
+                                "market": "HK",
+                                "asset_type": "stock",
+                                "currency": "HKD",
+                                "amount_unit": "HKD",
+                                "volume_unit": "share",
+                                "adjust": "none",
+                                "frequency": "1d",
+                                "raw_source_api": "hk_daily",
+                            }
+                        )
+                        records.append(row)
+                    continue
+
+                if source_api.split("+")[0] in {"daily", "weekly", "monthly"} and str(request.adjust or "none") == "none":
+                    endpoint = source_api.split("+")[0]
+                    df = getattr(self._pro, endpoint)(ts_code=ts_code, start_date=start, end_date=end)
                 else:
                     freq = {
                         "1d": "D",
@@ -489,7 +564,20 @@ class TushareAdapter(BaseDataAdapter):
             records: list[dict[str, Any]] = []
             start, end = self._request_start_end(request)
             for ticker in request.tickers:
-                df = self._pro.adj_factor(ts_code=to_tushare_symbol(ticker), start_date=start, end_date=end)
+                ts_code = to_tushare_symbol(ticker)
+                if self._is_hk_ticker(ticker):
+                    if hasattr(self._pro, "hk_adj_factor"):
+                        df = self._pro.hk_adj_factor(ts_code=ts_code, start_date=start, end_date=end)
+                        for row in self._dataframe_to_records(df):
+                            row = dict(row)
+                            row.setdefault("provider_symbol", ts_code)
+                            row.setdefault("normalized_ticker", ts_code)
+                            row.setdefault("exchange", "HK")
+                            row.setdefault("market", "HK")
+                            row.setdefault("currency", "HKD")
+                            records.append(row)
+                    continue
+                df = self._pro.adj_factor(ts_code=ts_code, start_date=start, end_date=end)
                 records.extend(self._dataframe_to_records(df))
             return self._success_result(source_api, records, started)
         except Exception as exc:  # noqa: BLE001

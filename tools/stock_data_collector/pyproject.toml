@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stock-data-collector"
-version = "0.2.0"
+version = "0.3.0"
 description = "A-share structured stock data ingestion, validation, storage, and query layer."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "Proprietary" }
+license = { text = "Apache-2.0" }
 authors = [{ name = "stock_data_ingestion maintainers" }]
 dependencies = [
   "pandas>=2.0",
@@ -24,6 +24,7 @@ dependencies = [
 providers = [
   "tushare>=1.4",
   "akshare>=1.13",
+  "baostock>=0.9.2",
   "jqdatasdk>=1.9",
 ]
 dev = [

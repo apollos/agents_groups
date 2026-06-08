@@ -1,21 +1,23 @@
 # stock_data_collector / stock_data_ingestion
 
-A 股股票结构化数据获取程序。它定位为量化系统最底层的数据底座：负责从 Tushare Pro、AKShare、JoinQuant/JQData 获取结构化数据，保存原始响应，标准化字段，执行多源校验，记录冲突，给数据质量评分，并把可追溯的标准化数据写入 SQLite / Parquet。
+A 股与港股通日频结构化数据获取程序。它定位为量化系统最底层的数据底座：负责从 Tushare Pro、AKShare 腾讯路径、BaoStock 以及未来可选的 JoinQuant/JQData 获取结构化数据，保存原始响应，标准化字段，执行多源校验，记录冲突，给数据质量评分，并把可追溯的标准化数据写入 SQLite / Parquet。
 
 
-## 本版优化摘要（v0.2.0）
+## 本版优化摘要（v0.3.0 / BaoStock + 日频生产化基线）
 
-本版根据代码复评意见做了以下可靠性增强：
+本版在 v0.2.0 的可靠性基础上，按“日频盘后因子系统”目标补齐了 BaoStock 与轻量生产化能力：
 
-- `IngestionRunner` 不再只处理 `historical_bars`，已补齐 `security_master`、`trade_calendar`、`trading_status`、`realtime_quote`、`adj_factor`、`financial_statement`、`financial_indicator`、`valuation_metric`、`industry_concept`、`money_flow`、`index_data`、`corporate_action` 的统一 raw -> standard record -> response 路径；
-- provider 失败、raw 保存失败、标准化失败、SQLite/Parquet 持久化失败都会生成结构化 `ErrorRecord`，并进入 `StockDataResponse.errors`；
-- 标准记录启用更严格的字段级 provenance 校验：业务字段有值但缺少 `field_provenance` 会被拒绝；
-- Raw Object Store metadata 写入 `raw_hash`，CLI 校验 raw hash 时优先从 SQLite `raw_payload_index` 取期望 hash，取不到时回退 raw metadata；
-- 合并策略新增白名单字段级补充 `fill_missing_from_supplement`，且补充字段会记录 `source_role=supplement` 和补充原因；
-- 修复质量评分中冲突严重度按字符串排序的问题，改为业务顺序 `low < medium < high < critical`；
-- `Repository.insert_skip_duplicate()` 改为 savepoint 方式，重复写入不会回滚同一事务中已写入的其它对象；
-- Runner 接入 `ParquetStore`，当 `export_parquet=True` 且安装 pyarrow 时导出清洗后的标准记录；
-- 新增 Runner 级 fake adapter 端到端测试，覆盖非行情标准化、结构化错误传播、主源冲突不覆盖、provider-specific append、fallback_disabled、字段级补充、raw_hash metadata。
+- 新增 `BaoStockAdapter`，作为 A 股 validator + supplement provider，覆盖证券基本资料、交易日历、全市场交易状态、A 股日线、日频估值字段、复权因子、季频财务指标、行业分类、指数成分和分红送转；
+- 明确 BaoStock 只用于其文档支持的 `sh./sz.` A 股范围；北交所和港股通港股日线不通过 BaoStock 拉取，港股通股票本身的港股日线走 Tushare HK 接口；
+- `TushareAdapter` 增加 HK daily 路由，用于港股通股票日线行情和因子计算；
+- `config/data_sources.yaml` 更新为 Tushare canonical、AKShare Tencent + BaoStock supplement/validation、JQData 默认 disabled；
+- 新增 `market_data_lookback_days=400`、`financial_lookback_quarters=8`、`default_daily_update_time=20:30` 配置；
+- `StockDataRequest` 的幂等键加入 provider set，区分“只拉 Tushare”和“Tushare + AKShare + BaoStock 交叉验证”的不同请求；
+- `QueryService` 新增 trading-ready 查询入口，默认排除 `validation_status=quarantined` 且要求 `data_quality >= minimum_quality_for_trading_use`；
+- 查询层支持从 raw bars + adj_factor 动态计算 qfq/hfq 视图，底层标准存储仍保留原始未复权 OHLCV；
+- `ParquetStore` 改为按业务主键去重，而不是整行去重，避免 `record_id` / `ingested_at` 变化导致业务重复；
+- 新增 `tools/baostock_stock_probe.py`，可直接探测 BaoStock live API 的字段、空结果和错误原因；
+- 交付包应排除 `.env`、`data/`、`logs/`、`*.egg-info/`、`__pycache__/`、`.pytest_cache/` 等敏感或运行产物。
 
 ## 1. 程序定位
 
@@ -30,17 +32,22 @@ A 股股票结构化数据获取程序。它定位为量化系统最底层的数
 
 后续模块应只读取本程序产生的标准化数据、原始数据索引、冲突记录和质量报告，不应绕过本程序直接访问外部数据源。
 
+第一阶段默认数据类型：股票基础信息、交易日历、A 股日线、港股通股票港股日线、复权因子、估值、财务报表、财务指标、资金流向。行情、估值、复权因子和资金流默认回看 400 个自然日；财务报表和财务指标默认保留最近 8 个季度。
+
 ## 2. 数据源角色
 
-三类数据源不是平等关系：
+数据源不是平等关系：
 
-| 数据源 | 角色 | 默认用途 |
-|---|---|---|
-| Tushare Pro | canonical provider / 主数据源 | 生成主标准记录 |
-| AKShare | validator + supplement provider | 免费公开补充、交叉验证 |
-| JoinQuant/JQData | validator + supplement provider | 研究验证、回测对照、分钟线验证 |
+| 数据源 | 默认角色 | 默认用途 | 当前状态 |
+|---|---|---|---|
+| Tushare Pro | canonical provider / 主数据源 | A 股主标准记录、港股通港股日线、复权因子、估值、财务、资金流 | 默认启用 |
+| AKShare Tencent | validator + supplement provider | 免费公开补充、行情交叉验证、缺失字段补足 | 默认启用 |
+| BaoStock | validator + supplement provider | A 股基础资料、日线、估值、复权因子、季频财务指标、行业/指数/分红补充 | 默认启用 |
+| JoinQuant/JQData | optional future provider | 未来研究验证、更多历史对照 | 默认关闭 |
 
-核心原则：即使 AKShare 和 JoinQuant 同时不同意 Tushare，也不能自动覆盖 Tushare。程序只会记录冲突、标记 `canonical_value_suspect=true`，并在 high/critical 关键冲突时隔离或要求人工复核。
+核心原则：即使 AKShare 和 BaoStock 同时不同意 Tushare，也不能自动覆盖 Tushare。程序只会记录冲突、标记 `canonical_value_suspect=true`，并在 high/critical 关键冲突时隔离或要求人工复核。
+
+第一阶段目标是“日频盘后因子系统”，不是分钟线、tick、Level-2 或实时盘中交易系统。默认股票池为全 A 股正常上市股票，包含主板、创业板、科创板、北交所，不含 ETF/可转债，不主动维护退市股票；另包含港股通股票本身的港股日线行情，并用于因子计算。
 
 ## 3. 非目标
 
@@ -52,7 +59,7 @@ A 股股票结构化数据获取程序。它定位为量化系统最底层的数
 - 行情特征工程；
 - 异动事件生成；
 - 交易、下单、撮合、券商接口；
-- 把 AKShare / JoinQuant 无痕覆盖 Tushare；
+- 把 AKShare / BaoStock / JoinQuant 无痕覆盖 Tushare；
 - 把原始大字段直接塞入数据库；
 - 把行业、概念、资金流等不同口径数据强行合并为唯一真值。
 
@@ -81,13 +88,16 @@ cp .env.example .env
 export TUSHARE_TOKEN="your_tushare_token"
 export JQDATA_USERNAME="your_joinquant_username"
 export JQDATA_PASSWORD="your_joinquant_password"
+export STOCK_DATA_ENABLE_JOINQUANT=false
+export STOCK_DATA_ENABLE_BAOSTOCK=true
 ```
 
 凭证读取规则：
 
 - Tushare token 从 `TUSHARE_TOKEN` 读取；
-- JoinQuant 账号从 `JQDATA_USERNAME`、`JQDATA_PASSWORD` 读取；
+- JoinQuant 账号从 `JQDATA_USERNAME`、`JQDATA_PASSWORD` 读取，但默认关闭；
 - AKShare 通常不需要认证；
+- BaoStock 需要 `baostock` SDK 登录，但不需要用户凭证；
 - 凭证不会硬编码，不会写入日志，不会写入 raw payload。
 
 ## 6. 配置文件
@@ -101,13 +111,21 @@ canonical_provider: tushare
 provider_priority:
   - tushare
   - akshare
+  - baostock
   - joinquant
+active_providers:
+  - tushare
+  - akshare
+  - baostock
 validator_providers:
   - akshare
-  - joinquant
+  - baostock
 supplement_providers:
   - akshare
-  - joinquant
+  - baostock
+market_data_lookback_days: 400
+financial_lookback_quarters: 8
+default_daily_update_time: "20:30"
 allow_field_level_merge: true
 allow_fallback_when_canonical_missing: true
 allow_majority_override_canonical: false
@@ -156,6 +174,7 @@ stock_data_collector/
       base.py
       tushare_adapter.py
       akshare_adapter.py
+      baostock_adapter.py
       joinquant_adapter.py
     schemas/
       requests.py
@@ -199,7 +218,15 @@ stock_data_collector/
     test_sqlite_schema.py
     test_query_service.py
     test_request_response_schema.py
+    test_baostock_adapter.py
+    test_baostock_ingestion_runner.py
+    test_tushare_hk_daily_adapter.py
+    test_parquet_business_key_dedupe.py
     test_cli.py
+  tools/
+    tushare_stock_probe.py
+    akshare_stock_probe.py
+    baostock_stock_probe.py
 ```
 
 ## 8. StockDataRequest
@@ -223,7 +250,7 @@ stock_data_collector/
   "frequency": "1d",
   "adjust": "qfq",
   "fields": ["open", "high", "low", "close", "volume", "amount"],
-  "provider_priority": ["tushare", "akshare", "joinquant"],
+  "provider_priority": ["tushare", "akshare", "baostock", "joinquant"],
   "canonical_provider": "tushare",
   "fallback_enabled": true,
   "cross_validate": true,
@@ -597,12 +624,15 @@ data/parquet/
 - `600519.SH`
 - `000001.SZ`
 - `430047.BJ`
+- `00005.HK`
 
 支持输入：
 
 - `600519.SH`
 - `000001.SZ`
 - `430047.BJ`
+- `00005.HK`
+- `hk00005`
 - `600519`
 - `sz000001`
 - `sh600519`
@@ -615,8 +645,10 @@ data/parquet/
 - `infer_exchange`
 - `to_tushare_symbol`
 - `to_akshare_symbol`
+- `to_baostock_symbol`
 - `to_joinquant_symbol`
 - `validate_a_share_ticker`
+- `validate_hk_ticker`
 
 无法识别时抛出包含 `INVALID_TICKER` 的结构化异常，不静默猜测。
 
@@ -733,6 +765,7 @@ data_quality_score =
 | tushare | 0.90 |
 | joinquant | 0.85 |
 | akshare | 0.75 |
+| baostock | 0.70 |
 | manual_import | 0.60 |
 | unknown | 0.30 |
 
@@ -876,6 +909,18 @@ QueryService 支持：
 
 每个 fetch 方法都返回 `ProviderFetchResult` / `AdapterFetchResult`，上层服务不直接接收 pandas DataFrame。
 
+### BaoStock 适配说明
+
+`BaoStockAdapter` 只把 BaoStock 用作 A 股补充/校验源。其日线接口返回成交量单位为股、成交额单位为人民币元；复权因子采用 BaoStock 文档中的涨跌幅复权法，因此不会把 `foreAdjustFactor` 伪装成 Tushare 的通用 `adj_factor`，而是保留 `fore_adjust_factor`、`back_adjust_factor`、`event_adjust_factor`、`factor_method` 和 raw payload。标准比较和冲突处理仍以 Tushare 为主。
+
+诊断工具：
+
+```bash
+python tools/baostock_stock_probe.py --tickers 600519.SH 000001.SZ --start-date 2026-05-01 --end-date 2026-05-29
+```
+
+该工具会输出 JSON 和 Markdown 报告，检查 `query_stock_basic`、`query_trade_dates`、`query_all_stock`、`query_history_k_data_plus`、`query_adjust_factor`、`query_dividend_data` 和季频财务接口是否返回数据及必需字段。
+
 ## 28. 测试方式
 
 测试不依赖真实外部 API。Fake / 固定数据用于校验标准化、幂等、Raw Object Store、冲突、质量评分、CLI 参数等。
@@ -887,20 +932,21 @@ pytest
 本版代码复核时已运行：
 
 ```text
-35 tests collected
-33 passed
-2 skipped
+97 tests collected
+92 passed
+5 skipped
 ```
 
-两个 skipped 测试是当前执行环境未安装 `SQLAlchemy` 时自动跳过；安装 `SQLAlchemy>=2.0` 后会执行 SQLite schema 和 QueryService 测试。当前环境也未安装 `pyarrow`，因此 Parquet 运行时能力在依赖完整环境中执行。
+本次执行环境中，4 个数据库相关测试因未安装 `SQLAlchemy` 跳过，1 个 Parquet 测试因未安装 `pyarrow` 跳过；安装完整依赖后应把 SQLite/Parquet 集成测试纳入 CI。
 
 ## 29. 已知限制
 
-- 真实 provider API 的字段在未来可能变化，AKShare 字段变化会返回 `PROVIDER_SCHEMA_CHANGED`；
-- JQData 财务指标示例保守留空，生产环境可在 Adapter 内扩展具体字段，但上层服务不得直接调用 JQData；
+- 真实 provider API 的字段在未来可能变化，AKShare / BaoStock 字段变化会返回 `PROVIDER_SCHEMA_CHANGED` 或在 probe 工具中暴露为缺字段；
+- BaoStock 文档覆盖 A 股、指数、估值、复权、季频财务、行业和部分指数成分；港股通股票本身的港股日线不走 BaoStock，而走 Tushare HK 接口；
+- JQData 默认关闭，生产环境可在 Adapter 内扩展具体字段，但上层服务不得直接调用 JQData；
 - 当前 Raw Object Store 为本地目录实现；迁移对象存储时应保持 `raw_payload_ref` 抽象；
 - Parquet 写入依赖 `pyarrow`；
-- 本项目已打通所有 request_type 的统一标准化入口和 response 路径，但真实 provider 的不同权限、不同 SDK 版本可能导致字段命名差异；生产接入前应按实际 Tushare/AKShare/JQData 权限继续补齐和固化 provider-specific 字段映射；
+- 本项目已打通所有 request_type 的统一标准化入口和 response 路径，但真实 provider 的不同权限、不同 SDK 版本可能导致字段命名差异；生产接入前应按实际 Tushare/AKShare/BaoStock 权限和返回样例继续固化 provider-specific 字段映射；
 - 当前执行环境如未安装 `SQLAlchemy` / `pyarrow`，数据库和 Parquet 相关测试会自动跳过；完整依赖环境下应纳入 CI 强制执行。
 
 ## 30. 后续扩展方向
@@ -912,3 +958,58 @@ pytest
 - 增加更多财务报表字段和指数数据字段；
 - 增加数据质量 Dashboard；
 - 增加人工复核工作流，但不改变“不得自动覆盖主源”的原则。
+
+---
+
+## 追加说明：v0.3.0 BaoStock 与第一阶段日频盘后方案
+
+本版在原有 Tushare / AKShare / JoinQuant 基础上新增 **BaoStock** 数据源，并把第一阶段目标收敛为“日频盘后数据系统”：用于全 A 股与港股通股票的日频因子计算，不做分钟线、tick、Level-2、实时盘中交易数据。
+
+### 第一阶段默认范围
+
+- **A 股股票池**：全 A 股，包含主板、创业板、科创板、北交所；不含 ETF、不含可转债；默认只取正常上市股票。
+- **港股通**：不是只记录名单；需要抓取港股通股票本身的港股日线行情，并纳入因子计算。港股日线默认走 Tushare `hk_daily` 或其它 HK-capable provider，BaoStock 不作为港股行情源。
+- **数据类型**：股票基础信息、交易日历、A 股日线、港股通港股日线、复权因子、估值、财务报表、财务指标、资金流向、公司行动/分红送转。
+- **历史窗口**：行情、估值、复权因子、资金流默认回看约 400 个自然日；财务默认保留最近 8 个季度。
+- **复权口径**：标准层保存原始未复权 OHLCV + adj_factor；查询/因子层按需生成 qfq，raw 真实成交价始终保留，hfq 作为可选能力。
+
+### 数据源角色
+
+| 数据源 | 默认状态 | 角色 | 第一阶段用途 |
+|---|---:|---|---|
+| Tushare Pro | enabled | canonical provider | A 股主源、港股通港股日线主源、财务/估值/资金流主源 |
+| AKShare | enabled | validator + supplement | 主要使用腾讯接口做 A 股行情补充与交叉验证 |
+| BaoStock | enabled | validator + supplement | A 股基础资料、交易日历、日线、估值、复权因子、季频财务、行业/指数成分、分红送转补充验证 |
+| JoinQuant/JQData | disabled | optional future provider | 暂不默认使用，未来需要时再启用 |
+
+核心规则保持不变：**Tushare 是 canonical provider**。AKShare 和 BaoStock 可以补缺和发现冲突，但默认不自动覆盖 Tushare 的价格、财务、复权等关键字段。
+
+### BaoStock 支持范围
+
+`BaoStockAdapter` 当前实现：
+
+- `fetch_security_master()` -> `query_stock_basic()`，并尝试用 `query_stock_industry()` 补行业；过滤 `type=1` 股票和 `status=1` 上市状态。
+- `fetch_trade_calendar()` -> `query_trade_dates()`。
+- `fetch_trading_status()` -> `query_all_stock()`。
+- `fetch_historical_bars()` -> `query_history_k_data_plus()`，默认 `adjustflag=3` 保存不复权日线；`volume` 归一为股，`amount` 归一为人民币元。
+- `fetch_valuation_metric()` -> `query_history_k_data_plus()` 的 `peTTM/pbMRQ/psTTM/pcfNcfTTM`。
+- `fetch_adj_factor()` -> `query_adjust_factor()`，同时保存 `fore_adjust_factor/back_adjust_factor/event_adjust_factor/factor_method`；不把 BaoStock 的事件型前复权因子当作 Tushare 通用 `adj_factor`。
+- `fetch_financial_indicator()` -> 合并 `query_profit_data/query_operation_data/query_growth_data/query_balance_data/query_cash_flow_data/query_dupont_data` 的季频指标。
+- `fetch_financial_statement()` -> 用 `query_profit_data()` 作为轻量 income-statement proxy。
+- `fetch_corporate_action()` -> `query_dividend_data()`。
+- `fetch_index_data()` -> `query_sz50_stocks/query_hs300_stocks/query_zz500_stocks`。
+
+BaoStock 文档没有列出港股日线和个股资金流接口，所以 `BaoStockAdapter.fetch_money_flow()` 会返回 `empty_result`，港股通股票日线不走 BaoStock。
+
+### 新增工具
+
+```bash
+# 调用 BaoStock SDK 的真实接口探针；需要先 pip install baostock
+python tools/baostock_stock_probe.py --tickers 600000.SH 000001.SZ \
+  --start-date 2025-01-01 --end-date 2025-12-31 \
+  --year 2025 --quarter 3
+```
+
+### 交付包注意事项
+
+正式交付源码包不应包含：`.env`、`data/`、`logs/`、`*.egg-info/`、`__pycache__/`、`.pytest_cache/`、`.coverage`、`htmlcov/`。真实凭证只保留在本地 `.env`，交付包只保留 `.env.example`。

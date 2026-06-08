@@ -8,7 +8,7 @@ from typing import Any
 from stock_data_ingestion.config import load_config
 from stock_data_ingestion.env import ensure_env_loaded
 from stock_data_ingestion.logging_config import setup_logging
-from stock_data_ingestion.schemas.requests import Adjust, Frequency
+from stock_data_ingestion.schemas.requests import Adjust, Frequency, RequestType, StockDataRequest
 from stock_data_ingestion.services.collector import StockDataCollector
 from stock_data_ingestion.services.ingestion_runner import IngestionRunner
 from stock_data_ingestion.storage.raw_object_store import RawObjectStore
@@ -124,6 +124,12 @@ def cmd_fetch_valuation(args: argparse.Namespace) -> None:
     print(resp.model_dump_json(indent=2))
 
 
+def cmd_fetch_adj_factor(args: argparse.Namespace) -> None:
+    collector = _build_collector(args.config_dir)
+    resp = collector.fetch_adj_factor(args.tickers, args.start_date, args.end_date, cross_validate=args.cross_validate, **_provider_args(args))
+    print(resp.model_dump_json(indent=2))
+
+
 def cmd_fetch_financial_indicator(args: argparse.Namespace) -> None:
     collector = _build_collector(args.config_dir)
     resp = collector.fetch_financial_indicator(args.tickers, args.start_date, args.end_date, **_provider_args(args))
@@ -175,7 +181,11 @@ def cmd_query_bars(args: argparse.Namespace) -> None:
     from stock_data_ingestion.services.query_service import QueryService
 
     with db.session() as session:
-        df = QueryService(session).get_bars(args.ticker, args.start_date, args.end_date, args.frequency, _normalize_adjust_alias(args.adjust))
+        service = QueryService(session)
+        if getattr(args, "trading_ready", False):
+            df = service.get_trading_ready_bars(args.ticker, args.start_date, args.end_date, args.frequency, _normalize_adjust_alias(args.adjust), minimum_quality=args.minimum_quality)
+        else:
+            df = service.get_bars(args.ticker, args.start_date, args.end_date, args.frequency, _normalize_adjust_alias(args.adjust))
     print(df.to_json(orient="records", force_ascii=False, date_format="iso"))
 
 
@@ -187,6 +197,173 @@ def cmd_query_conflicts(args: argparse.Namespace) -> None:
     with db.session() as session:
         df = QueryService(session).get_conflicts(args.ticker)
     print(df.to_json(orient="records", force_ascii=False, date_format="iso"))
+
+
+def _dir_size(path: Path) -> int:
+    if not path.exists():
+        return 0
+    return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
+
+
+def cmd_query_meta_summary(args: argparse.Namespace) -> None:
+    from sqlalchemy import func, inspect, select
+
+    from stock_data_ingestion.normalization.ticker import normalize_ticker
+    from stock_data_ingestion.storage import models
+
+    config = load_config(args.config_dir)
+    db = _build_database(config)
+    ticker = normalize_ticker(args.ticker) if args.ticker else None
+
+    standard_models = {
+        "securities": models.SecurityModel,
+        "trade_calendar": models.TradeCalendarModel,
+        "trading_status": models.TradingStatusModel,
+        "daily_bars": models.DailyBarModel,
+        "adj_factors": models.AdjFactorModel,
+        "valuation_metrics": models.ValuationMetricModel,
+        "financial_statements": models.FinancialStatementModel,
+        "financial_indicators": models.FinancialIndicatorModel,
+        "money_flow": models.MoneyFlowModel,
+        "corporate_actions": models.CorporateActionModel,
+    }
+    metadata_models = {
+        "raw_payload_index": models.RawPayloadIndexModel,
+        "source_fetch_logs": models.SourceFetchLogModel,
+        "provider_comparisons": models.ProviderComparisonModel,
+        "data_quality_conflicts": models.DataQualityConflictModel,
+        "ingestion_requests": models.IngestionRequestModel,
+        "ingestion_runs": models.IngestionRunModel,
+    }
+
+    with db.session() as session:
+        existing_tables = set(inspect(session.bind).get_table_names())
+
+        def table_count(model: type[Any]) -> int:
+            if model.__tablename__ not in existing_tables:
+                return 0
+            return int(session.scalar(select(func.count()).select_from(model)) or 0)
+
+        rows_by_table = {name: table_count(model) for name, model in {**standard_models, **metadata_models}.items()}
+        company_count = 0
+        daily_trading_days = 0
+        daily_range = {"min": None, "max": None}
+        if ticker:
+            stock_models = [
+                model
+                for model in standard_models.values()
+                if model.__tablename__ in existing_tables and hasattr(model, "normalized_ticker")
+            ]
+            seen: set[str] = set()
+            for model in stock_models:
+                rows = session.execute(select(model.normalized_ticker).where(model.normalized_ticker == ticker).distinct()).scalars().all()
+                seen.update(str(row) for row in rows)
+            company_count = len(seen)
+
+            if models.DailyBarModel.__tablename__ in existing_tables:
+                daily_trading_days = int(
+                    session.scalar(
+                        select(func.count(func.distinct(models.DailyBarModel.trade_date))).where(models.DailyBarModel.normalized_ticker == ticker)
+                    )
+                    or 0
+                )
+                min_date, max_date = session.execute(
+                    select(func.min(models.DailyBarModel.trade_date), func.max(models.DailyBarModel.trade_date)).where(models.DailyBarModel.normalized_ticker == ticker)
+                ).one()
+                daily_range = {
+                    "min": str(min_date) if min_date is not None else None,
+                    "max": str(max_date) if max_date is not None else None,
+                }
+
+        provider_fetch_summary: list[dict[str, Any]] = []
+        if models.SourceFetchLogModel.__tablename__ in existing_tables:
+            for provider, source_api, status, calls, rows_fetched in session.execute(
+                select(
+                    models.SourceFetchLogModel.provider,
+                    models.SourceFetchLogModel.source_api,
+                    models.SourceFetchLogModel.status,
+                    func.count(),
+                    func.sum(models.SourceFetchLogModel.rows_fetched),
+                )
+                .group_by(models.SourceFetchLogModel.provider, models.SourceFetchLogModel.source_api, models.SourceFetchLogModel.status)
+                .order_by(models.SourceFetchLogModel.provider, models.SourceFetchLogModel.source_api, models.SourceFetchLogModel.status)
+            ):
+                provider_fetch_summary.append(
+                    {
+                        "provider": provider,
+                        "source_api": source_api,
+                        "status": status,
+                        "calls": int(calls or 0),
+                        "rows_fetched": int(rows_fetched or 0),
+                    }
+                )
+
+        provider_comparison_summary: list[dict[str, Any]] = []
+        if models.ProviderComparisonModel.__tablename__ in existing_tables:
+            for record_type, compared_provider, status, comparisons in session.execute(
+                select(
+                    models.ProviderComparisonModel.record_type,
+                    models.ProviderComparisonModel.compared_provider,
+                    models.ProviderComparisonModel.status,
+                    func.count(),
+                )
+                .group_by(models.ProviderComparisonModel.record_type, models.ProviderComparisonModel.compared_provider, models.ProviderComparisonModel.status)
+                .order_by(models.ProviderComparisonModel.record_type, models.ProviderComparisonModel.compared_provider, models.ProviderComparisonModel.status)
+            ):
+                provider_comparison_summary.append(
+                    {
+                        "record_type": record_type,
+                        "compared_provider": compared_provider,
+                        "status": status,
+                        "comparisons": int(comparisons or 0),
+                    }
+                )
+
+        conflict_summary: list[dict[str, Any]] = []
+        if models.DataQualityConflictModel.__tablename__ in existing_tables:
+            for record_type, field_name, severity, conflicts in session.execute(
+                select(
+                    models.DataQualityConflictModel.record_type,
+                    models.DataQualityConflictModel.field_name,
+                    models.DataQualityConflictModel.severity,
+                    func.count(),
+                )
+                .group_by(models.DataQualityConflictModel.record_type, models.DataQualityConflictModel.field_name, models.DataQualityConflictModel.severity)
+                .order_by(models.DataQualityConflictModel.record_type, models.DataQualityConflictModel.severity, models.DataQualityConflictModel.field_name)
+            ):
+                conflict_summary.append(
+                    {
+                        "record_type": record_type,
+                        "field_name": field_name,
+                        "severity": severity,
+                        "conflicts": int(conflicts or 0),
+                    }
+                )
+
+    sqlite_path = Path(config.storage.sqlite_path)
+    test_root = Path(args.test_root) if args.test_root else sqlite_path.parent
+    summary = {
+        "ticker": ticker,
+        "test_root": str(test_root),
+        "sqlite_path": str(sqlite_path),
+        "company_count_for_ticker": company_count,
+        "daily_bar_trading_days": daily_trading_days,
+        "daily_bar_date_range": daily_range,
+        "rows_by_table": rows_by_table,
+        "standard_rows_total": sum(rows_by_table[name] for name in standard_models),
+        "metadata_rows_total": sum(rows_by_table[name] for name in metadata_models),
+        "disk_usage_bytes": {
+            "sqlite": sqlite_path.stat().st_size if sqlite_path.exists() else 0,
+            "raw_objects": _dir_size(Path(config.storage.raw_object_root)),
+            "parquet": _dir_size(Path(config.storage.parquet_root)),
+            "logs": _dir_size(Path(config.storage.log_path).parent),
+            "test_root_total": _dir_size(test_root),
+        },
+        "provider_fetch_summary": provider_fetch_summary,
+        "provider_comparison_summary": provider_comparison_summary,
+        "conflict_summary": conflict_summary,
+    }
+    print(json.dumps(summary, ensure_ascii=False, indent=2, default=_json_default))
 
 
 def cmd_verify_raw(args: argparse.Namespace) -> None:
@@ -222,6 +399,30 @@ def cmd_verify_raw(args: argparse.Namespace) -> None:
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
+def cmd_verify_eastmoney_cookie(args: argparse.Namespace) -> None:
+    from stock_data_ingestion.adapters.akshare_adapter import AKShareAdapter
+
+    request = StockDataRequest(
+        request_id="verify_eastmoney_cookie",
+        request_type=RequestType.money_flow,
+        tickers=[args.ticker],
+        start_date=args.start_date,
+        end_date=args.end_date,
+        provider_priority=["akshare"],
+        canonical_provider="akshare",
+    )
+    adapter = AKShareAdapter()
+    ok = False
+    if adapter._eastmoney_money_flow_headers():  # noqa: SLF001 - CLI verifies this adapter-specific credential path.
+        try:
+            ok = bool(adapter._eastmoney_money_flow_records(request))  # noqa: SLF001
+        except Exception:
+            ok = False
+    print("true" if ok else "false")
+    if not ok:
+        raise SystemExit(1)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="stock_data_ingestion", description="A-share structured data ingestion CLI")
     parser.add_argument("--config-dir", default=None)
@@ -249,8 +450,8 @@ def build_parser() -> argparse.ArgumentParser:
     bars = fetch_sub.add_parser("historical-bars")
     _add_provider_args(bars)
     bars.add_argument("--tickers", nargs="+", required=True)
-    bars.add_argument("--start-date", required=True)
-    bars.add_argument("--end-date", required=True)
+    bars.add_argument("--start-date", required=False, help="Defaults to configured market_data_lookback_days before --end-date/today.")
+    bars.add_argument("--end-date", required=False, help="Defaults to today.")
     bars.add_argument("--frequency", choices=["1m", "5m", "15m", "30m", "60m", "1d", "1w", "1mo"], default="1d")
     bars.add_argument("--adjust", choices=["none", "raw", "qfq", "hfq"], default="none", help="Adjustment mode. 'raw' is accepted as an alias of 'none'.")
     bars.add_argument("--cross-validate", action="store_true")
@@ -259,22 +460,30 @@ def build_parser() -> argparse.ArgumentParser:
     val = fetch_sub.add_parser("valuation", aliases=["valuation-metric"])
     _add_provider_args(val)
     val.add_argument("--tickers", nargs="+", required=True)
-    val.add_argument("--start-date", required=True)
-    val.add_argument("--end-date", required=True)
+    val.add_argument("--start-date", required=False, help="Defaults to configured market_data_lookback_days before --end-date/today.")
+    val.add_argument("--end-date", required=False, help="Defaults to today.")
     val.set_defaults(func=cmd_fetch_valuation)
+
+    adj = fetch_sub.add_parser("adj-factor")
+    _add_provider_args(adj)
+    adj.add_argument("--tickers", nargs="+", required=True)
+    adj.add_argument("--start-date", required=False, help="Defaults to configured market_data_lookback_days before --end-date/today.")
+    adj.add_argument("--end-date", required=False, help="Defaults to today.")
+    adj.add_argument("--cross-validate", action="store_true")
+    adj.set_defaults(func=cmd_fetch_adj_factor)
 
     fin = fetch_sub.add_parser("financial-indicator")
     _add_provider_args(fin)
     fin.add_argument("--tickers", nargs="+", required=True)
-    fin.add_argument("--start-date", required=True)
-    fin.add_argument("--end-date", required=True)
+    fin.add_argument("--start-date", required=False, help="Defaults to a window covering configured financial_lookback_quarters.")
+    fin.add_argument("--end-date", required=False, help="Defaults to today.")
     fin.set_defaults(func=cmd_fetch_financial_indicator)
 
     fstmt = fetch_sub.add_parser("financial-statement")
     _add_provider_args(fstmt)
     fstmt.add_argument("--tickers", nargs="+", required=True)
-    fstmt.add_argument("--start-date", required=True, help="Announcement start date unless --period is supplied.")
-    fstmt.add_argument("--end-date", required=True, help="Announcement end date unless --period is supplied.")
+    fstmt.add_argument("--start-date", required=False, help="Announcement start date unless --period is supplied. Defaults to financial lookback window.")
+    fstmt.add_argument("--end-date", required=False, help="Announcement end date unless --period is supplied. Defaults to today.")
     fstmt.add_argument("--statement-types", nargs="*", choices=["income", "balancesheet", "cashflow", "income_statement", "balance_sheet", "cash_flow"], default=None)
     fstmt.add_argument("--period", required=False, help="Optional report period, e.g. 20250331. When set, Tushare period is used instead of start/end.")
     fstmt.set_defaults(func=cmd_fetch_financial_statement)
@@ -282,8 +491,8 @@ def build_parser() -> argparse.ArgumentParser:
     money = fetch_sub.add_parser("money-flow")
     _add_provider_args(money)
     money.add_argument("--tickers", nargs="+", required=True)
-    money.add_argument("--start-date", required=True)
-    money.add_argument("--end-date", required=True)
+    money.add_argument("--start-date", required=False, help="Defaults to configured market_data_lookback_days before --end-date/today.")
+    money.add_argument("--end-date", required=False, help="Defaults to today.")
     money.set_defaults(func=cmd_fetch_money_flow)
 
     status = fetch_sub.add_parser("trading-status")
@@ -311,11 +520,18 @@ def build_parser() -> argparse.ArgumentParser:
     qbars.add_argument("--end-date", required=True)
     qbars.add_argument("--frequency", default="1d")
     qbars.add_argument("--adjust", default="none", choices=["none", "raw", "qfq", "hfq"])
+    qbars.add_argument("--trading-ready", action="store_true", help="Exclude quarantined records and require minimum data quality.")
+    qbars.add_argument("--minimum-quality", type=float, default=0.80)
     qbars.set_defaults(func=cmd_query_bars)
 
     qconf = query_sub.add_parser("conflicts")
     qconf.add_argument("--ticker", required=False)
     qconf.set_defaults(func=cmd_query_conflicts)
+
+    qmeta = query_sub.add_parser("meta-summary")
+    qmeta.add_argument("--ticker", required=False, help="Optional ticker used for company count and daily-bar range checks.")
+    qmeta.add_argument("--test-root", required=False, help="Optional root directory used for total disk usage. Defaults to sqlite parent.")
+    qmeta.set_defaults(func=cmd_query_meta_summary)
 
     verify = sub.add_parser("verify", help="Verify artifacts")
     verify_sub = verify.add_subparsers(dest="verify_command", required=True)
@@ -323,6 +539,12 @@ def build_parser() -> argparse.ArgumentParser:
     raw.add_argument("--raw-payload-id", required=True)
     raw.add_argument("--expected-hash")
     raw.set_defaults(func=cmd_verify_raw)
+
+    em_cookie = verify_sub.add_parser("eastmoney-cookie", help="Check whether EASTMONEY_COOKIE can access Eastmoney money-flow data")
+    em_cookie.add_argument("--ticker", default="600519.SH")
+    em_cookie.add_argument("--start-date", default="2026-06-01")
+    em_cookie.add_argument("--end-date", default="2026-06-05")
+    em_cookie.set_defaults(func=cmd_verify_eastmoney_cookie)
     return parser
 
 

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """AKShare stock-data capability probe for stock_data_ingestion.
 
-This script is intentionally independent from the production adapter. It calls the
-AKShare APIs directly and reports which interfaces return data for the requested
-A-share tickers, which are empty, and which fail or have unexpected columns.
+This script mirrors the production adapter's AKShare access strategy: AKShare
+calls are attempted first with optional Eastmoney browser cookies, then supported
+fallbacks are probed when the primary endpoint fails.
 
 Default output directory: logs/akshare_probe_outputs
 """
@@ -16,10 +16,11 @@ import os
 import re
 import sys
 import traceback
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 STATUS_PASS = "PASS"
 STATUS_PASS_WARNING = "PASS_WITH_WARNING"
@@ -123,7 +124,8 @@ def call_case(
     params = dict(params or {})
     expected_columns = list(expected_columns or [])
     try:
-        df = fn(**params)
+        with eastmoney_cookie_request_headers():
+            df = fn(**params)
         columns, rows = df_to_records(df)
         if filter_fn is not None:
             rows = [row for row in rows if filter_fn(row)]
@@ -165,6 +167,114 @@ def call_case(
             optional=optional,
             optional_reason=optional_reason,
         )
+
+
+def eastmoney_headers() -> dict[str, str]:
+    cookie = os.getenv("EASTMONEY_COOKIE", "").strip()
+    if not cookie:
+        return {}
+    return {
+        "User-Agent": os.getenv(
+            "EASTMONEY_USER_AGENT",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36 Edg/137.0.0.0",
+        ),
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": os.getenv("EASTMONEY_ACCEPT_LANGUAGE", "zh-CN,zh;q=0.9,en;q=0.8"),
+        "Referer": "https://data.eastmoney.com/zjlx/detail.html",
+        "Cookie": cookie,
+        "Connection": "close",
+    }
+
+
+@contextmanager
+def eastmoney_cookie_request_headers() -> Iterator[None]:
+    headers = eastmoney_headers()
+    if not headers:
+        yield
+        return
+
+    import requests  # type: ignore
+
+    original_get = requests.get
+
+    def get_with_eastmoney_headers(url: Any, *args: Any, **kwargs: Any) -> Any:
+        if "eastmoney.com" in str(url):
+            kwargs["headers"] = {**headers, **dict(kwargs.get("headers") or {})}
+        return original_get(url, *args, **kwargs)
+
+    requests.get = get_with_eastmoney_headers
+    try:
+        yield
+    finally:
+        requests.get = original_get
+
+
+def eastmoney_secid(ticker: str) -> str:
+    c, ex = normalize_ticker(ticker).split(".")
+    market = {"SH": "1", "SZ": "0", "BJ": "0"}[ex]
+    return f"{market}.{c}"
+
+
+def numeric(value: Any) -> float | None:
+    if value is None:
+        return None
+    text = str(value).strip().replace(",", "")
+    if not text or text in {"-", "--", "nan", "None", "null"}:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def eastmoney_money_flow_direct(stock: str, market: str) -> list[dict[str, Any]]:
+    import requests  # type: ignore
+
+    exchange = {"sh": "SH", "sz": "SZ", "bj": "BJ"}[market]
+    ticker = f"{stock}.{exchange}"
+    response = requests.get(
+        "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get",
+        params={
+            "lmt": "0",
+            "klt": "101",
+            "secid": eastmoney_secid(ticker),
+            "fields1": "f1,f2,f3,f7",
+            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65",
+            "ut": "b2884a393a59ad64002292a3e90d46a5",
+            "_": int(datetime.now().timestamp() * 1000),
+        },
+        headers=eastmoney_headers(),
+        timeout=20,
+    )
+    response.raise_for_status()
+    rows: list[dict[str, Any]] = []
+    for item in ((response.json().get("data") or {}).get("klines") or []):
+        parts = str(item).split(",")
+        if len(parts) < 13:
+            continue
+        rows.append(
+            {
+                "日期": parts[0],
+                "主力净流入-净额": numeric(parts[1]),
+                "主力净流入-净占比": numeric(parts[6]),
+                "超大单净流入-净额": numeric(parts[5]),
+                "大单净流入-净额": numeric(parts[4]),
+                "中单净流入-净额": numeric(parts[3]),
+                "小单净流入-净额": numeric(parts[2]),
+                "raw_source_api": "eastmoney_fflow_daykline",
+            }
+        )
+    return rows
+
+
+def fallback_result(primary: ProbeResult, fallback: ProbeResult, *, api: str) -> ProbeResult:
+    if fallback.status in {STATUS_PASS, STATUS_PASS_WARNING, STATUS_EMPTY}:
+        fallback.api = api
+        fallback.message = f"Primary {primary.api} failed; fallback succeeded. Primary error: {primary.message}"
+        return fallback
+    primary.message = f"{primary.message}; fallback {fallback.api} also failed: {fallback.message}"
+    return primary
 
 
 def normalize_ticker(ticker: str) -> str:
@@ -282,10 +392,26 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
             optional=not args.strict_eastmoney,
             optional_reason="Eastmoney-only optional detail supplement; Tencent has no equivalent security-master detail endpoint.",
         ))
-        if hasattr(ak, "stock_zh_a_hist_tx"):
-            results.append(call_case(name="historical_bars_daily", api="stock_zh_a_hist_tx", fn=ak.stock_zh_a_hist_tx, ticker=ticker, params={"symbol": tx, "start_date": start_text, "end_date": end_text, "adjust": ""}, expected_columns=["date", "open", "high", "low", "close", "amount"]))
+        daily_primary = call_case(
+            name="historical_bars_daily",
+            api="stock_zh_a_hist",
+            fn=ak.stock_zh_a_hist,
+            ticker=ticker,
+            params={"symbol": c, "period": "daily", "start_date": start_text, "end_date": end_text, "adjust": ""},
+            expected_columns=["日期", "开盘", "最高", "最低", "收盘", "成交量", "成交额"],
+        )
+        if daily_primary.status == STATUS_FAILED and hasattr(ak, "stock_zh_a_hist_tx"):
+            daily_fallback = call_case(
+                name="historical_bars_daily",
+                api="stock_zh_a_hist_tx",
+                fn=ak.stock_zh_a_hist_tx,
+                ticker=ticker,
+                params={"symbol": tx, "start_date": start_text, "end_date": end_text, "adjust": ""},
+                expected_columns=["date", "open", "high", "low", "close", "amount"],
+            )
+            results.append(fallback_result(daily_primary, daily_fallback, api="stock_zh_a_hist+stock_zh_a_hist_tx"))
         else:
-            results.append(ProbeResult(name="historical_bars_daily", api="stock_zh_a_hist_tx", ticker=ticker, status=STATUS_SKIPPED, message="AKShare version has no stock_zh_a_hist_tx; upgrade akshare.").as_dict())
+            results.append(daily_primary)
         if args.include_eastmoney_hist:
             results.append(call_case(name="historical_bars_daily_eastmoney_diagnostic", api="stock_zh_a_hist", fn=ak.stock_zh_a_hist, ticker=ticker, params={"symbol": c, "period": "daily", "start_date": start_text, "end_date": end_text, "adjust": ""}, expected_columns=["日期", "开盘", "最高", "最低", "收盘", "成交量", "成交额"]))
         results.append(call_case(
@@ -303,7 +429,7 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
         results.append(call_case(name="financial_statement_balance", api="stock_balance_sheet_by_report_em", fn=ak.stock_balance_sheet_by_report_em, ticker=ticker, params={"symbol": ep}, expected_columns=["SECUCODE", "SECURITY_CODE", "REPORT_DATE"]))
         results.append(call_case(name="financial_statement_cashflow", api="stock_cash_flow_sheet_by_report_em", fn=ak.stock_cash_flow_sheet_by_report_em, ticker=ticker, params={"symbol": ep}, expected_columns=["SECUCODE", "SECURITY_CODE", "REPORT_DATE"]))
         results.append(call_case(name="financial_indicator_em", api="stock_financial_analysis_indicator_em", fn=ak.stock_financial_analysis_indicator_em, ticker=ticker, params={"symbol": norm, "indicator": "按报告期"}, expected_columns=["SECUCODE", "SECURITY_CODE", "REPORT_DATE", "EPSJB", "ROEJQ"]))
-        results.append(call_case(
+        money_primary = call_case(
             name="money_flow",
             api="stock_individual_fund_flow",
             fn=ak.stock_individual_fund_flow,
@@ -312,7 +438,19 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
             expected_columns=["日期", "主力净流入-净额", "主力净流入-净占比"],
             optional=not args.strict_eastmoney,
             optional_reason="Eastmoney-only AKShare individual money-flow path; no Tencent equivalent in AKShare docs.",
-        ))
+        )
+        if money_primary.status in {STATUS_FAILED, STATUS_OPTIONAL_FAILED} and eastmoney_headers():
+            money_fallback = call_case(
+                name="money_flow",
+                api="eastmoney_fflow_daykline",
+                fn=eastmoney_money_flow_direct,
+                ticker=ticker,
+                params={"stock": c, "market": market},
+                expected_columns=["日期", "主力净流入-净额", "主力净流入-净占比"],
+            )
+            results.append(fallback_result(money_primary, money_fallback, api="stock_individual_fund_flow+eastmoney_fflow_daykline"))
+        else:
+            results.append(money_primary)
         results.append(call_case(name="corporate_action_dividend", api="stock_history_dividend_detail", fn=ak.stock_history_dividend_detail, ticker=ticker, params={"symbol": c, "indicator": "分红"}, expected_columns=["公告日期", "送股", "转增", "派息", "除权除息日", "股权登记日"]))
         results.append(call_case(
             name="corporate_action_rights_issue",
@@ -426,7 +564,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--include-boards", action="store_true", help="Probe industry/concept board membership. This can be slow.")
     parser.add_argument("--max-boards", type=int, default=5, help="Max industry/concept boards to scan when --include-boards is set.")
     parser.add_argument("--include-index", action="store_true", help="Probe index bars/constituents as well.")
-    parser.add_argument("--include-eastmoney-hist", action="store_true", help="Also probe Eastmoney stock_zh_a_hist as a diagnostic. Daily bars now use Tencent stock_zh_a_hist_tx by default.")
+    parser.add_argument("--include-eastmoney-hist", action="store_true", help="Also probe Eastmoney stock_zh_a_hist as a separate diagnostic. Daily bars already try it first, then Tencent fallback.")
     parser.add_argument("--include-code-name-diagnostic", action="store_true", help="Also probe stock_info_a_code_name; production code uses exchange-specific lists as primary.")
     parser.add_argument("--strict-eastmoney", action="store_true", help="Treat Eastmoney-only optional probes as FAILED instead of OPTIONAL_FAILED.")
     parser.add_argument("--index-codes", nargs="*", default=["000300"], help="Index codes for --include-index.")

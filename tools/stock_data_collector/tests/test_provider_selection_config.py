@@ -16,7 +16,24 @@ from stock_data_ingestion.storage.raw_object_store import RawObjectStore
 
 
 def test_parse_provider_list_accepts_aliases() -> None:
-    assert parse_provider_list("THUShare, ak, jqdata") == ["tushare", "akshare", "joinquant"]
+    assert parse_provider_list("THUShare, ak, baostock, jqdata") == ["tushare", "akshare", "baostock", "joinquant"]
+    assert parse_provider_list("tencent, bao_stock, jq") == ["akshare", "baostock", "joinquant"]
+
+
+def test_default_provider_config_includes_baostock_and_disables_jqdata_when_requested() -> None:
+    data_sources = DataSourcesConfig.model_validate(
+        {
+            "canonical_provider": "tushare",
+            "provider_priority": ["tushare", "akshare", "baostock", "joinquant"],
+            "active_providers": ["tushare", "akshare", "baostock"],
+            "providers": {"joinquant": {"enabled": False}},
+        }
+    )
+    assert data_sources.providers_for_request("historical_bars") == ["tushare", "akshare", "baostock"]
+    assert data_sources.supplement_providers == ["akshare", "baostock"]
+    assert data_sources.validator_providers == ["akshare", "baostock"]
+    assert data_sources.market_data_lookback_days == 400
+    assert data_sources.financial_lookback_quarters == 8
 
 
 def test_active_provider_config_can_select_single_provider() -> None:
@@ -83,9 +100,11 @@ providers:
         "STOCK_DATA_ENABLE_TUSHARE",
         "STOCK_DATA_ENABLE_AKSHARE",
         "STOCK_DATA_ENABLE_JOINQUANT",
+        "STOCK_DATA_ENABLE_BAOSTOCK",
         "STOCK_DATA_PROVIDER_TUSHARE_ENABLED",
         "STOCK_DATA_PROVIDER_AKSHARE_ENABLED",
         "STOCK_DATA_PROVIDER_JOINQUANT_ENABLED",
+        "STOCK_DATA_PROVIDER_BAOSTOCK_ENABLED",
     ]:
         monkeypatch.delenv(env_name, raising=False)
     monkeypatch.setenv("STOCK_DATA_DISABLE_ENV_AUTOLOAD", "true")

@@ -8,6 +8,7 @@ DEFAULT_PROVIDER_RELIABILITY = {
     "tushare": 0.90,
     "joinquant": 0.85,
     "akshare": 0.75,
+    "baostock": 0.70,
     "manual_import": 0.60,
     "unknown": 0.30,
 }

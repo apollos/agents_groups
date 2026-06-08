@@ -300,7 +300,18 @@ class RealtimeQuoteRecord(StandardRecord, StockIdentityMixin, CurrencyMixin, Tim
 class AdjFactorRecord(StandardRecord, StockIdentityMixin):
     record_type: str = "adj_factor"
     trade_date: date
-    adj_factor: float
+    adj_factor: Optional[float] = None
+    fore_adjust_factor: Optional[float] = None
+    back_adjust_factor: Optional[float] = None
+    event_adjust_factor: Optional[float] = None
+    factor_event_date: Optional[date] = None
+    factor_method: Optional[str] = None
+
+    @model_validator(mode="after")
+    def require_some_factor(self) -> "AdjFactorRecord":
+        if self.adj_factor is None and self.fore_adjust_factor is None and self.back_adjust_factor is None and self.event_adjust_factor is None:
+            raise ValueError("NORMALIZATION_FAILED: at least one adjustment factor field is required")
+        return self
 
 
 class FinancialStatementRecord(StandardRecord, StockIdentityMixin, CurrencyMixin):
@@ -346,6 +357,7 @@ class ValuationMetricRecord(StandardRecord, StockIdentityMixin, CurrencyMixin):
     pb: Optional[float] = None
     ps: Optional[float] = None
     ps_ttm: Optional[float] = None
+    pcf_ncf_ttm: Optional[float] = None
     dividend_yield: Optional[float] = None
     total_market_value: Optional[float] = None
     float_market_value: Optional[float] = None

@@ -282,3 +282,60 @@ def test_repurchase_uses_documented_announcement_window_and_filters_tickers() ->
     assert call["start_date"] == "20250101"
     assert call["end_date"] == "20251231"
     assert "ts_code" not in call
+
+
+def test_hk_connect_daily_bars_use_tushare_hk_daily_endpoint(monkeypatch) -> None:
+    import sys
+    import types
+
+    fake_module = types.ModuleType("tushare")
+    monkeypatch.setitem(sys.modules, "tushare", fake_module)
+
+    class HkDailyFakePro(ManualComplianceFakePro):
+        def hk_daily(self, **kwargs: Any) -> FakeDataFrame:
+            self.calls.append(("hk_daily", kwargs))
+            return FakeDataFrame(
+                [
+                    {
+                        "ts_code": kwargs["ts_code"],
+                        "trade_date": "20250630",
+                        "open": 10.0,
+                        "high": 11.0,
+                        "low": 9.5,
+                        "close": 10.5,
+                        "pre_close": 10.0,
+                        "change": 0.5,
+                        "pct_chg": 5.0,
+                        "vol": 100000.0,
+                        "amount": 1050000.0,
+                    }
+                ]
+            )
+
+    fake = HkDailyFakePro()
+    request = StockDataRequest(
+        request_id="req_hk_daily",
+        request_type="historical_bars",
+        tickers=["00005.HK"],
+        market="HK",
+        start_date="2025-06-01",
+        end_date="2025-06-30",
+        frequency="1d",
+        adjust="none",
+        export_parquet=False,
+    )
+    result = _adapter(fake).fetch_historical_bars(request)
+
+    assert result.status == AdapterFetchStatus.success
+    call = [kwargs for name, kwargs in fake.calls if name == "hk_daily"][0]
+    assert call["ts_code"] == "00005.HK"
+    assert call["start_date"] == "20250601"
+    assert call["end_date"] == "20250630"
+    assert "fields" in call
+    row = result.raw_records[0]
+    assert row["normalized_ticker"] == "00005.HK"
+    assert row["exchange"] == "HK"
+    assert row["currency"] == "HKD"
+    assert row["volume_unit"] == "share"
+    assert row["amount_unit"] == "HKD"
+    assert row["raw_source_api"] == "hk_daily"

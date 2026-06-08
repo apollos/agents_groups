@@ -11,8 +11,8 @@ from pydantic import BaseModel, Field, model_validator
 
 from stock_data_ingestion.env import ensure_env_loaded
 
-KNOWN_PROVIDERS: tuple[str, ...] = ("tushare", "akshare", "joinquant")
-DEFAULT_PROVIDER_PRIORITY: list[str] = ["tushare", "akshare", "joinquant"]
+KNOWN_PROVIDERS: tuple[str, ...] = ("tushare", "akshare", "baostock", "joinquant")
+DEFAULT_PROVIDER_PRIORITY: list[str] = ["tushare", "akshare", "baostock", "joinquant"]
 _PROVIDER_ALIASES: dict[str, str] = {
     "tushare": "tushare",
     "ts": "tushare",
@@ -22,6 +22,12 @@ _PROVIDER_ALIASES: dict[str, str] = {
     "thu_share": "tushare",
     "akshare": "akshare",
     "ak": "akshare",
+    "akshare_tencent": "akshare",
+    "tencent": "akshare",
+    "baostock": "baostock",
+    "bao_stock": "baostock",
+    "bs": "baostock",
+    "证券宝": "baostock",
     "joinquant": "joinquant",
     "jointquant": "joinquant",
     "jqdata": "joinquant",
@@ -101,8 +107,8 @@ class DataSourcesConfig(BaseModel):
     active_providers: list[str] | None = None
     canonical_provider: str = "tushare"
     provider_priority: list[str] = Field(default_factory=lambda: list(DEFAULT_PROVIDER_PRIORITY))
-    validator_providers: list[str] = Field(default_factory=lambda: ["akshare", "joinquant"])
-    supplement_providers: list[str] = Field(default_factory=lambda: ["akshare", "joinquant"])
+    validator_providers: list[str] = Field(default_factory=lambda: ["akshare", "baostock", "joinquant"])
+    supplement_providers: list[str] = Field(default_factory=lambda: ["akshare", "baostock", "joinquant"])
     # Optional per request-type provider list. Keys use request_type enum values,
     # e.g. historical_bars, security_master, money_flow.
     request_provider_overrides: dict[str, list[str]] | None = Field(default_factory=dict)
@@ -113,6 +119,9 @@ class DataSourcesConfig(BaseModel):
     manual_review_on_trading_critical_conflict: bool = True
     minimum_quality_for_supplement: float = 0.65
     minimum_quality_for_trading_use: float = 0.80
+    market_data_lookback_days: int = 400
+    financial_lookback_quarters: int = 8
+    default_daily_update_time: str = "20:30"
     providers: dict[str, ProviderConfig] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -256,7 +265,8 @@ def _apply_provider_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
       STOCK_DATA_CANONICAL_PROVIDER=akshare
       STOCK_DATA_DISABLED_PROVIDERS=joinquant
       STOCK_DATA_ENABLE_JOINQUANT=false
-      STOCK_DATA_PROVIDERS_HISTORICAL_BARS=tushare,akshare
+      STOCK_DATA_ENABLE_BAOSTOCK=true
+      STOCK_DATA_PROVIDERS_HISTORICAL_BARS=tushare,akshare,baostock
       STOCK_DATA_PROVIDERS_SECURITY_MASTER=akshare
     """
 
@@ -335,13 +345,14 @@ def find_config_dir(config_dir: str | Path | None = None) -> Path:
 
 @lru_cache(maxsize=8)
 def load_config(config_dir: str | Path | None = None) -> AppConfig:
+    explicit_config_dir = config_dir is not None
     ensure_env_loaded(config_dir=config_dir)
     root = find_config_dir(config_dir)
     ensure_env_loaded(config_dir=root)
 
     data_sources = DataSourcesConfig.model_validate(_apply_provider_env_overrides(_load_yaml(root / "data_sources.yaml")))
     storage_data = _load_yaml(root / "storage.yaml")
-    if os.getenv("STOCK_DATA_SQLITE_PATH"):
+    if not explicit_config_dir and os.getenv("STOCK_DATA_SQLITE_PATH"):
         storage_data["sqlite_path"] = os.getenv("STOCK_DATA_SQLITE_PATH")
     storage = StorageConfig.model_validate(storage_data)
     data_quality = DataQualityConfig.model_validate(_load_yaml(root / "data_quality.yaml"))

@@ -106,13 +106,27 @@ def test_direct_adapter_instantiation_loads_dotenv_before_reading_credentials(mo
     assert joinquant.password == "file-password"
 
 
-def test_load_config_honors_other_dotenv_env_vars(monkeypatch, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+def test_load_config_explicit_config_dir_keeps_storage_yaml_sqlite_path(monkeypatch, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
     _clean_env(monkeypatch)
     config_dir = tmp_path / "config"
     config_dir.mkdir()
     (tmp_path / ".env").write_text("STOCK_DATA_SQLITE_PATH=data/from-dotenv.db\n", encoding="utf-8")
+    (config_dir / "storage.yaml").write_text("sqlite_path: data/from-config.db\n", encoding="utf-8")
 
     config = load_config(config_dir)
+
+    assert str(config.storage.sqlite_path) == "data/from-config.db"
+
+
+def test_load_config_honors_dotenv_sqlite_path_without_explicit_config_dir(monkeypatch, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+    _clean_env(monkeypatch)
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    (tmp_path / ".env").write_text("STOCK_DATA_SQLITE_PATH=data/from-dotenv.db\n", encoding="utf-8")
+    (config_dir / "storage.yaml").write_text("sqlite_path: data/from-config.db\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    config = load_config()
 
     assert str(config.storage.sqlite_path) == "data/from-dotenv.db"
 

@@ -70,12 +70,43 @@ def test_security_master_enriches_code_name_with_detail_and_exchange_lists(monke
 
 
 
-def test_daily_historical_bars_use_tencent_stock_zh_a_hist_tx(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_daily_historical_bars_use_eastmoney_default_first(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = {"tx": [], "em": 0}
 
-    def stock_zh_a_hist(**kwargs):  # pragma: no cover - should not be called for 1d
+    def stock_zh_a_hist(**kwargs):
         calls["em"] += 1
-        raise AssertionError("Eastmoney stock_zh_a_hist must not be used for daily requests when Tencent fallback is enabled")
+        return FakeDF([{"日期": "2025-01-02", "开盘": 11.73, "收盘": 11.43, "最高": 11.77, "最低": 11.39, "成交量": 1819597, "成交额": 207000000.0}])
+
+    def stock_zh_a_hist_tx(**kwargs):
+        calls["tx"].append(kwargs)
+        raise AssertionError("Tencent fallback should not be used when Eastmoney succeeds")
+
+    fake = types.SimpleNamespace(stock_zh_a_hist=stock_zh_a_hist, stock_zh_a_hist_tx=stock_zh_a_hist_tx)
+    install_fake_ak(monkeypatch, fake)
+
+    result = AKShareAdapter().fetch_historical_bars(
+        request(RequestType.historical_bars, tickers=["000001.SZ"], start_date="20250101", end_date="20250630", frequency=Frequency.d1)
+    )
+
+    assert result.status == AdapterFetchStatus.success
+    assert result.source_api == "stock_zh_a_hist"
+    assert calls["em"] == 1
+    assert calls["tx"] == []
+    row = result.raw_records[0]
+    assert row["normalized_ticker"] == "000001.SZ"
+    assert row["provider_symbol"] == "000001"
+    assert row["日期"] == "2025-01-02"
+    assert row["开盘"] == 11.73
+    assert row["收盘"] == 11.43
+    assert row["raw_source_api"] == "stock_zh_a_hist"
+
+
+def test_daily_historical_bars_fallback_to_tencent_when_eastmoney_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = {"tx": [], "em": 0}
+
+    def stock_zh_a_hist(**kwargs):
+        calls["em"] += 1
+        raise ConnectionError("eastmoney disconnected")
 
     def stock_zh_a_hist_tx(**kwargs):
         calls["tx"].append(kwargs)
@@ -89,16 +120,12 @@ def test_daily_historical_bars_use_tencent_stock_zh_a_hist_tx(monkeypatch: pytes
     )
 
     assert result.status == AdapterFetchStatus.success
-    assert result.source_api == "stock_zh_a_hist_tx"
+    assert result.source_api == "stock_zh_a_hist+stock_zh_a_hist_tx"
+    assert calls["em"] == 1
     assert calls["tx"] == [{"symbol": "sz000001", "start_date": "20250101", "end_date": "20250630", "adjust": ""}]
-    assert calls["em"] == 0
     row = result.raw_records[0]
     assert row["normalized_ticker"] == "000001.SZ"
     assert row["provider_symbol"] == "sz000001"
-    assert row["日期"] == "2025-01-02"
-    assert row["开盘"] == 11.73
-    assert row["收盘"] == 11.43
-    assert row["成交量"] == 1819597
     assert row["volume_unit"] == "hand"
     assert row["amount_is_estimated"] is True
     assert row["raw_source_api"] == "stock_zh_a_hist_tx"
@@ -159,6 +186,7 @@ def test_financial_statement_and_indicator_use_documented_symbol_formats(monkeyp
 
 
 def test_valuation_money_flow_and_corporate_action(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("EASTMONEY_COOKIE", raising=False)
     calls = {"fund": [], "dividend": [], "repurchase": 0}
 
     fake = types.SimpleNamespace(
@@ -188,6 +216,65 @@ def test_valuation_money_flow_and_corporate_action(monkeypatch: pytest.MonkeyPat
     assert ("600519", "分红") in calls["dividend"]
     assert calls["repurchase"] == 1
     assert {r["action_type"] for r in action.raw_records} == {"dividend", "repurchase"}
+
+
+def test_money_flow_with_cookie_still_uses_akshare_default_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EASTMONEY_COOKIE", "wsc_checkuser_ok=1; nid18=test")
+    calls = {"fund": []}
+
+    fake = types.SimpleNamespace(
+        stock_individual_fund_flow=lambda stock, market: calls["fund"].append((stock, market))
+        or FakeDF([{"日期": "2026-06-05", "主力净流入-净额": 123.0, "主力净流入-净占比": 1.5}])
+    )
+    install_fake_ak(monkeypatch, fake)
+
+    result = AKShareAdapter().fetch_money_flow(
+        request(RequestType.money_flow, tickers=["600519.SH"], start_date="20260601", end_date="20260605")
+    )
+
+    assert result.status == AdapterFetchStatus.success
+    assert result.source_api == "stock_individual_fund_flow"
+    assert calls["fund"] == [("600519", "sh")]
+    assert result.raw_records[0]["main_net_inflow"] == 123.0
+
+
+def test_money_flow_fallbacks_to_direct_eastmoney_when_akshare_fails(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("EASTMONEY_COOKIE", "wsc_checkuser_ok=1; nid18=test")
+    calls = []
+
+    fake = types.SimpleNamespace(stock_individual_fund_flow=lambda stock, market: (_ for _ in ()).throw(ConnectionError("akshare disconnected")))
+    install_fake_ak(monkeypatch, fake)
+
+    class FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self):
+            return {
+                "data": {
+                    "klines": [
+                        "2026-06-05,-25488.21,-186.58,-7214.31,-12653.98,20054.87,-1.1,-0.01,-0.3,-0.5,0.8,1400.0,-1.2",
+                        "2026-05-30,1,2,3,4,5,6,7,8,9,10,11,12",
+                    ]
+                }
+            }
+
+    fake_requests = types.SimpleNamespace(get=lambda url, **kwargs: calls.append((url, kwargs)) or FakeResponse())
+    monkeypatch.setitem(sys.modules, "requests", fake_requests)
+
+    result = AKShareAdapter().fetch_money_flow(
+        request(RequestType.money_flow, tickers=["600519.SH"], start_date="20260601", end_date="20260605")
+    )
+
+    assert result.status == AdapterFetchStatus.success
+    assert result.source_api == "stock_individual_fund_flow+eastmoney_fflow_daykline"
+    assert len(result.raw_records) == 1
+    assert result.raw_records[0]["trade_date"] == "20260605"
+    assert result.raw_records[0]["main_net_inflow"] == -25488.21
+    assert result.raw_records[0]["super_large_net_inflow"] == 20054.87
+    assert result.raw_records[0]["source_methodology"] == "eastmoney_fflow_daykline_browser_cookie"
+    assert calls[0][1]["params"]["secid"] == "1.600519"
+    assert "wsc_checkuser_ok=1" in calls[0][1]["headers"]["Cookie"]
 
 
 def test_industry_and_concept_membership(monkeypatch: pytest.MonkeyPatch) -> None:

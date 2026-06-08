@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from uuid import uuid4
 
 from stock_data_ingestion.config import parse_provider_list
@@ -41,6 +41,29 @@ class StockDataCollector:
             "canonical_provider": canonical,
         }
 
+
+    def _resolve_market_window(self, start_date: str | date | None, end_date: str | date | None) -> tuple[str | date, str | date]:
+        end = end_date or date.today()
+        if start_date is not None:
+            return start_date, end
+        if isinstance(end, str):
+            end_day = date.fromisoformat(end.replace("/", "-")[:10]) if "-" in end or "/" in end else date(int(end[:4]), int(end[4:6]), int(end[6:8]))
+        else:
+            end_day = end
+        return end_day - timedelta(days=self.runner.config.data_sources.market_data_lookback_days), end
+
+    def _resolve_financial_window(self, start_date: str | date | None, end_date: str | date | None) -> tuple[str | date, str | date, int]:
+        end = end_date or date.today()
+        quarters = self.runner.config.data_sources.financial_lookback_quarters
+        if start_date is not None:
+            return start_date, end, quarters
+        if isinstance(end, str):
+            end_day = date.fromisoformat(end.replace("/", "-")[:10]) if "-" in end or "/" in end else date(int(end[:4]), int(end[4:6]), int(end[6:8]))
+        else:
+            end_day = end
+        # Use a conservative calendar-day window to avoid missing late announcements.
+        return end_day - timedelta(days=max(quarters * 100, 400)), end, quarters
+
     def fetch_security_master(
         self,
         tickers: list[str] | None = None,
@@ -58,8 +81,8 @@ class StockDataCollector:
     def fetch_trade_calendar(
         self,
         exchange: str,
-        start_date: str | date,
-        end_date: str | date,
+        start_date: str | date | None = None,
+        end_date: str | date | None = None,
         providers: list[str] | None = None,
         canonical_provider: str | None = None,
     ) -> StockDataResponse:
@@ -76,8 +99,8 @@ class StockDataCollector:
     def fetch_historical_bars(
         self,
         tickers: list[str],
-        start_date: str | date,
-        end_date: str | date,
+        start_date: str | date | None = None,
+        end_date: str | date | None = None,
         frequency: Frequency | str = Frequency.d1,
         adjust: Adjust | str = Adjust.none,
         cross_validate: bool = True,
@@ -85,6 +108,7 @@ class StockDataCollector:
         canonical_provider: str | None = None,
     ) -> StockDataResponse:
         provider_kwargs = self._provider_request_kwargs(providers, canonical_provider)
+        start_date, end_date = self._resolve_market_window(start_date, end_date)
         req = StockDataRequest(
             request_id=_request_id(),
             request_type=RequestType.historical_bars,
@@ -102,11 +126,12 @@ class StockDataCollector:
     def fetch_valuation(
         self,
         tickers: list[str],
-        start_date: str | date,
-        end_date: str | date,
+        start_date: str | date | None = None,
+        end_date: str | date | None = None,
         providers: list[str] | None = None,
         canonical_provider: str | None = None,
     ) -> StockDataResponse:
+        start_date, end_date = self._resolve_market_window(start_date, end_date)
         req = StockDataRequest(
             request_id=_request_id(),
             request_type=RequestType.valuation_metric,
@@ -117,20 +142,44 @@ class StockDataCollector:
         )
         return self.runner.run(req)
 
-    def fetch_financial_indicator(
+    def fetch_adj_factor(
         self,
         tickers: list[str],
-        start_date: str | date,
-        end_date: str | date,
+        start_date: str | date | None = None,
+        end_date: str | date | None = None,
+        cross_validate: bool = True,
         providers: list[str] | None = None,
         canonical_provider: str | None = None,
     ) -> StockDataResponse:
+        provider_kwargs = self._provider_request_kwargs(providers, canonical_provider)
+        start_date, end_date = self._resolve_market_window(start_date, end_date)
+        req = StockDataRequest(
+            request_id=_request_id(),
+            request_type=RequestType.adj_factor,
+            tickers=tickers,
+            start_date=start_date,
+            end_date=end_date,
+            cross_validate=cross_validate and len(provider_kwargs["provider_priority"]) > 1,
+            **provider_kwargs,
+        )
+        return self.runner.run(req)
+
+    def fetch_financial_indicator(
+        self,
+        tickers: list[str],
+        start_date: str | date | None = None,
+        end_date: str | date | None = None,
+        providers: list[str] | None = None,
+        canonical_provider: str | None = None,
+    ) -> StockDataResponse:
+        start_date, end_date, quarters = self._resolve_financial_window(start_date, end_date)
         req = StockDataRequest(
             request_id=_request_id(),
             request_type=RequestType.financial_indicator,
             tickers=tickers,
             start_date=start_date,
             end_date=end_date,
+            extra_params={"financial_lookback_quarters": quarters},
             **self._provider_request_kwargs(providers, canonical_provider),
         )
         return self.runner.run(req)
@@ -138,14 +187,15 @@ class StockDataCollector:
     def fetch_financial_statement(
         self,
         tickers: list[str],
-        start_date: str | date,
-        end_date: str | date,
+        start_date: str | date | None = None,
+        end_date: str | date | None = None,
         statement_types: list[str] | None = None,
         period: str | None = None,
         providers: list[str] | None = None,
         canonical_provider: str | None = None,
     ) -> StockDataResponse:
-        extra_params: dict[str, object] = {}
+        start_date, end_date, quarters = self._resolve_financial_window(start_date, end_date)
+        extra_params: dict[str, object] = {"financial_lookback_quarters": quarters}
         if statement_types:
             extra_params["statement_types"] = statement_types
         if period:
@@ -164,11 +214,12 @@ class StockDataCollector:
     def fetch_money_flow(
         self,
         tickers: list[str],
-        start_date: str | date,
-        end_date: str | date,
+        start_date: str | date | None = None,
+        end_date: str | date | None = None,
         providers: list[str] | None = None,
         canonical_provider: str | None = None,
     ) -> StockDataResponse:
+        start_date, end_date = self._resolve_market_window(start_date, end_date)
         req = StockDataRequest(
             request_id=_request_id(),
             request_type=RequestType.money_flow,

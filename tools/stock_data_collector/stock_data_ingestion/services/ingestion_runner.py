@@ -8,6 +8,7 @@ from uuid import uuid4
 from pydantic import BaseModel
 
 from stock_data_ingestion.adapters.akshare_adapter import AKShareAdapter
+from stock_data_ingestion.adapters.baostock_adapter import BaoStockAdapter
 from stock_data_ingestion.adapters.base import BaseDataAdapter
 from stock_data_ingestion.adapters.joinquant_adapter import JoinQuantAdapter
 from stock_data_ingestion.adapters.tushare_adapter import TushareAdapter
@@ -90,7 +91,7 @@ COMPARISON_FIELDS_BY_RECORD_TYPE: dict[str, list[str]] = {
         "limit_up_price",
         "limit_down_price",
     ],
-    "adj_factor": ["adj_factor"],
+    "adj_factor": ["adj_factor", "fore_adjust_factor", "back_adjust_factor"],
     "financial_statement": [
         "operating_revenue",
         "operating_profit",
@@ -149,7 +150,7 @@ REQUIRED_FIELDS_BY_RECORD_TYPE: dict[str, list[str]] = {
     "trading_status": ["normalized_ticker", "trade_date", "is_trading", "is_suspended"],
     "bar": ["open", "high", "low", "close", "volume", "amount"],
     "realtime_quote": ["normalized_ticker", "quote_time", "latest_price"],
-    "adj_factor": ["normalized_ticker", "trade_date", "adj_factor"],
+    "adj_factor": ["normalized_ticker", "trade_date"],
     "financial_statement": ["normalized_ticker", "report_period", "statement_type", "report_type"],
     "financial_indicator": ["normalized_ticker", "report_period"],
     "valuation_metric": ["normalized_ticker", "trade_date"],
@@ -200,6 +201,44 @@ PARQUET_DATA_TYPE_BY_RECORD_TYPE: dict[str, str] = {
     "corporate_action": "corporate_actions",
 }
 
+PARQUET_DEDUPE_KEYS_BY_RECORD_TYPE: dict[str, list[str]] = {
+    "security_master": ["normalized_ticker", "effective_provider"],
+    "trade_calendar": ["exchange", "calendar_date", "effective_provider"],
+    "trading_status": ["normalized_ticker", "trade_date", "effective_provider"],
+    "bar": ["normalized_ticker", "frequency", "trade_date", "adjust", "effective_provider"],
+    "realtime_quote": ["normalized_ticker", "quote_time_bucket", "effective_provider"],
+    "adj_factor": ["normalized_ticker", "trade_date", "effective_provider"],
+    "financial_statement": ["normalized_ticker", "report_period", "statement_type", "report_type", "announcement_date", "effective_provider"],
+    "financial_indicator": ["normalized_ticker", "report_period", "effective_provider"],
+    "valuation_metric": ["normalized_ticker", "trade_date", "effective_provider"],
+    "industry_membership": ["normalized_ticker", "industry_system", "industry_code", "effective_date", "provider"],
+    "concept_membership": ["normalized_ticker", "concept_code", "concept_name", "provider"],
+    "money_flow": ["normalized_ticker", "trade_date", "frequency", "effective_provider"],
+    "index": ["index_code", "effective_provider"],
+    "index_bar": ["index_code", "trade_date", "frequency", "effective_provider"],
+    "index_constituent": ["index_code", "normalized_ticker", "effective_date", "effective_provider"],
+    "corporate_action": ["normalized_ticker", "action_type", "announcement_date", "ex_date", "effective_provider"],
+}
+
+
+PARQUET_BUSINESS_KEY_BY_DATA_TYPE: dict[str, list[str]] = {
+    "securities": ["normalized_ticker", "effective_provider"],
+    "trade_calendar": ["exchange", "calendar_date", "effective_provider"],
+    "trading_status": ["normalized_ticker", "trade_date", "effective_provider"],
+    "bars": ["normalized_ticker", "trade_date", "frequency", "adjust", "effective_provider"],
+    "realtime_quotes": ["normalized_ticker", "quote_time_bucket", "effective_provider"],
+    "adj_factors": ["normalized_ticker", "trade_date", "effective_provider"],
+    "financial_statements": ["normalized_ticker", "report_period", "statement_type", "report_type", "announcement_date", "effective_provider"],
+    "financial_indicators": ["normalized_ticker", "report_period", "effective_provider"],
+    "valuation_metrics": ["normalized_ticker", "trade_date", "effective_provider"],
+    "industry_memberships": ["normalized_ticker", "industry_system", "industry_code", "effective_date", "provider"],
+    "concept_memberships": ["normalized_ticker", "concept_code", "concept_name", "provider"],
+    "money_flow": ["normalized_ticker", "trade_date", "effective_provider"],
+    "indices": ["index_code", "effective_provider"],
+    "index_bars": ["index_code", "trade_date", "effective_provider"],
+    "index_constituents": ["index_code", "normalized_ticker", "effective_date", "effective_provider"],
+    "corporate_actions": ["normalized_ticker", "action_type", "announcement_date", "ex_date", "effective_provider"],
+}
 
 def _value(raw: dict[str, Any], *names: str, default: Any = None) -> Any:
     for name in names:
@@ -268,6 +307,7 @@ class IngestionRunner:
         self.adapters = adapters or {
             "tushare": TushareAdapter(),
             "akshare": AKShareAdapter(),
+            "baostock": BaoStockAdapter(),
             "joinquant": JoinQuantAdapter(),
         }
 
@@ -704,7 +744,9 @@ class IngestionRunner:
         for data_type, rows in grouped.items():
             try:
                 partition_cols = self._parquet_partitions(rows[0])
-                refs.extend(self.parquet_store.write_records(data_type, rows, partition_cols=partition_cols))
+                record_type = str(rows[0].get("record_type") or "")
+                dedupe_keys = PARQUET_DEDUPE_KEYS_BY_RECORD_TYPE.get(record_type)
+                refs.extend(self.parquet_store.write_records(data_type, rows, partition_cols=partition_cols, business_key=dedupe_keys))
             except Exception as exc:  # noqa: BLE001
                 errors.append(self._error_from_exception(exc, ErrorCode.STORAGE_FAILED, f"parquet_export:{data_type}"))
         return refs
@@ -977,15 +1019,15 @@ class IngestionRunner:
             "high": _float(raw, "high", "最高"),
             "low": _float(raw, "low", "最低"),
             "close": _float(raw, "close", "收盘"),
-            "pre_close": _float(raw, "pre_close", "昨收"),
+            "pre_close": _float(raw, "pre_close", "preclose", "昨收"),
             "change": _float(raw, "change", "涨跌额"),
-            "pct_change": _float(raw, "pct_chg", "pct_change", "涨跌幅"),
+            "pct_change": _float(raw, "pct_chg", "pct_change", "pctChg", "涨跌幅"),
             "volume": volume,
             "volume_unit": volume_unit,
             "amount": amount,
             "amount_unit": amount_unit,
             "vwap": _float(raw, "vwap", default=compute_vwap(amount, volume)),
-            "turnover_rate": normalize_turnover_rate(_float(raw, "turnover_rate", "换手率")),
+            "turnover_rate": normalize_turnover_rate(_float(raw, "turnover_rate", "turn", "换手率")),
             "turnover_rate_free_float": normalize_turnover_rate(_float(raw, "turnover_rate_free_float", "自由流通换手率")),
             "adjust": str(request.adjust or _value(raw, "adjust", default="none")),
             "adj_factor": _float(raw, "adj_factor"),
@@ -994,14 +1036,20 @@ class IngestionRunner:
 
     def _normalize_volume_for_provider(self, raw: dict[str, Any], provider: str) -> tuple[float | None, str]:
         if provider == "tushare":
-            return normalize_volume(_value(raw, "vol", "volume", "成交量"), provider="tushare")
+            unit = _value(raw, "volume_unit", default=None)
+            return normalize_volume(_value(raw, "vol", "volume", "成交量"), unit=unit, provider=None if unit else "tushare")
         if provider == "akshare":
             return normalize_volume(_value(raw, "成交量", "volume", "vol"), unit=_value(raw, "volume_unit", default="hand"))
+        if provider == "baostock":
+            return normalize_volume(_value(raw, "volume", "vol", "成交量"), unit=_value(raw, "volume_unit", default="share"))
         return normalize_volume(_value(raw, "volume", "vol", "成交量"), unit=_value(raw, "volume_unit", default="share"))
 
     def _normalize_amount_for_provider(self, raw: dict[str, Any], provider: str) -> tuple[float | None, str]:
         if provider == "tushare":
-            return normalize_amount(_value(raw, "amount", "成交额"), provider="tushare")
+            unit = _value(raw, "amount_unit", default=None)
+            return normalize_amount(_value(raw, "amount", "成交额"), unit=unit, provider=None if unit else "tushare")
+        if provider == "baostock":
+            return normalize_amount(_value(raw, "amount", "money", "成交额"), unit=_value(raw, "amount_unit", default="CNY"))
         return normalize_amount(_value(raw, "amount", "money", "成交额"), unit=_value(raw, "amount_unit", default="CNY"))
 
     def _normalize_realtime_quote(self, result: ProviderFetchResult, raw: dict[str, Any], idx: int, request: StockDataRequest, run_id: str) -> list[StandardRecord]:
@@ -1043,7 +1091,16 @@ class IngestionRunner:
 
     def _normalize_adj_factor(self, result: ProviderFetchResult, raw: dict[str, Any], idx: int, request: StockDataRequest, run_id: str) -> list[StandardRecord]:
         identity = self._stock_identity(raw, request)
-        domain = {**identity, "trade_date": _date(raw, "trade_date", "date"), "adj_factor": _float(raw, "adj_factor", "factor")}
+        domain = {
+            **identity,
+            "trade_date": _date(raw, "trade_date", "date", "factor_event_date", "dividOperateDate"),
+            "adj_factor": _float(raw, "adj_factor", "factor"),
+            "fore_adjust_factor": _float(raw, "fore_adjust_factor", "foreAdjustFactor"),
+            "back_adjust_factor": _float(raw, "back_adjust_factor", "backAdjustFactor"),
+            "event_adjust_factor": _float(raw, "event_adjust_factor", "adjustFactor"),
+            "factor_event_date": _date(raw, "factor_event_date", "dividOperateDate"),
+            "factor_method": _value(raw, "factor_method"),
+        }
         return [AdjFactorRecord(**self._common_record_kwargs(result=result, request=request, ingestion_run_id=run_id, raw_row_index=idx, domain_values=domain, record_type="adj_factor"))]
 
     def _normalize_financial_statement(self, result: ProviderFetchResult, raw: dict[str, Any], idx: int, request: StockDataRequest, run_id: str) -> list[StandardRecord]:
@@ -1051,14 +1108,14 @@ class IngestionRunner:
         domain = {
             **identity,
             "currency": normalize_currency(_value(raw, "currency", default="CNY")),
-            "report_period": str(_value(raw, "report_period", "end_date", "报告期")),
-            "report_date": _date(raw, "report_date", "报告日期"),
-            "announcement_date": _date(raw, "ann_date", "announcement_date", "公告日期"),
+            "report_period": str(_value(raw, "report_period", "end_date", "statDate", "报告期")),
+            "report_date": _date(raw, "report_date", "statDate", "报告日期"),
+            "announcement_date": _date(raw, "ann_date", "announcement_date", "pubDate", "公告日期"),
             "statement_type": _value(raw, "statement_type", default="income_statement"),
             "report_type": _value(raw, "report_type", default="standard"),
-            "operating_revenue": _float(raw, "operating_revenue", "revenue", "营业收入"),
+            "operating_revenue": _float(raw, "operating_revenue", "revenue", "MBRevenue", "营业收入"),
             "operating_profit": _float(raw, "operating_profit", "营业利润"),
-            "net_profit": _float(raw, "net_profit", "净利润"),
+            "net_profit": _float(raw, "net_profit", "netProfit", "净利润"),
             "parent_net_profit": _float(raw, "parent_net_profit", "n_income_attr_p", "归母净利润"),
             "total_assets": _float(raw, "total_assets", "总资产"),
             "total_liabilities": _float(raw, "total_liabilities", "总负债"),
@@ -1072,19 +1129,19 @@ class IngestionRunner:
         domain = {
             **identity,
             "currency": normalize_currency(_value(raw, "currency", default="CNY")),
-            "report_period": str(_value(raw, "report_period", "end_date", "报告期")),
-            "report_date": _date(raw, "report_date", "报告日期"),
-            "announcement_date": _date(raw, "ann_date", "announcement_date", "公告日期"),
-            "roe": _float(raw, "roe", "ROE"),
+            "report_period": str(_value(raw, "report_period", "end_date", "statDate", "报告期")),
+            "report_date": _date(raw, "report_date", "statDate", "报告日期"),
+            "announcement_date": _date(raw, "ann_date", "announcement_date", "pubDate", "公告日期"),
+            "roe": _float(raw, "roe", "roeAvg", "dupontROE", "ROE"),
             "roa": _float(raw, "roa", "ROA"),
-            "gross_margin": _float(raw, "gross_margin", "grossprofit_margin", "毛利率"),
-            "net_margin": _float(raw, "net_margin", "netprofit_margin", "净利率"),
+            "gross_margin": _float(raw, "gross_margin", "gpMargin", "grossprofit_margin", "毛利率"),
+            "net_margin": _float(raw, "net_margin", "npMargin", "dupontNitogr", "netprofit_margin", "净利率"),
             "revenue_yoy": _float(raw, "revenue_yoy", "or_yoy", "营收同比"),
-            "net_profit_yoy": _float(raw, "net_profit_yoy", "净利润同比"),
-            "debt_asset_ratio": _float(raw, "debt_asset_ratio", "资产负债率"),
-            "current_ratio": _float(raw, "current_ratio", "流动比率"),
-            "ocf_to_net_profit": _float(raw, "ocf_to_net_profit", "经营现金流净利润比"),
-            "eps": _float(raw, "eps", "EPS"),
+            "net_profit_yoy": _float(raw, "net_profit_yoy", "YOYNI", "YOYPNI", "净利润同比"),
+            "debt_asset_ratio": _float(raw, "debt_asset_ratio", "liabilityToAsset", "资产负债率"),
+            "current_ratio": _float(raw, "current_ratio", "currentRatio", "流动比率"),
+            "ocf_to_net_profit": _float(raw, "ocf_to_net_profit", "CFOToNP", "经营现金流净利润比"),
+            "eps": _float(raw, "eps", "epsTTM", "EPS"),
             "bps": _float(raw, "bps", "BPS"),
         }
         return [FinancialIndicatorRecord(**self._common_record_kwargs(result=result, request=request, ingestion_run_id=run_id, raw_row_index=idx, domain_values=domain, record_type="financial_indicator"))]
@@ -1097,14 +1154,15 @@ class IngestionRunner:
             "currency": normalize_currency(_value(raw, "currency", default="CNY")),
             "trade_date": _date(raw, "trade_date", "date", default=request.end_date or request.start_date),
             "pe": _float(raw, "pe", "PE"),
-            "pe_ttm": _float(raw, "pe_ttm", "PE_TTM"),
-            "pb": _float(raw, "pb", "PB"),
+            "pe_ttm": _float(raw, "pe_ttm", "peTTM", "PE_TTM"),
+            "pb": _float(raw, "pb", "pbMRQ", "PB"),
             "ps": _float(raw, "ps", "PS"),
-            "ps_ttm": _float(raw, "ps_ttm", "PS_TTM"),
+            "ps_ttm": _float(raw, "ps_ttm", "psTTM", "PS_TTM"),
+            "pcf_ncf_ttm": _float(raw, "pcf_ncf_ttm", "pcfNcfTTM", "PCF_NCF_TTM"),
             "dividend_yield": _float(raw, "dividend_yield", "股息率"),
             "total_market_value": _float(raw, "total_market_value", "total_mv", "总市值"),
             "float_market_value": _float(raw, "float_market_value", "circ_mv", "流通市值"),
-            "turnover_rate": normalize_turnover_rate(_float(raw, "turnover_rate", "换手率")),
+            "turnover_rate": normalize_turnover_rate(_float(raw, "turnover_rate", "turn", "换手率")),
             "volume_ratio": _float(raw, "volume_ratio", "量比"),
             "amount": amount,
         }
@@ -1226,13 +1284,13 @@ class IngestionRunner:
             **identity,
             "currency": normalize_currency(_value(raw, "currency", default="CNY")),
             "action_type": action_type,
-            "announcement_date": _date(raw, "announcement_date", "ann_date", "公告日期"),
-            "record_date": _date(raw, "record_date", "股权登记日"),
-            "ex_date": _date(raw, "ex_date", "float_date", "除权除息日", "解禁日期"),
-            "dividend_payment_date": _date(raw, "dividend_payment_date", "pay_date", "派息日"),
-            "cash_dividend_per_share": _float(raw, "cash_dividend_per_share", "cash_div_tax", "cash_div", "每股现金分红"),
+            "announcement_date": _date(raw, "announcement_date", "ann_date", "dividPlanAnnounceDate", "dividPreNoticeDate", "公告日期"),
+            "record_date": _date(raw, "record_date", "dividRegistDate", "股权登记日"),
+            "ex_date": _date(raw, "ex_date", "float_date", "dividOperateDate", "除权除息日", "解禁日期"),
+            "dividend_payment_date": _date(raw, "dividend_payment_date", "pay_date", "dividPayDate", "派息日"),
+            "cash_dividend_per_share": _float(raw, "cash_dividend_per_share", "cash_div_tax", "cash_div", "dividCashPsBeforeTax", "每股现金分红"),
             "stock_bonus_ratio": stock_bonus_ratio,
-            "rights_issue_ratio": _float(raw, "rights_issue_ratio", "配股比例"),
+            "rights_issue_ratio": _float(raw, "rights_issue_ratio", "dividReserveToStockPs", "配股比例"),
             "rights_issue_price": _float(raw, "rights_issue_price", "配股价格"),
         }
         return [CorporateActionRecord(**self._common_record_kwargs(result=result, request=request, ingestion_run_id=run_id, raw_row_index=idx, domain_values=domain, record_type="corporate_action"))]

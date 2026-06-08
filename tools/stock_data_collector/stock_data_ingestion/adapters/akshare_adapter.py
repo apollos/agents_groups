@@ -3,13 +3,15 @@ from __future__ import annotations
 import importlib.util
 import inspect
 import math
+import os
 import re
+from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 
 from stock_data_ingestion.adapters.base import BaseDataAdapter
 from stock_data_ingestion.normalization.datetime_utils import now_asia_shanghai, normalize_trade_date
-from stock_data_ingestion.normalization.ticker import normalize_ticker, to_akshare_symbol
+from stock_data_ingestion.normalization.ticker import is_hk_ticker, normalize_ticker, to_akshare_symbol
 from stock_data_ingestion.schemas.errors import ErrorCode
 from stock_data_ingestion.schemas.records import AdapterFetchStatus, ProviderFetchResult
 from stock_data_ingestion.schemas.requests import Frequency, StockDataRequest
@@ -240,6 +242,109 @@ class AKShareAdapter(BaseDataAdapter):
         """Return the Tencent AKShare symbol, e.g. 000001.SZ -> sz000001."""
         code, exchange = normalize_ticker(ticker).split(".")
         return f"{exchange.lower()}{code}"
+
+    def _eastmoney_secid(self, ticker: str) -> str:
+        code, exchange = normalize_ticker(ticker).split(".")
+        market = {"SH": "1", "SZ": "0", "BJ": "0"}[exchange]
+        return f"{market}.{code}"
+
+    def _eastmoney_money_flow_headers(self) -> dict[str, str]:
+        cookie = os.getenv("EASTMONEY_COOKIE", "").strip()
+        if not cookie:
+            return {}
+        return {
+            "User-Agent": os.getenv(
+                "EASTMONEY_USER_AGENT",
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36 Edg/137.0.0.0",
+            ),
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": os.getenv("EASTMONEY_ACCEPT_LANGUAGE", "zh-CN,zh;q=0.9,en;q=0.8"),
+            "Referer": "https://data.eastmoney.com/zjlx/detail.html",
+            "Cookie": cookie,
+            "Connection": "close",
+        }
+
+    @contextmanager
+    def _eastmoney_cookie_request_headers(self) -> Iterator[None]:
+        headers = self._eastmoney_money_flow_headers()
+        if not headers:
+            yield
+            return
+
+        import requests  # type: ignore
+
+        original_get = requests.get
+
+        def _get_with_eastmoney_headers(url: Any, *args: Any, **kwargs: Any) -> Any:
+            if "eastmoney.com" in str(url):
+                kwargs["headers"] = {**headers, **dict(kwargs.get("headers") or {})}
+            return original_get(url, *args, **kwargs)
+
+        requests.get = _get_with_eastmoney_headers
+        try:
+            yield
+        finally:
+            requests.get = original_get
+
+    def _eastmoney_money_flow_records(self, request: StockDataRequest) -> list[dict[str, Any]]:
+        import requests  # type: ignore
+
+        url = "https://push2his.eastmoney.com/api/qt/stock/fflow/daykline/get"
+        headers = self._eastmoney_money_flow_headers()
+        if not headers:
+            return []
+        records: list[dict[str, Any]] = []
+        fields2 = "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65"
+        for ticker in request.tickers:
+            normalized = normalize_ticker(ticker)
+            params = {
+                "lmt": "0",
+                "klt": "101",
+                "secid": self._eastmoney_secid(normalized),
+                "fields1": "f1,f2,f3,f7",
+                "fields2": fields2,
+                "ut": "b2884a393a59ad64002292a3e90d46a5",
+                "_": int(datetime.now().timestamp() * 1000),
+            }
+            response = requests.get(url, params=params, headers=headers, timeout=20)
+            response.raise_for_status()
+            payload = response.json()
+            data = payload.get("data") or {}
+            for item in data.get("klines") or []:
+                parts = str(item).split(",")
+                if len(parts) < 13:
+                    continue
+                trade_date = self._date_text(parts[0])
+                if not self._date_in_request_range(trade_date, request):
+                    continue
+                row = {
+                    "日期": trade_date,
+                    "收盘价": self._numeric(parts[11]),
+                    "涨跌幅": self._numeric(parts[12]),
+                    "主力净流入-净额": self._numeric(parts[1]),
+                    "主力净流入-净占比": self._numeric(parts[6]),
+                    "超大单净流入-净额": self._numeric(parts[5]),
+                    "超大单净流入-净占比": self._numeric(parts[10]),
+                    "大单净流入-净额": self._numeric(parts[4]),
+                    "大单净流入-净占比": self._numeric(parts[9]),
+                    "中单净流入-净额": self._numeric(parts[3]),
+                    "中单净流入-净占比": self._numeric(parts[8]),
+                    "小单净流入-净额": self._numeric(parts[2]),
+                    "小单净流入-净占比": self._numeric(parts[7]),
+                    "trade_date": trade_date,
+                    "frequency": "1d",
+                    "source_methodology": "eastmoney_fflow_daykline_browser_cookie",
+                    "main_net_inflow": self._numeric(parts[1]),
+                    "main_net_inflow_ratio": self._numeric(parts[6]),
+                    "super_large_net_inflow": self._numeric(parts[5]),
+                    "large_net_inflow": self._numeric(parts[4]),
+                    "medium_net_inflow": self._numeric(parts[3]),
+                    "small_net_inflow": self._numeric(parts[2]),
+                    "raw_source_api": "eastmoney_fflow_daykline",
+                }
+                records.append(self._add_identity(row, normalized))
+        return records
 
     def _normalize_tencent_hist_row(self, row: dict[str, Any], *, normalized: str, tx_symbol: str, request: StockDataRequest) -> dict[str, Any]:
         """Map stock_zh_a_hist_tx output to the common raw aliases used by the runner.
@@ -614,14 +719,18 @@ class AKShareAdapter(BaseDataAdapter):
     def fetch_historical_bars(self, request: StockDataRequest) -> ProviderFetchResult:
         frequency = str(request.frequency or "1d")
         is_minute = frequency in {"1m", "5m", "15m", "30m", "60m"}
-        use_tencent_daily = frequency == "1d"
-        source_api = "stock_zh_a_hist_min_em" if is_minute else ("stock_zh_a_hist_tx" if use_tencent_daily else "stock_zh_a_hist")
+        source_api = "stock_zh_a_hist_min_em" if is_minute else "stock_zh_a_hist"
+        fallback_used = False
         started = now_asia_shanghai()
         try:
             ak = self._import_ak(source_api, started)
             records: list[dict[str, Any]] = []
             for ticker in request.tickers:
                 normalized = normalize_ticker(ticker)
+                # This adapter is intentionally the A-share/Tencent path. HK connect
+                # bars are handled by Tushare hk_daily when the user supplies HK tickers.
+                if is_hk_ticker(normalized):
+                    continue
                 symbol = self._ak_symbol(normalized)
                 if is_minute:
                     start_date = (request.start_date or date.today()).strftime("%Y-%m-%d 09:30:00")
@@ -644,48 +753,51 @@ class AKShareAdapter(BaseDataAdapter):
                         row["adjust"] = str(request.adjust or "none")
                         row["raw_source_api"] = "stock_zh_a_hist_min_em"
                         records.append(row)
-                elif use_tencent_daily:
-                    tx_symbol = self._tx_symbol(normalized)
-                    if not hasattr(ak, "stock_zh_a_hist_tx"):
-                        raise RuntimeError("AKShare has no stock_zh_a_hist_tx; upgrade akshare or use Eastmoney fallback.")
-                    df = self._call_ak(
-                        ak.stock_zh_a_hist_tx,
-                        symbol=tx_symbol,
-                        start_date=self._start_date(request),
-                        end_date=self._end_date(request),
-                        adjust=self._adjust(request),
-                    )
-                    required_any = [{"date", "open", "high", "low", "close"}, {"日期", "开盘", "最高", "最低", "收盘"}]
-                    columns = set(str(c) for c in getattr(df, "columns", [])) if df is not None else set()
-                    if df is not None and columns and not any(required.issubset(columns) for required in required_any):
-                        raise KeyError(f"AKShare Tencent schema changed. Columns={sorted(columns)}")
-                    for row in self._records(df):
-                        records.append(self._normalize_tencent_hist_row(row, normalized=normalized, tx_symbol=tx_symbol, request=request))
                 else:
-                    # Weekly/monthly bars are still served by the Eastmoney AKShare endpoint.
-                    # stock_zh_a_hist_tx is a daily fallback and should not be used for
-                    # frequencies it does not document.
-                    df = self._call_ak(
-                        ak.stock_zh_a_hist,
-                        symbol=symbol,
-                        period=self._period(request),
-                        start_date=self._start_date(request),
-                        end_date=self._end_date(request),
-                        adjust=self._adjust(request),
-                    )
-                    required = {"日期", "开盘", "最高", "最低", "收盘", "成交量", "成交额"}
-                    columns = set(getattr(df, "columns", [])) if df is not None else set()
-                    if df is not None and not required.issubset(columns):
-                        raise KeyError(f"AKShare schema changed. Missing {required - columns}")
-                    for row in self._records(df):
-                        row["provider_symbol"] = symbol
-                        row["normalized_ticker"] = normalized
-                        row["trade_date"] = self._date_text(self._value(row, "日期"))
-                        row["frequency"] = frequency
-                        row["adjust"] = str(request.adjust or "none")
-                        row["raw_source_api"] = "stock_zh_a_hist"
-                        records.append(row)
-            return self._empty_result(source_api, records, started)
+                    try:
+                        with self._eastmoney_cookie_request_headers():
+                            df = self._call_ak(
+                                ak.stock_zh_a_hist,
+                                symbol=symbol,
+                                period=self._period(request),
+                                start_date=self._start_date(request),
+                                end_date=self._end_date(request),
+                                adjust=self._adjust(request),
+                            )
+                        required = {"日期", "开盘", "最高", "最低", "收盘", "成交量", "成交额"}
+                        columns = set(getattr(df, "columns", [])) if df is not None else set()
+                        if df is not None and not required.issubset(columns):
+                            raise KeyError(f"AKShare schema changed. Missing {required - columns}")
+                        for row in self._records(df):
+                            row["provider_symbol"] = symbol
+                            row["normalized_ticker"] = normalized
+                            row["trade_date"] = self._date_text(self._value(row, "日期"))
+                            row["frequency"] = frequency
+                            row["adjust"] = str(request.adjust or "none")
+                            row["raw_source_api"] = "stock_zh_a_hist"
+                            records.append(row)
+                    except Exception:
+                        if frequency != "1d" or not hasattr(ak, "stock_zh_a_hist_tx"):
+                            raise
+                        tx_symbol = self._tx_symbol(normalized)
+                        df = self._call_ak(
+                            ak.stock_zh_a_hist_tx,
+                            symbol=tx_symbol,
+                            start_date=self._start_date(request),
+                            end_date=self._end_date(request),
+                            adjust=self._adjust(request),
+                        )
+                        required_any = [{"date", "open", "high", "low", "close"}, {"日期", "开盘", "最高", "最低", "收盘"}]
+                        columns = set(str(c) for c in getattr(df, "columns", [])) if df is not None else set()
+                        if df is not None and columns and not any(required.issubset(columns) for required in required_any):
+                            raise KeyError(f"AKShare Tencent schema changed. Columns={sorted(columns)}")
+                        fallback_used = True
+                        for row in self._records(df):
+                            records.append(self._normalize_tencent_hist_row(row, normalized=normalized, tx_symbol=tx_symbol, request=request))
+            result = self._empty_result(source_api, records, started)
+            if fallback_used:
+                result.source_api = "stock_zh_a_hist+stock_zh_a_hist_tx"
+            return result
         except RuntimeError as exc:
             return self._unavailable_result(source_api, ErrorCode.PROVIDER_UNAVAILABLE, str(exc))
         except KeyError as exc:
@@ -994,8 +1106,8 @@ class AKShareAdapter(BaseDataAdapter):
         return self.fetch_industry_membership(request)
 
     def fetch_money_flow(self, request: StockDataRequest) -> ProviderFetchResult:
-        source_api = "stock_individual_fund_flow"
         started = now_asia_shanghai()
+        source_api = "stock_individual_fund_flow"
         try:
             ak = self._import_ak(source_api, started)
             records: list[dict[str, Any]] = []
@@ -1003,7 +1115,9 @@ class AKShareAdapter(BaseDataAdapter):
                 normalized = normalize_ticker(ticker)
                 symbol = self._ak_symbol(normalized)
                 market = self._market_code(normalized)
-                for row in self._records(self._call_ak(ak.stock_individual_fund_flow, stock=symbol, market=market)):
+                with self._eastmoney_cookie_request_headers():
+                    rows = self._records(self._call_ak(ak.stock_individual_fund_flow, stock=symbol, market=market))
+                for row in rows:
                     if not self._date_in_request_range(self._value(row, "日期", "trade_date"), request):
                         continue
                     row = self._add_identity(row, normalized)
@@ -1026,6 +1140,17 @@ class AKShareAdapter(BaseDataAdapter):
         except RuntimeError as exc:
             return self._unavailable_result(source_api, ErrorCode.PROVIDER_UNAVAILABLE, str(exc))
         except Exception as exc:  # noqa: BLE001
+            if os.getenv("EASTMONEY_COOKIE", "").strip():
+                fallback_source_api = "stock_individual_fund_flow+eastmoney_fflow_daykline"
+                try:
+                    records = self._eastmoney_money_flow_records(request)
+                    return self._empty_result(fallback_source_api, records, started)
+                except Exception as fallback_exc:  # noqa: BLE001
+                    if "RemoteDisconnected" in repr(fallback_exc) or "Connection aborted" in repr(fallback_exc):
+                        fallback_exc = RuntimeError(
+                            f"{fallback_exc}; Eastmoney browser cookie may be expired. Refresh EASTMONEY_COOKIE from a verified browser session."
+                        )
+                    return self._error_result(fallback_source_api, started, fallback_exc, ErrorCode.UNKNOWN_ERROR, retryable=True)
             return self._error_result(source_api, started, exc, ErrorCode.UNKNOWN_ERROR, retryable=True)
 
     def fetch_index_data(self, request: StockDataRequest) -> ProviderFetchResult:
