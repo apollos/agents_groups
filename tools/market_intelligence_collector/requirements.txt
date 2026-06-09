@@ -1,0 +1,11 @@
+# Core runtime deps. Enough to run the full pipeline in offline/mock mode.
+# For real model calls also install requirements-model.txt; for tests, -dev.
+beautifulsoup4>=4.12
+httpx>=0.27
+lxml>=5.0
+pydantic>=2.5
+python-dotenv>=1.0
+PyYAML>=6.0
+rich>=13.0
+SQLAlchemy>=2.0
+typer>=0.12

@@ -1,0 +1,95 @@
+# Analyst intelligence taxonomy (spec section 6). Maps focus areas to the
+# query families that serve them and to high-value keywords used by triage.
+analyst_taxonomy:
+  version: analyst_taxonomy_v0.3
+
+  focus_areas:
+    operating_update:
+      label: 经营动态
+      families: [official_ir, orders_tender, operating_metrics]
+      keywords: [订单, 合同, 中标, 招标, 在手订单, 出货量, 销量, 交付量, 产量, 产能, 投产, 扩产, 停产, 复产, 开工率, 产能利用率, 库存]
+
+    financial_leading_indicator:
+      label: 财务领先指标
+      families: [official_ir, financial_leading]
+      keywords: [收入, 毛利率, 单位成本, 费用, 现金流, 应收账款, 存货, 合同负债, 预收款, 减值, 坏账, 资本开支, 研发投入, 盈利预告, 业绩快报, 业绩修正]
+
+    price_cost_margin:
+      label: 价格成本与利润率
+      families: [price_cost_margin]
+      keywords: [价格, 原材料价格, 涨价, 降价, 折扣, 返利, 运费, 能源成本, 汇率, 关税, 单吨利润, 单位毛利, 价差, 成本传导, 价格战]
+
+    customer_change:
+      label: 客户变化
+      families: [customer_supplier, orders_tender]
+      keywords: [新增大客户, 客户流失, 客户认证, 客户份额, 削单, 提货, 客户库存]
+
+    supply_chain:
+      label: 供应商与上游
+      families: [customer_supplier, price_cost_margin]
+      keywords: [供应商, 涨价, 停产, 检修, 事故, 供应中断, 长协, 进口依赖]
+
+    industry_supply_demand:
+      label: 行业供需
+      families: [industry_supply_demand]
+      keywords: [行业价格, 库存, 开工率, 产能利用率, 新增产能, 淘汰产能, 需求, 出口, 进口, 海关数据, 补库, 去库, 供需缺口]
+
+    policy:
+      label: 政策与监管
+      families: [policy_regulatory]
+      keywords: [产业政策, 补贴, 准入, 标准, 环保, 安全, 能耗, 碳排, 出口管制, 反倾销, 关税, 制裁, 备案, 审批, 处罚]
+
+    competition:
+      label: 竞争格局
+      families: [competition_tech]
+      keywords: [竞争对手, 市场份额, 价格战, 渠道, 技术路线, 替代品]
+
+    technology:
+      label: 技术与产品
+      families: [competition_tech]
+      keywords: [新产品, 认证, 验证, 良率, 技术路线, 专利, 工艺, 降本, 替代技术, 召回, 质量问题]
+
+    risk:
+      label: 风险事件
+      families: [risk]
+      keywords: [事故, 处罚, 召回, 诉讼, 仲裁, 债务违约, 管理层变动, 裁员, 停工, 供应中断, 客户违约, 舆情, 地缘]
+
+    capital_markets:
+      label: 资本市场与公司治理
+      families: [capital_markets]
+      keywords: [定增, 回购, 减持, 增持, 股权激励, 员工持股, 分红, 并购重组, 资产处置, 债券发行, 评级变化, 审计意见, 会计政策, 实际控制人, 董事高管]
+
+    overseas_trade:
+      label: 海外与贸易
+      families: [overseas_trade, industry_supply_demand]
+      keywords: [海外订单, 海外产能, 海外客户, 出口数据, 进口数据, 关税, 反倾销, 制裁, 本地化生产, 海外认证, 海外监管, 航运, 港口拥堵, 汇率]
+
+    catalyst:
+      label: 催化剂
+      families: [catalyst]
+      keywords: [财报, 业绩说明会, 投资者日, 新品发布, 政策会议, 招标结果, 投产, 审批, 法院, 展会, 解禁, 分红]
+
+    alt_data:
+      label: 替代数据线索
+      families: [alt_data]
+      keywords: [招聘, 经销商, 评价, 投诉, 下载量, 流量, 情绪, 客流, 航运, 卫星]
+
+# Strong-fact keywords used by rule-based triage regardless of focus area.
+strong_fact_keywords:
+  - 亿元
+  - 万元
+  - 亿
+  - 万吨
+  - 吨
+  - GWh
+  - MWh
+  - 同比
+  - 环比
+  - "%"
+  - 中标
+  - 订单
+  - 合同
+  - 涨价
+  - 降价
+  - 处罚
+  - 投产

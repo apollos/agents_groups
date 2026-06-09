@@ -1,0 +1,241 @@
+# Query Family templates (spec section 8.2).
+# Placeholders: {company} {industry} {product} {customer} {supplier}
+# {competitor} {upstream_material} {downstream} {project} {tender}
+# A template is expanded only when all of its placeholders can be filled
+# from the target profile.
+
+query_families:
+  version: query_families_v0.3
+
+  families:
+    official_ir:
+      label: 官方公告与投资者关系
+      base_priority: 90
+      focus: [operating_update, financial_leading_indicator]
+      templates:
+        - "{company} 公告"
+        - "{company} 重大合同 公告"
+        - "{company} 投资者关系"
+        - "{company} 调研纪要"
+        - "{company} 业绩说明会"
+        - "{company} 业绩预告"
+        - "{company} 业绩快报"
+        - "{company} 经营情况"
+
+    orders_tender:
+      label: 订单合同招投标
+      base_priority: 85
+      focus: [operating_update, customer_change]
+      templates:
+        - "{company} 订单"
+        - "{company} 合同"
+        - "{company} 中标"
+        - "{company} 招标"
+        - "{company} 供货协议"
+        - "{company} 框架协议"
+        - "{company} 在手订单"
+        - "{company} {customer} 订单"
+        - "{company} {product} 中标"
+        - "{industry} 招标"
+        - "{industry} 中标"
+
+    operating_metrics:
+      label: 经营指标
+      base_priority: 80
+      focus: [operating_update]
+      templates:
+        - "{company} 销量"
+        - "{company} 出货量"
+        - "{company} 交付量"
+        - "{company} 产量"
+        - "{company} 库存"
+        - "{company} 开工率"
+        - "{company} 产能利用率"
+        - "{company} 投产"
+        - "{company} 扩产"
+        - "{company} 停产"
+        - "{company} 复产"
+        - "{company} 检修"
+
+    price_cost_margin:
+      label: 价格成本毛利率
+      base_priority: 78
+      focus: [price_cost_margin, financial_leading_indicator]
+      templates:
+        - "{product} 价格"
+        - "{product} 涨价"
+        - "{product} 降价"
+        - "{company} 调价"
+        - "{industry} 价格"
+        - "{industry} 毛利率"
+        - "{upstream_material} 价格"
+        - "{upstream_material} 库存"
+        - "{industry} 成本"
+        - "{industry} 价差"
+        - "{company} 原材料 成本"
+
+    customer_supplier:
+      label: 客户与供应商
+      base_priority: 82
+      focus: [customer_change, supply_chain]
+      templates:
+        - "{company} 大客户"
+        - "{company} 客户"
+        - "{company} 供应商"
+        - "{company} 新客户"
+        - "{company} 客户认证"
+        - "{company} {customer} 供货"
+        - "{customer} 供应商 {product}"
+        - "{supplier} 停产 {company}"
+        - "{supplier} 涨价 {company}"
+        - "{customer} 削单 {company}"
+
+    industry_supply_demand:
+      label: 行业供需
+      base_priority: 75
+      focus: [industry_supply_demand]
+      templates:
+        - "{industry} 供需"
+        - "{industry} 库存"
+        - "{industry} 开工率"
+        - "{industry} 产能利用率"
+        - "{industry} 新增产能"
+        - "{industry} 淘汰产能"
+        - "{industry} 检修"
+        - "{industry} 停产"
+        - "{industry} 需求"
+        - "{industry} 出口"
+        - "{industry} 进口"
+        - "{industry} 海关数据"
+
+    policy_regulatory:
+      label: 政策与监管
+      base_priority: 76
+      focus: [policy]
+      templates:
+        - "{industry} 政策"
+        - "{industry} 监管"
+        - "{industry} 补贴"
+        - "{industry} 标准"
+        - "{industry} 准入"
+        - "{industry} 能耗"
+        - "{industry} 环保"
+        - "{industry} 安全"
+        - "{industry} 出口管制"
+        - "{industry} 反倾销"
+        - "{industry} 关税"
+        - "{company} 处罚"
+        - "{company} 监管"
+
+    competition_tech:
+      label: 竞争与技术
+      base_priority: 70
+      focus: [competition, technology]
+      templates:
+        - "{company} 竞争对手"
+        - "{competitor} {product} 价格"
+        - "{competitor} 扩产"
+        - "{competitor} 中标"
+        - "{industry} 价格战"
+        - "{industry} 市场份额"
+        - "{product} 技术路线"
+        - "{product} 替代技术"
+        - "{company} 新产品"
+        - "{company} 专利"
+
+    risk:
+      label: 风险
+      base_priority: 84
+      focus: [risk]
+      templates:
+        - "{company} 事故"
+        - "{company} 安全事故"
+        - "{company} 环保处罚"
+        - "{company} 质量问题"
+        - "{company} 召回"
+        - "{company} 诉讼"
+        - "{company} 仲裁"
+        - "{company} 债务"
+        - "{company} 裁员"
+        - "{company} 停工"
+        - "{company} 负面舆情"
+
+    financial_leading:
+      label: 财务领先指标
+      base_priority: 79
+      focus: [financial_leading_indicator]
+      templates:
+        - "{company} 毛利率"
+        - "{company} 合同负债"
+        - "{company} 应收账款"
+        - "{company} 存货"
+        - "{company} 现金流"
+        - "{company} 减值"
+        - "{company} 业绩修正"
+        - "{company} 盈利预警"
+        - "{company} 资本开支"
+        - "{company} 研发投入"
+
+    capital_markets:
+      label: 资本市场与公司治理
+      base_priority: 72
+      focus: [capital_markets]
+      templates:
+        - "{company} 定增"
+        - "{company} 回购"
+        - "{company} 减持"
+        - "{company} 增持"
+        - "{company} 股权激励"
+        - "{company} 员工持股"
+        - "{company} 分红"
+        - "{company} 并购重组"
+        - "{company} 资产处置"
+        - "{company} 债券发行"
+        - "{company} 评级"
+        - "{company} 解禁"
+        - "{company} 实际控制人"
+        - "{company} 董事 高管 变动"
+
+    overseas_trade:
+      label: 海外与贸易
+      base_priority: 73
+      focus: [overseas_trade]
+      templates:
+        - "{company} 海外订单"
+        - "{company} 海外产能"
+        - "{company} 海外客户"
+        - "{company} 海外认证"
+        - "{company} 制裁"
+        - "{industry} 出口"
+        - "{industry} 进口"
+        - "{industry} 出口数据"
+        - "{industry} 反倾销"
+        - "{industry} 关税"
+        - "{industry} 航运"
+        - "{industry} 港口 拥堵"
+
+    catalyst:
+      label: 催化剂
+      base_priority: 68
+      focus: [catalyst]
+      templates:
+        - "{company} 财报 日期"
+        - "{company} 业绩说明会"
+        - "{company} 投资者日"
+        - "{company} 新品发布"
+        - "{industry} 会议"
+        - "{industry} 政策会议"
+
+    alt_data:
+      label: 替代数据线索
+      base_priority: 60
+      focus: [alt_data]
+      templates:
+        - "{company} 招聘"
+        - "{company} 工厂招聘"
+        - "{company} 经销商 反馈"
+        - "{product} 投诉"
+        - "{product} 评价"
+        - "{company} 网站流量"
+        - "{industry} 航运 库存"
+        - "{industry} 港口 库存"

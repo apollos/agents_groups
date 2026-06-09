@@ -1,0 +1,15 @@
+# Output limits for model extraction (spec section 15.4).
+output_schema:
+  version: output_schema_v0.3
+  schema_version: bundle_extraction_v0.3
+
+  limits:
+    max_facts: 10
+    max_metrics: 10
+    max_events: 5
+    max_relations: 10
+    max_risks: 5
+    max_catalysts: 5
+    max_signals: 10
+    max_questions: 8
+    max_summary_chars: 500

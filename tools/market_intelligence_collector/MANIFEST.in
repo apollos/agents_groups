@@ -1,0 +1,5 @@
+include README.md
+include market_intelligence_collector.md
+include requirements*.txt
+recursive-include config *.yaml
+recursive-include docs *.md

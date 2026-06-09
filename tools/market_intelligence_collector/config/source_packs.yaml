@@ -1,0 +1,54 @@
+# Source packs help the search engine prefer high-quality sources (spec 8.4).
+# They are appended as additional high-priority queries.
+source_packs:
+  version: source_packs_v0.3
+
+  packs:
+    china_exchange:
+      base_priority: 95
+      templates:
+        - "site:cninfo.com.cn {company}"
+        - "site:sse.com.cn {company}"
+        - "site:szse.cn {company}"
+
+    hk_exchange:
+      base_priority: 93
+      templates:
+        - "site:hkexnews.hk {company}"
+
+    us_filing:
+      base_priority: 90
+      templates:
+        - "site:sec.gov {company}"
+        - "{company} 10-K"
+        - "{company} 10-Q"
+        - "{company} 8-K"
+
+    policy:
+      base_priority: 88
+      templates:
+        - "site:gov.cn {industry} 政策"
+        - "site:miit.gov.cn {industry}"
+        - "site:ndrc.gov.cn {industry}"
+        - "site:customs.gov.cn {industry} 出口"
+
+    tender:
+      base_priority: 85
+      templates:
+        - "{company} 中标"
+        - "{company} 招标"
+        - "{industry} 中标"
+        - "{industry} 招标"
+
+# Domain -> source_type mapping used by triage / source quality scoring.
+source_type_by_domain:
+  cninfo.com.cn: exchange
+  sse.com.cn: exchange
+  szse.cn: exchange
+  hkexnews.hk: exchange
+  sec.gov: regulator
+  gov.cn: regulator
+  miit.gov.cn: regulator
+  ndrc.gov.cn: regulator
+  customs.gov.cn: regulator
+  csrc.gov.cn: regulator

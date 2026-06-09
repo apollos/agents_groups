@@ -1,0 +1,74 @@
+target_profiles:
+  company_300750:
+    target_id: company_300750
+    type: company
+    canonical_name: "宁德时代新能源科技股份有限公司"
+    aliases:
+      - 宁德时代
+      - CATL
+      - Contemporary Amperex Technology
+      - "300750"
+    markets:
+      - A股
+    products:
+      - 动力电池
+      - 储能电池
+      - 锂电池
+    business_segments:
+      - 动力电池系统
+      - 储能系统
+      - 电池材料
+    regions:
+      - 中国
+      - 欧洲
+      - 北美
+    known_customers:
+      - 特斯拉
+      - 理想汽车
+      - 蔚来
+      - 宝马
+    known_suppliers:
+      - 碳酸锂供应商
+      - 正极材料供应商
+      - 负极材料供应商
+    upstream_terms:
+      - 碳酸锂
+      - 氢氧化锂
+      - 正极材料
+      - 负极材料
+      - 电解液
+    downstream_terms:
+      - 新能源汽车
+      - 储能
+      - 电网侧储能
+    competitors:
+      - 比亚迪
+      - 中创新航
+      - 国轩高科
+
+  industry_pv_glass:
+    target_id: industry_pv_glass
+    type: industry
+    canonical_name: "光伏玻璃"
+    aliases:
+      - 光伏压延玻璃
+      - solar glass
+    upstream_terms:
+      - 纯碱
+      - 石英砂
+      - 天然气
+    downstream_terms:
+      - 光伏组件
+      - 光伏装机
+      - 分布式光伏
+    core_metrics:
+      - 价格
+      - 库存
+      - 开工率
+      - 产能利用率
+      - 新增产能
+      - 出口
+    representative_companies:
+      - 福莱特
+      - 信义光能
+      - 亚玛顿

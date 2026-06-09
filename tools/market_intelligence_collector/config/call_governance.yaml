@@ -1,0 +1,51 @@
+# Call governance (spec sections 15 and 21.2).
+call_governance:
+  version: call_governance_v0.3
+
+  budgets:
+    max_model_calls_per_run: 30
+    max_model_calls_per_source_link: 3
+    max_parallel_model_groups_per_run: 5
+    # Dedicated sub-budget for model-based SERP batch triage so it never starves
+    # extraction calls. Pipeline defaults this to ~1/6 of the run budget.
+    max_batch_triage_calls: 5
+    max_input_chars_per_model_call: 8000
+    max_selected_passages_per_link: 8
+
+  reuse:
+    canonical_url_cache: true
+    content_hash_cache: true
+    same_event_cache: true
+    same_query_batch_cache: true
+
+  batching:
+    serp_batch_triage: true
+    serp_batch_size: 20
+
+  extraction:
+    prefer_bundle_extraction: true
+    split_tasks_only_when:
+      - selected_text_too_long
+      - model_output_schema_failed
+      - task_policy_requires_split
+
+  early_stop:
+    enabled: true
+    stop_fallback_when:
+      schema_valid: true
+      confidence_gte: 0.75
+      required_objects_extracted: true
+
+  triggers:
+    call_model_when:
+      rule_score_between: [40, 90]
+      high_value_keyword_matched: true
+      source_type_in: [official, exchange, regulator, company, industry]
+      contains_metric_or_amount: true
+      contains_relation_signal: true
+      coverage_gap_related: true
+    skip_model_when:
+      duplicate_canonical_url_analyzed: true
+      same_content_hash_analyzed: true
+      title_snippet_low_relevance: true
+      same_event_high_confidence_already_exists: true

@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual envs
+.venv/
+venv/
+
+# Env / secrets
+.env
+
+# Local databases
+*.db
+mic.db
+
+# Test / tooling caches
+.pytest_cache/
+.ruff_cache/
+
+# Run logs and e2e artifacts (keep the dir via logs/.gitkeep)
+logs/*
+!logs/.gitkeep

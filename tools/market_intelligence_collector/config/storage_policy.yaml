@@ -1,0 +1,28 @@
+# Storage policy (spec section 21.4). Only links + structured results are
+# persisted; raw page content is never stored.
+storage_policy:
+  version: storage_policy_v0.3
+
+  persist:
+    source_links: true
+    search_hits: true
+    read_attempts: true
+    content_hash: true
+    model_runs: true
+    model_outputs: true
+    merged_analysis: true
+    briefs: true
+    facts: true
+    metrics: true
+    events: true
+    relations: true
+    risks: true
+    catalysts: true
+    analyst_questions: true
+    coverage_gaps: true
+
+  raw_content_persistence:
+    html: false
+    pdf: false
+    full_text: false
+    screenshot: false

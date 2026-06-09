@@ -1,0 +1,3 @@
+# Needed only for real OpenAI-compatible model calls (DeepSeek/Qwen/SiliconFlow/...).
+# The adapter imports this lazily, so offline mock mode does not require it.
+openai>=1.30

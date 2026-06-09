@@ -1,0 +1,44 @@
+# Multi-model merge policy (spec sections 14 and 21.3).
+merge_policy:
+  version: merge_policy_v0.3
+
+  decision_merge:
+    method: weighted_vote
+    decision_values:
+      save_structured: 1.0
+      link_only: 0.5
+      skip: 0.0
+
+  score_merge:
+    method: weighted_median
+
+  object_merge:
+    facts: deduplicate_by_statement_entities_period
+    metrics: deduplicate_by_metric_scope_period
+    events: cluster_then_field_merge
+    relations: deduplicate_by_subject_relation_object_qualifier
+    risks: deduplicate_by_risk_type_summary
+    catalysts: deduplicate_by_type_date_description
+
+  conflict_rules:
+    amount_conflict: keep_all_and_mark_conflict
+    date_conflict: keep_range_or_mark_uncertain
+    relation_direction_conflict: require_arbitration
+    impact_direction_conflict: mark_mixed_or_unclear
+
+  rules:
+    save_structured:
+      min_decision_score: 0.65
+      min_overall_score: 70
+    link_only:
+      min_decision_score: 0.35
+
+  # Effective-weight component defaults (spec 14.2). Provider-family similarity
+  # is used to discount correlated models.
+  effective_weight:
+    provider_family_independence:
+      qwen_dashscope: qwen
+      siliconflow: qwen
+      deepseek: deepseek
+      openclaw: openclaw
+    correlated_family_discount: 0.6

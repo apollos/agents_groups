@@ -1,0 +1,73 @@
+# Task-level model strategy (spec sections 11.3 and 21.1).
+model_policies:
+  version: model_policy_v0.3
+
+  tasks:
+    serp_batch_triage:
+      call_mode: batch_triage
+      batch_size: 20
+      trigger:
+        use_model_when_rule_score_between: [45, 75]
+      models:
+        - model_id: qwen_plus
+          priority: 1
+          weight: 1.0
+        - model_id: deepseek_v4_pro
+          priority: 2
+          weight: 1.0
+
+    bundle_extraction:
+      call_mode: priority_fallback
+      fallback_when:
+        - request_failed
+        - json_invalid
+        - schema_invalid
+        - confidence_below_threshold
+      confidence_threshold: 0.4
+      models:
+        - model_id: qwen_plus
+          priority: 1
+          weight: 0.5
+        - model_id: deepseek_v4_pro
+          priority: 2
+          weight: 0.5
+
+    # Cascade: call the first model; only call the next when corroboration is
+    # weak (confidence below cascade_confidence_threshold). Available as an
+    # alternative extraction strategy; select per target/task as needed.
+    cascade_extraction:
+      call_mode: cascade
+      cascade_confidence_threshold: 0.7
+      models:
+        - model_id: qwen_plus
+          priority: 1
+          weight: 0.5
+        - model_id: deepseek_v4_pro
+          priority: 2
+          weight: 0.5
+
+    high_value_parallel_analysis:
+      call_mode: parallel_ensemble
+      trigger:
+        source_type_in: [official, exchange, regulator]
+        materiality_score_gte: 80
+      models:
+        - model_id: qwen_plus
+          weight: 0.4
+        - model_id: deepseek_v4_pro
+          weight: 0.4
+        - model_id: siliconflow_qwen
+          weight: 0.2
+
+    arbitration:
+      call_mode: priority_fallback
+      trigger:
+        model_conflict: true
+        field_conflict_in: [amount, customer, event_date, impact_direction]
+      models:
+        - model_id: deepseek_v4_pro
+          priority: 1
+          weight: 1.0
+        - model_id: openclaw_research
+          priority: 2
+          weight: 1.0

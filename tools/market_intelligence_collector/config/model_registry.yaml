@@ -1,0 +1,62 @@
+# Model registry (spec section 11.2). No system-level "cheap/strong" tiering;
+# selection is driven purely by model_policies.yaml.
+model_registry:
+  version: model_registry_v0.3
+
+  models:
+    deepseek_v4_pro:
+      provider_type: openai_compatible_direct
+      provider: deepseek
+      endpoint: "https://api.deepseek.com"
+      api_key_env: DEEPSEEK_API_KEY
+      model: "deepseek-chat"
+      enabled: true
+      capabilities:
+        json_output: true
+        tool_calling: true
+        reasoning: true
+      tags: [cn, reasoning, structured]
+
+    qwen_plus:
+      provider_type: openai_compatible_direct
+      provider: qwen_dashscope
+      endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+      api_key_env: DASHSCOPE_API_KEY
+      model: "qwen-plus"
+      enabled: true
+      capabilities:
+        json_output: true
+        tool_calling: true
+      tags: [cn, structured]
+
+    siliconflow_qwen:
+      provider_type: openai_compatible_direct
+      provider: siliconflow
+      endpoint: "https://api.siliconflow.cn/v1"
+      api_key_env: SILICONFLOW_API_KEY
+      model: "Qwen/Qwen3-32B"
+      enabled: true
+      capabilities:
+        json_output: true
+      tags: [cn, platform]
+
+    openclaw_research:
+      provider_type: openai_compatible_gateway
+      provider: openclaw
+      endpoint: "http://127.0.0.1:18789/v1"
+      api_key_env: OPENCLAW_GATEWAY_TOKEN
+      model: "openclaw/research"
+      enabled: false
+      capabilities:
+        chat: true
+        gateway_routing: true
+        agent_routing: true
+      tags: [gateway, configurable_backend]
+
+# Rough price hints (USD per 1M tokens) used only for cost estimation/logging.
+# Not used for selection.
+pricing_hints:
+  deepseek_v4_pro: { input: 0.27, output: 1.10 }
+  qwen_plus: { input: 0.40, output: 1.20 }
+  siliconflow_qwen: { input: 0.20, output: 0.20 }
+  openclaw_research: { input: 0.0, output: 0.0 }

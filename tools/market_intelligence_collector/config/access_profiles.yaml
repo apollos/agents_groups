@@ -1,0 +1,19 @@
+# Access profiles control how the Link Reader fetches URLs (spec config list).
+access_profiles:
+  version: access_profiles_v0.3
+
+  default:
+    profile_id: default
+    timeout_seconds: 15
+    max_retries: 2
+    user_agent: "Mozilla/5.0 (compatible; MIC/0.3; +https://example.com/mic)"
+    follow_redirects: true
+    respect_robots: true
+
+  patient:
+    profile_id: patient
+    timeout_seconds: 30
+    max_retries: 3
+    user_agent: "Mozilla/5.0 (compatible; MIC/0.3; +https://example.com/mic)"
+    follow_redirects: true
+    respect_robots: true
