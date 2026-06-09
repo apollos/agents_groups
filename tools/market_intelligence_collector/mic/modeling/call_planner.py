@@ -11,12 +11,13 @@ NOT decide cheap-vs-strong; all model selection comes from config.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 from mic.config import MICConfig
 from mic.modeling.adapter import ModelCallResult, ModelRegistry
 from mic.modeling.prompts import (
-    build_arbitration_messages, build_batch_triage_messages, build_bundle_messages,
+    build_arbitration_messages,
+    build_batch_triage_messages,
+    build_bundle_messages,
 )
 from mic.profile import TargetProfile
 from mic.reader import ReadResult
@@ -29,12 +30,22 @@ class CallBudget:
     max_model_calls_per_source_link: int = 3
     max_parallel_model_groups_per_run: int = 5
     max_batch_triage_calls: int = 5
+    min_extraction_calls_reserved: int = 1
     calls_used: int = 0
     parallel_groups_used: int = 0
     batch_triage_calls_used: int = 0
 
     def can_call(self, n: int = 1) -> bool:
         return self.calls_used + n <= self.max_model_calls_per_run
+
+    def can_call_batch_triage(self) -> bool:
+        if self.batch_triage_calls_used >= self.max_batch_triage_calls:
+            return False
+        # Reserve at least one extraction call when the run has any model-call
+        # budget. Batch SERP triage is supposed to reduce waste, not consume the
+        # only available model call and leave no article extractable.
+        reserved = min(self.min_extraction_calls_reserved, self.max_model_calls_per_run)
+        return self.calls_used + 1 <= self.max_model_calls_per_run - reserved
 
     def record(self, n: int = 1) -> None:
         self.calls_used += n
@@ -46,7 +57,7 @@ class LinkModelResult:
     task_name: str
     call_mode: str
     outputs: list[ModelCallResult] = field(default_factory=list)
-    skipped_reason: Optional[str] = None
+    skipped_reason: str | None = None
     was_split: bool = False
     arbitrated: bool = False
 
@@ -122,9 +133,25 @@ class ModelCallPlanner:
             return self._parallel_ensemble(policy, messages)
         if call_mode == "cascade":
             return self._cascade(policy, messages)
+        if call_mode == "single_model":
+            return self._single_model(policy, messages)
         return self._priority_fallback(policy, messages)
 
     # --- call modes --------------------------------------------------------
+
+    def _single_model(self, policy: dict, messages: list[dict]) -> list[ModelCallResult]:
+        """Call exactly one configured model (spec 11.1 single_model)."""
+        models = sorted(policy.get("models", []), key=lambda x: x.get("priority", 99))
+        if not self.budget.can_call(1):
+            return []
+        for spec in models:
+            adapter = self.registry.get(spec["model_id"])
+            if adapter is None or not adapter.usable:
+                continue
+            res = adapter.complete(messages)
+            self.budget.record(1)
+            return [res]
+        return []
 
     def _priority_fallback(self, policy: dict, messages: list[dict]) -> list[ModelCallResult]:
         models = sorted(policy.get("models", []), key=lambda x: x.get("priority", 99))
@@ -198,9 +225,7 @@ class ModelCallPlanner:
         policy = self.policies.get("serp_batch_triage", {})
         if not items or not policy:
             return {}
-        if self.budget.batch_triage_calls_used >= self.budget.max_batch_triage_calls:
-            return {}
-        if not self.budget.can_call(1):
+        if not self.budget.can_call_batch_triage():
             return {}
         models = sorted(policy.get("models", []), key=lambda x: x.get("priority", 99))
         messages = build_batch_triage_messages(items)

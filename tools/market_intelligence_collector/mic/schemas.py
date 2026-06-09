@@ -6,7 +6,7 @@ objects that get persisted. Raw page content is never modeled or stored.
 
 from __future__ import annotations
 
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -46,29 +46,29 @@ class Brief(BaseModel):
 
 
 class EvidenceLocator(BaseModel):
-    passage_id: Optional[str] = None
-    section: Optional[str] = None
-    table_id: Optional[str] = None
+    passage_id: str | None = None
+    section: str | None = None
+    table_id: str | None = None
 
 
 class FactItem(BaseModel):
-    fact_id: Optional[str] = None
+    fact_id: str | None = None
     fact_type: str = "unknown"
     fact_statement: str = ""
     entities: dict[str, Any] = Field(default_factory=dict)
     metrics: dict[str, Any] = Field(default_factory=dict)
-    period: Optional[str] = None
+    period: str | None = None
     direction: str = "unclear"
     evidence_locator: EvidenceLocator = Field(default_factory=EvidenceLocator)
     confidence: float = 0.0
 
 
 class MetricObservation(BaseModel):
-    metric_id: Optional[str] = None
+    metric_id: str | None = None
     metric_name: str = ""
-    metric_value: Optional[float] = None
-    unit: Optional[str] = None
-    period: Optional[str] = None
+    metric_value: float | None = None
+    unit: str | None = None
+    period: str | None = None
     scope: dict[str, Any] = Field(default_factory=dict)
     comparison: dict[str, Any] = Field(default_factory=dict)
     interpretation: str = ""
@@ -85,9 +85,9 @@ class EventImpact(BaseModel):
 
 
 class EventCard(BaseModel):
-    event_id: Optional[str] = None
+    event_id: str | None = None
     event_type: str = "unknown"
-    event_date: Optional[str] = None
+    event_date: str | None = None
     summary: str = ""
     entities: dict[str, Any] = Field(default_factory=dict)
     metrics: dict[str, Any] = Field(default_factory=dict)
@@ -100,11 +100,11 @@ class EventCard(BaseModel):
 class EntityRef(BaseModel):
     name: str = ""
     type: str = "company"
-    ticker: Optional[str] = None
+    ticker: str | None = None
 
 
 class RelationRecord(BaseModel):
-    relation_id: Optional[str] = None
+    relation_id: str | None = None
     subject_entity: EntityRef = Field(default_factory=EntityRef)
     relation_type: str = "unknown"
     object_entity: EntityRef = Field(default_factory=EntityRef)
@@ -114,7 +114,7 @@ class RelationRecord(BaseModel):
 
 
 class RiskFlag(BaseModel):
-    risk_id: Optional[str] = None
+    risk_id: str | None = None
     risk_type: str = "unknown"
     risk_summary: str = ""
     severity: str = "low"
@@ -125,17 +125,17 @@ class RiskFlag(BaseModel):
 
 
 class CatalystItem(BaseModel):
-    catalyst_id: Optional[str] = None
+    catalyst_id: str | None = None
     catalyst_type: str = "unknown"
-    expected_date: Optional[str] = None
+    expected_date: str | None = None
     description: str = ""
     potential_impact: str = ""
     confidence: float = 0.0
 
 
 class AnalystQuestion(BaseModel):
-    question_id: Optional[str] = None
-    related_event_id: Optional[str] = None
+    question_id: str | None = None
+    related_event_id: str | None = None
     question: str = ""
     reason: str = ""
     priority: str = "medium"
@@ -144,7 +144,7 @@ class AnalystQuestion(BaseModel):
 
 
 class CoverageGap(BaseModel):
-    gap_id: Optional[str] = None
+    gap_id: str | None = None
     gap_type: str = "unknown"
     description: str = ""
     suggested_next_queries: list[str] = Field(default_factory=list)
@@ -155,10 +155,10 @@ class CoverageGap(BaseModel):
 
 
 class CustomerSupplierSignal(BaseModel):
-    signal_id: Optional[str] = None
+    signal_id: str | None = None
     signal_type: str = "unknown"  # new_customer | customer_loss | customer_order | ...
     customer_or_supplier: str = ""
-    product: Optional[str] = None
+    product: str | None = None
     business_meaning: str = ""
     impact_channels: list[str] = Field(default_factory=list)
     evidence_locator: EvidenceLocator = Field(default_factory=EvidenceLocator)
@@ -166,22 +166,22 @@ class CustomerSupplierSignal(BaseModel):
 
 
 class PriceCostMarginSignal(BaseModel):
-    signal_id: Optional[str] = None
+    signal_id: str | None = None
     signal_type: str = "unknown"  # product_price_up | raw_material_cost_up | ...
     product_or_material: str = ""
-    value: Optional[float] = None
-    unit: Optional[str] = None
-    period: Optional[str] = None
+    value: float | None = None
+    unit: str | None = None
+    period: str | None = None
     direction: str = "unclear"
     evidence_locator: EvidenceLocator = Field(default_factory=EvidenceLocator)
     confidence: float = 0.0
 
 
 class PolicyRegulatorySignal(BaseModel):
-    signal_id: Optional[str] = None
+    signal_id: str | None = None
     policy_type: str = "unknown"  # subsidy | restriction | approval | tariff | ...
     issuer: str = ""
-    effective_date: Optional[str] = None
+    effective_date: str | None = None
     affected_entities: list[str] = Field(default_factory=list)
     affected_products: list[str] = Field(default_factory=list)
     impact_channels: list[str] = Field(default_factory=list)
@@ -195,7 +195,7 @@ class PolicyRegulatorySignal(BaseModel):
 
 class BundleExtraction(BaseModel):
     schema_version: str = "bundle_extraction_v0.3"
-    source_link_id: Optional[str] = None
+    source_link_id: str | None = None
     decision: str = "skip"
     overall_score: float = 0.0
     confidence: float = 0.0
@@ -227,8 +227,8 @@ class SearchHit(BaseModel):
     domain: str = ""
     rank: int = 0
     provider: str = ""
-    publish_time_guess: Optional[str] = None
-    query_family: Optional[str] = None
+    publish_time_guess: str | None = None
+    query_family: str | None = None
 
 
 class Passage(BaseModel):

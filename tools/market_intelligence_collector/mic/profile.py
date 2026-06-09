@@ -30,7 +30,7 @@ class TargetProfile:
     raw: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_config(cls, data: dict[str, Any]) -> "TargetProfile":
+    def from_config(cls, data: dict[str, Any]) -> TargetProfile:
         return cls(
             target_id=data["target_id"],
             type=data.get("type", "company"),

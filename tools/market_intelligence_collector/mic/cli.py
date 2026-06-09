@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -51,6 +50,7 @@ def collect(
         help="Comma-separated focus areas"),
     time_window: str = typer.Option("30d", help="e.g. 7d, 30d, 90d"),
     max_queries: int = typer.Option(80),
+    max_search_hits: int = typer.Option(800, "--max-search-hits", help="Maximum raw search hits to persist/process"),
     max_links: int = typer.Option(40),
     max_model_calls: int = typer.Option(30),
     json_out: bool = typer.Option(False, "--json", help="Print raw JSON report"),
@@ -60,8 +60,8 @@ def collect(
         "focus": [f.strip() for f in focus.split(",") if f.strip()],
         "time_window": time_window,
         "budget_profile": {
-            "max_queries": max_queries, "max_links_to_read": max_links,
-            "max_model_calls": max_model_calls,
+            "max_queries": max_queries, "max_search_hits": max_search_hits,
+            "max_links_to_read": max_links, "max_model_calls": max_model_calls,
         },
     }
     api = _api()
@@ -104,7 +104,7 @@ def relations(target_id: str, since: str = "180d") -> None:
 
 
 @app.command()
-def questions(target_id: str, priority: Optional[str] = None) -> None:
+def questions(target_id: str, priority: str | None = None) -> None:
     """Show open analyst questions for a target."""
     rows = _api().get_analyst_questions(target_id, priority=priority, status="open")
     for r in rows[:30]:
@@ -114,7 +114,7 @@ def questions(target_id: str, priority: Optional[str] = None) -> None:
 
 
 @app.command()
-def gaps(target_id: str, priority: Optional[str] = None) -> None:
+def gaps(target_id: str, priority: str | None = None) -> None:
     """Show open coverage gaps for a target."""
     rows = _api().get_coverage_gaps(target_id, priority=priority, status="open")
     table = Table(title=f"Coverage gaps: {target_id}")

@@ -7,7 +7,7 @@ out of the store. This is the contract a downstream analyst agent codes against.
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from mic.config import MICConfig, load_config
 from mic.pipeline import Pipeline
@@ -15,7 +15,7 @@ from mic.store import Repository, get_database
 
 
 class AnalystAPI:
-    def __init__(self, config: Optional[MICConfig] = None):
+    def __init__(self, config: MICConfig | None = None):
         self.config = config or load_config()
         self.pipeline = Pipeline(self.config)
         self.repo = Repository(get_database(self.config.database_url))

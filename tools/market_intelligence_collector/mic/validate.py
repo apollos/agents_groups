@@ -9,7 +9,6 @@ Validates raw model output BEFORE merge/persist:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 from pydantic import ValidationError
 
@@ -29,7 +28,7 @@ class ValidationReport:
     schema_valid: bool
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
-    bundle: Optional[BundleExtraction] = None
+    bundle: BundleExtraction | None = None
 
 
 class BundleValidator:

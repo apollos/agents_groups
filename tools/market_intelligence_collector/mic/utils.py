@@ -6,7 +6,7 @@ import hashlib
 import re
 import uuid
 from datetime import datetime, timezone
-from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 
 def new_id(prefix: str) -> str:

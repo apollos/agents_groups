@@ -35,7 +35,7 @@ class SearchHitTriage:
         rng = gov.get("rule_score_between", [40, 90])
         self.thresholds = TriageThresholds(model_lo=rng[0], model_hi=rng[1])
 
-    def for_profile(self, profile: TargetProfile) -> "SearchHitTriage":
+    def for_profile(self, profile: TargetProfile) -> SearchHitTriage:
         self.entity_terms = profile.all_entity_terms()
         return self
 

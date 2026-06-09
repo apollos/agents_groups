@@ -13,7 +13,7 @@ import os
 import re
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from mic.config import MICConfig
 
@@ -34,7 +34,7 @@ class ModelCallResult:
     model_name: str
     status: str  # success | request_failed | json_invalid
     raw_text: str = ""
-    parsed: Optional[dict] = None
+    parsed: dict | None = None
     input_chars: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
@@ -42,8 +42,8 @@ class ModelCallResult:
     cached_tokens: int = 0
     latency_ms: int = 0
     estimated_cost: float = 0.0
-    error_type: Optional[str] = None
-    error_message: Optional[str] = None
+    error_type: str | None = None
+    error_message: str | None = None
     is_mock: bool = False
 
 
@@ -124,7 +124,7 @@ class ModelAdapter:
         return round((in_tok * pin + out_tok * pout) / 1_000_000, 6)
 
     @staticmethod
-    def _parse_json(text: str) -> Optional[dict]:
+    def _parse_json(text: str) -> dict | None:
         text = text.strip()
         if text.startswith("```"):
             text = re.sub(r"^```(json)?", "", text).rstrip("`").strip()
@@ -375,5 +375,5 @@ class ModelRegistry:
                 json_output=spec.get("capabilities", {}).get("json_output", True),
             )
 
-    def get(self, model_config_id: str) -> Optional[ModelAdapter]:
+    def get(self, model_config_id: str) -> ModelAdapter | None:
         return self.adapters.get(model_config_id)

@@ -6,18 +6,19 @@ Analyst Agent API. Keeps SQLAlchemy details out of the rest of the codebase.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional, Sequence
+from typing import Any
 
 from sqlalchemy import func, select
 
 from mic import schemas
-from mic.store.database import Database
 from mic.store import models as m
+from mic.store.database import Database
 from mic.utils import new_id, now, parse_time_window_days
 
 
-def _to_dt(value: Any) -> Optional[datetime]:
+def _to_dt(value: Any) -> datetime | None:
     if value in (None, "", "null"):
         return None
     if isinstance(value, datetime):
@@ -123,13 +124,13 @@ class Repository:
             ))
         return link_id
 
-    def find_link_by_canonical(self, canonical_url: str) -> Optional[m.SourceLink]:
+    def find_link_by_canonical(self, canonical_url: str) -> m.SourceLink | None:
         with self.db.session() as s:
             return s.scalars(
                 select(m.SourceLink).where(m.SourceLink.canonical_url == canonical_url)
             ).first()
 
-    def find_link_by_content_hash(self, content_hash: str) -> Optional[m.SourceLink]:
+    def find_link_by_content_hash(self, content_hash: str) -> m.SourceLink | None:
         with self.db.session() as s:
             return s.scalars(
                 select(m.SourceLink).where(m.SourceLink.content_hash == content_hash)
@@ -138,7 +139,7 @@ class Repository:
     def find_analyzed_link_by_canonical(
         self, canonical_url: str, target_id: str,
         exclude_run_id: str | None = None,
-    ) -> Optional[m.SourceLink]:
+    ) -> m.SourceLink | None:
         """Latest already-analyzed link for this canonical URL (cross-run reuse).
 
         Only returns links that produced a MergedAnalysis for the same target, so
@@ -162,7 +163,7 @@ class Repository:
     def find_analyzed_link_by_content_hash(
         self, content_hash: str, target_id: str,
         exclude_link_id: str | None = None,
-    ) -> Optional[m.SourceLink]:
+    ) -> m.SourceLink | None:
         """Latest already-analyzed link with the same body content hash."""
         if not content_hash:
             return None
@@ -210,7 +211,7 @@ class Repository:
                 if simhash:
                     row.simhash = simhash
 
-    def get_link(self, link_id: str) -> Optional[m.SourceLink]:
+    def get_link(self, link_id: str) -> m.SourceLink | None:
         with self.db.session() as s:
             return s.get(m.SourceLink, link_id)
 
@@ -275,7 +276,8 @@ class Repository:
     # --- Merged analysis + structured objects -----------------------------
 
     def save_merged_analysis(self, target_id: str, source_link_id: str,
-                            bundle: schemas.BundleExtraction, merge_meta: dict) -> str:
+                            bundle: schemas.BundleExtraction, merge_meta: dict,
+                            search_run_id: str | None = None) -> str:
         merged_id = new_id("merged")
         with self.db.session() as s:
             s.add(m.MergedAnalysis(
@@ -404,6 +406,19 @@ class Repository:
                     reason=q.reason, priority=q.priority,
                     suggested_queries=q.suggested_queries, status=q.status,
                     created_at=now(),
+                ))
+
+            # Bundle-level coverage gaps are first-class structured outputs in
+            # spec §13.13/§16. Persist them with the current run id so
+            # get_coverage_gaps() and the E2E DB counts reflect what the model
+            # actually found missing for this source. The table is run/target
+            # scoped by design and does not store raw content.
+            for gap in bundle.coverage_gaps:
+                s.add(m.CoverageGapRow(
+                    id=new_id("gap"), search_run_id=search_run_id, target_id=target_id,
+                    gap_type=gap.gap_type, description=gap.description,
+                    suggested_next_queries=gap.suggested_next_queries,
+                    priority=gap.priority, status="open", created_at=now(),
                 ))
         return merged_id
 
@@ -650,7 +665,7 @@ class Repository:
     # --- Analyst queries (spec section 20) --------------------------------
 
     @staticmethod
-    def _since_dt(since: str | None) -> Optional[datetime]:
+    def _since_dt(since: str | None) -> datetime | None:
         days = parse_time_window_days(since)
         if days is None:
             return None

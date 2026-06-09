@@ -93,7 +93,7 @@ class MockSearchProvider(SearchProvider):
             title = title_tpl.format(**fill)
             body = body_tpl.format(**fill)
             domain, _stype = _DOMAINS[(rank - 1) % len(_DOMAINS)]
-            slug = hashlib.md5(f"{query}{rank}".encode("utf-8")).hexdigest()[:10]
+            slug = hashlib.md5(f"{query}{rank}".encode()).hexdigest()[:10]
             url = f"https://www.{domain}/news/{slug}.html"
             self._bodies[url] = f"<html><head><title>{title}</title></head><body>" \
                                 f"<article><h1>{title}</h1><p>{body}</p></article></body></html>"
@@ -170,26 +170,46 @@ class BingProvider(SearchProvider):
         return hits
 
 
+def _mock_from_config(pcfg: dict[str, Any]) -> MockSearchProvider:
+    return MockSearchProvider(pcfg.get("hits_per_query", 6))
+
+
 def build_search_provider(config) -> SearchProvider:
-    """Factory based on search_providers.yaml + MIC_ALLOW_MOCK."""
+    """Factory based on search_providers.yaml + MIC_ALLOW_MOCK.
+
+    Real providers are validated at construction time. If a real provider is
+    selected but its key is missing, ``MIC_ALLOW_MOCK=true`` falls back to the
+    deterministic mock provider; ``MIC_ALLOW_MOCK=false`` fails fast. This keeps
+    the README contract honest and avoids silent zero-hit runs where every query
+    raises inside ``search()`` and gets swallowed by the pipeline's per-query
+    error isolation.
+    """
     sp_cfg = config.search_providers
     active = sp_cfg.get("active", "mock")
     providers = sp_cfg.get("providers", {})
     pcfg = providers.get(active, {})
     ptype = pcfg.get("type", active)
 
-    try:
-        if ptype == "serpapi":
-            return SerpApiProvider(pcfg)
-        if ptype == "bing":
-            return BingProvider(pcfg)
-        if ptype == "mock":
-            return MockSearchProvider(pcfg.get("hits_per_query", 6))
-    except RuntimeError:
+    if ptype == "mock":
+        return _mock_from_config(pcfg)
+
+    if ptype == "serpapi":
+        provider = SerpApiProvider(pcfg)
+        if provider.api_key:
+            return provider
         if config.allow_mock:
-            return MockSearchProvider(pcfg.get("hits_per_query", 6))
-        raise
+            return _mock_from_config(pcfg)
+        raise RuntimeError("SERPAPI_API_KEY not set and MIC_ALLOW_MOCK=false")
+
+    if ptype == "bing":
+        provider = BingProvider(pcfg)
+        if provider.api_key:
+            return provider
+        if config.allow_mock:
+            return _mock_from_config(pcfg)
+        raise RuntimeError("BING_SEARCH_API_KEY not set and MIC_ALLOW_MOCK=false")
+
     # Unknown type -> mock fallback if allowed.
     if config.allow_mock:
-        return MockSearchProvider(pcfg.get("hits_per_query", 6))
+        return _mock_from_config(pcfg)
     raise ValueError(f"Unknown search provider type: {ptype}")

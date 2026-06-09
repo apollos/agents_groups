@@ -128,7 +128,7 @@ class QueryPlanner:
         results = []
         for combo in itertools.product(*choices):
             text = template
-            for ph, val in zip(placeholders, combo):
+            for ph, val in zip(placeholders, combo, strict=True):
                 text = text.replace(f"{{{ph}}}", val, 1)
             results.append(text)
             if len(results) >= 6:

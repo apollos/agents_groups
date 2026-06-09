@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Optional
 
 import httpx
 from bs4 import BeautifulSoup
@@ -28,15 +27,15 @@ _DATE_RE = re.compile(r"\d{4}[-/年]\d{1,2}([-/月]\d{1,2})?|20\d{2}Q[1-4]|近\d
 class ReadResult:
     source_link_id: str
     read_status: str  # read | failed
-    http_status: Optional[int] = None
-    content_type: Optional[str] = None
-    content_length: Optional[int] = None
-    title: Optional[str] = None
-    publish_time: Optional[str] = None
-    content_hash: Optional[str] = None
-    simhash: Optional[str] = None
+    http_status: int | None = None
+    content_type: str | None = None
+    content_length: int | None = None
+    title: str | None = None
+    publish_time: str | None = None
+    content_hash: str | None = None
+    simhash: str | None = None
     passages: list[Passage] = field(default_factory=list)
-    failure_reason: Optional[str] = None
+    failure_reason: str | None = None
 
 
 class LinkReader:
@@ -69,7 +68,7 @@ class LinkReader:
 
     # --- fetch -------------------------------------------------------------
 
-    def _fetch(self, url: str) -> tuple[Optional[str], Optional[int], Optional[str]]:
+    def _fetch(self, url: str) -> tuple[str | None, int | None, str | None]:
         # Offline/mock support: synthetic providers can serve bodies directly.
         if self.search_provider is not None:
             body = self.search_provider.page_body(url)
@@ -87,7 +86,7 @@ class LinkReader:
 
     # --- extraction --------------------------------------------------------
 
-    def _extract(self, html: str) -> tuple[str, Optional[str], str]:
+    def _extract(self, html: str) -> tuple[str, str | None, str]:
         soup = BeautifulSoup(html, "lxml")
         for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
             tag.decompose()
@@ -109,7 +108,7 @@ class LinkReader:
         return title, publish_time, "\n".join(blocks)
 
     @staticmethod
-    def _guess_publish_time(soup: BeautifulSoup) -> Optional[str]:
+    def _guess_publish_time(soup: BeautifulSoup) -> str | None:
         for meta_name in ("article:published_time", "publishdate", "pubdate", "date"):
             tag = soup.find("meta", attrs={"property": meta_name}) or \
                   soup.find("meta", attrs={"name": meta_name})

@@ -9,7 +9,7 @@ Orchestrates the full run:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from mic.config import MICConfig, load_config
 from mic.logging_utils import get_logger, setup_logging
@@ -49,7 +49,7 @@ class RunStats:
     cached_or_reused_results: int = 0
     estimated_model_cost: float = 0.0
     passage_selection_saved_chars: int = 0
-    log_file: Optional[str] = None
+    log_file: str | None = None
     structured: dict[str, int] = field(default_factory=lambda: {
         "briefs": 0, "facts": 0, "metrics": 0, "events": 0, "relations": 0,
         "risks": 0, "catalysts": 0, "customer_supplier_signals": 0,
@@ -60,7 +60,7 @@ class RunStats:
 
 
 class Pipeline:
-    def __init__(self, config: Optional[MICConfig] = None):
+    def __init__(self, config: MICConfig | None = None):
         self.config = config or load_config()
         self.repo = Repository(get_database(self.config.database_url))
         self.planner = QueryPlanner(self.config)
@@ -141,9 +141,13 @@ class Pipeline:
             stats.queries_executed += 1
             try:
                 hits = self.search.search(pq.query_text, pq.query_family, limit=12)
-            except Exception:  # noqa: BLE001 - one bad query shouldn't kill the run
+            except Exception as exc:  # noqa: BLE001 - one bad query shouldn't kill the run
+                logger.warning("search_query_failed run_id=%s query=%r error=%s",
+                               run_id, pq.query_text, exc)
                 continue
             for hit in hits:
+                if stats.search_hits >= max_hits:
+                    break
                 stats.search_hits += 1
                 canonical = canonicalize_url(hit.url)
                 if not hit.domain:
@@ -188,7 +192,7 @@ class Pipeline:
         # 15.2 D): one model call decides many hits, instead of one call per hit.
         self._batch_triage(call_planner, triaged, stats)
 
-        for link_id, hit, tri in triaged:
+        for link_id, _hit, tri in triaged:
             self.repo.update_link_triage(
                 link_id, tri.read_priority, tri.triage_decision,
                 reason=tri.reason, signals=tri.matched_signals,
@@ -306,7 +310,7 @@ class Pipeline:
                         "merge_method": merge_result.merge_method,
                         "model_outputs": merge_result.model_outputs,
                         "field_conflicts": merge_result.field_conflicts,
-                    })
+                    }, search_run_id=run_id)
                 self._tally(stats, bundle)
 
         # Persist run-level coverage gaps that weren't tied to a saved link.

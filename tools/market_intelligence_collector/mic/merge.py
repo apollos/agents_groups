@@ -13,10 +13,14 @@ from typing import Any
 
 from mic.config import MICConfig
 from mic.schemas import (
-    BundleExtraction, CatalystItem, EventCard, FactItem, MetricObservation,
-    RelationRecord, RiskFlag,
+    BundleExtraction,
+    CatalystItem,
+    EventCard,
+    FactItem,
+    MetricObservation,
+    RelationRecord,
+    RiskFlag,
 )
-
 
 # Inverse relation pairs used to detect ordered-pair direction conflicts.
 _INVERSE = {
@@ -80,6 +84,7 @@ class MultiModelMerger:
         if len(contributions) == 1:
             c = contributions[0]
             c.bundle.source_link_id = source_link_id
+            self._apply_decision_rules(c.bundle)
             return MergeResult(
                 c.bundle, "low", "single_model",
                 model_outputs=[self._trace(c)],
@@ -125,11 +130,45 @@ class MultiModelMerger:
             analyst_questions=self._dedup_questions(questions)[:8],
             coverage_gaps=gaps[:8],
         )
+        self._apply_decision_rules(merged)
         return MergeResult(
             merged, disagreement, "weighted_merge",
             field_conflicts=conflicts,
             model_outputs=[self._trace(c) for c in contributions],
         )
+
+    def _apply_decision_rules(self, bundle: BundleExtraction) -> None:
+        """Apply configured decision thresholds after score aggregation.
+
+        The merge policy has two gates for ``save_structured``: a weighted
+        decision score and a minimum overall score. The original code applied
+        only the decision-score gate, so a low-quality single model output could
+        still be persisted as structured data. Downgrading to ``link_only`` keeps
+        the source traceable while preventing weak structured objects from being
+        treated as analyst-grade facts.
+        """
+        save_rule = self.rules.get("save_structured", {})
+        min_overall = save_rule.get("min_overall_score")
+        if (bundle.decision == "save_structured" and min_overall is not None
+                and bundle.overall_score < float(min_overall)):
+            bundle.decision = "link_only"
+        if bundle.decision == "link_only":
+            self._clear_structured_objects(bundle)
+
+    @staticmethod
+    def _clear_structured_objects(bundle: BundleExtraction) -> None:
+        """Keep a link-only result from leaking weak structured claims.
+
+        ``link_only`` means the source should stay traceable, but its extracted
+        facts/events/relations/signals should not enter analyst-grade tables.
+        We intentionally keep brief/questions/gaps because they help explain why
+        the source was retained and what should be checked next.
+        """
+        for attr in (
+            "facts", "metrics", "events", "relations", "risks", "catalysts",
+            "customer_supplier_signals", "price_cost_margin_signals", "policy_signals",
+        ):
+            setattr(bundle, attr, [])
 
     # --- effective weight (spec 14.2) -------------------------------------
 

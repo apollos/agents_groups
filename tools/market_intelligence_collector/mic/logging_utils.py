@@ -11,7 +11,6 @@ import os
 import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
-from typing import Optional, Tuple
 
 _LOGGER_NAME = "mic"
 _FILE_HANDLER_MARKER = "_mic_run_file_handler"
@@ -45,7 +44,7 @@ def setup_logging(
     *,
     console: bool = False,
     filename: str | None = None,
-) -> Tuple[logging.Logger, Optional[Path]]:
+) -> tuple[logging.Logger, Path | None]:
     """Configure and return the project logger.
 
     Sequential runs replace the previous MIC file handler, so repeated API calls
@@ -67,7 +66,7 @@ def setup_logging(
         setattr(ch, _CONSOLE_HANDLER_MARKER, True)
         logger.addHandler(ch)
 
-    log_path: Optional[Path] = None
+    log_path: Path | None = None
     if run_id or filename:
         for handler in list(logger.handlers):
             if getattr(handler, _FILE_HANDLER_MARKER, False):

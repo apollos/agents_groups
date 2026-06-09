@@ -199,8 +199,9 @@ def test_cross_run_reuse_clones_analysis():
 
 def test_storage_policy_no_raw_content_columns():
     from sqlalchemy import inspect
-    from mic.store import get_database
+
     from mic.config import load_config
+    from mic.store import get_database
     api = AnalystAPI()
     api.collect_intelligence("company_300750", {
         "focus": ["operating_update"],
@@ -224,3 +225,119 @@ def test_feedback_adjusts_model_weight():
     assert fid
     scores = api.repo.model_feedback_scores()
     assert scores.get("qwen_plus", 0) > 1.0  # positive feedback raises weight
+
+
+def test_editable_install_metadata_present():
+    # README tells users to run: pip install -e ".[dev]". This file is the
+    # minimal project metadata that makes that command work.
+    from pathlib import Path
+    assert (Path(__file__).resolve().parents[1] / "pyproject.toml").exists()
+
+
+def test_real_search_provider_missing_key_falls_back_to_mock_when_allowed(monkeypatch):
+    from mic.config import load_config
+    from mic.search import MockSearchProvider, build_search_provider
+    cfg = load_config()
+    cfg.raw["search_providers"]["active"] = "serpapi"
+    monkeypatch.delenv("SERPAPI_API_KEY", raising=False)
+    monkeypatch.setenv("MIC_ALLOW_MOCK", "true")
+    provider = build_search_provider(cfg)
+    assert isinstance(provider, MockSearchProvider)
+
+
+def test_real_search_provider_missing_key_fails_fast_when_mock_disabled(monkeypatch):
+    import pytest
+
+    from mic.config import load_config
+    from mic.search import build_search_provider
+    cfg = load_config()
+    cfg.raw["search_providers"]["active"] = "bing"
+    monkeypatch.delenv("BING_SEARCH_API_KEY", raising=False)
+    monkeypatch.setenv("MIC_ALLOW_MOCK", "false")
+    with pytest.raises(RuntimeError):
+        build_search_provider(cfg)
+
+
+def test_max_search_hits_budget_is_strictly_respected():
+    api = AnalystAPI()
+    report = api.collect_intelligence("company_300750", {
+        "focus": ["operating_update", "customer_change"],
+        "time_window": "30d",
+        "budget_profile": {
+            "max_queries": 20,
+            "max_search_hits": 3,
+            "max_links_to_read": 3,
+            "max_model_calls": 3,
+        },
+    })
+    assert report["summary"]["search_hits"] == 3
+    assert report["summary"]["unique_source_links"] <= 3
+
+
+def test_bundle_coverage_gaps_are_persisted_for_api_readback():
+    api = AnalystAPI()
+    report = api.collect_intelligence("company_300750", {
+        "focus": ["operating_update", "customer_change", "risk"],
+        "time_window": "30d",
+        "budget_profile": {"max_queries": 20, "max_links_to_read": 8, "max_model_calls": 8},
+    })
+    assert report["structured_outputs"]["coverage_gaps"] > 0
+    gaps = api.get_coverage_gaps("company_300750")
+    assert len(gaps) >= report["structured_outputs"]["coverage_gaps"]
+
+
+def test_merge_policy_min_overall_score_downgrades_to_link_only():
+    from mic.config import load_config
+    from mic.merge import ModelContribution, MultiModelMerger
+    from mic.schemas import BundleExtraction, FactItem
+    cfg = load_config()
+    merger = MultiModelMerger(cfg)
+
+    single = BundleExtraction(
+        decision="save_structured", overall_score=50, confidence=0.9,
+        facts=[FactItem(fact_type="claim", fact_statement="low quality claim")],
+    )
+    single_res = merger.merge("link_low", "company_300750", [
+        ModelContribution(model_config_id="m1", provider="deepseek", bundle=single)
+    ])
+    assert single_res.bundle.decision == "link_only"
+    assert single_res.bundle.facts == []
+
+    a = BundleExtraction(decision="save_structured", overall_score=55, confidence=0.9)
+    b = BundleExtraction(decision="save_structured", overall_score=60, confidence=0.8)
+    multi_res = merger.merge("link_low2", "company_300750", [
+        ModelContribution(model_config_id="m1", provider="deepseek", bundle=a),
+        ModelContribution(model_config_id="m2", provider="qwen_dashscope", bundle=b),
+    ])
+    assert multi_res.bundle.decision == "link_only"
+
+
+def test_single_model_mode_calls_exactly_one_model():
+    from mic.config import load_config
+    from mic.modeling.adapter import ModelRegistry
+    from mic.modeling.call_planner import CallBudget, ModelCallPlanner
+    cfg = load_config()
+    planner = ModelCallPlanner(cfg, ModelRegistry(cfg), CallBudget(max_model_calls_per_run=10))
+    policy = dict(cfg.model_policies["tasks"]["bundle_extraction"])
+    policy["call_mode"] = "single_model"
+    msgs = [{"role": "system", "content": "x"},
+            {"role": "user", "content": '{"task":"bundle_extraction","selected_passages":[]}'}]
+    outputs = planner._dispatch("single_model", policy, msgs)
+    assert len(outputs) == 1
+    assert planner.budget.calls_used == 1
+
+
+def test_batch_triage_does_not_consume_the_only_model_call():
+    api = AnalystAPI()
+    report = api.collect_intelligence("company_300750", {
+        "focus": ["operating_update", "customer_change", "risk"],
+        "time_window": "30d",
+        "budget_profile": {
+            "max_queries": 20,
+            "max_links_to_read": 5,
+            "max_model_calls": 1,
+        },
+    })
+    assert report["summary"]["model_calls"] <= 1
+    assert report["summary"]["batch_triage_calls"] == 0
+    assert report["structured_outputs"]["briefs"] >= 1
