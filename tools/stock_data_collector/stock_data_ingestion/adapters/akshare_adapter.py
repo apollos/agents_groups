@@ -5,9 +5,10 @@ import inspect
 import math
 import os
 import re
+import time as time_module
 from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta
-from typing import Any, Iterable, Iterator
+from typing import Any, Callable, Iterable, Iterator
 
 from stock_data_ingestion.adapters.base import BaseDataAdapter
 from stock_data_ingestion.normalization.datetime_utils import now_asia_shanghai, normalize_trade_date
@@ -63,8 +64,24 @@ class AKShareAdapter(BaseDataAdapter):
         )
 
 
-    def _call_ak(self, func: Any, **kwargs: Any) -> Any:
-        """Call an AKShare function while tolerating minor signature drift across versions."""
+    def _call_ak(self, func: Any, *, retry_on_transient: bool = True, **kwargs: Any) -> Any:
+        """Call an AKShare function inside the Eastmoney cookie context, with transient-network
+        retries and tolerance for minor signature drift across AKShare versions.
+
+        The cookie injection is URL-gated, so non-eastmoney calls (e.g. Sina, CNInfo) are
+        unaffected. Transient network failures (connection reset/aborted, premature response,
+        timeouts) are retried with exponential backoff; deterministic errors propagate at once.
+
+        Pass ``retry_on_transient=False`` for endpoints that already have their own
+        provider/source fallback (e.g. daily bars, money-flow), so a transient failure fails
+        fast and lets the caller switch to the alternate source instead of retrying in place.
+        """
+        with self._eastmoney_cookie_request_headers():
+            if retry_on_transient:
+                return self._invoke_with_transient_retry(lambda: self._invoke_ak(func, kwargs))
+            return self._invoke_ak(func, kwargs)
+
+    def _invoke_ak(self, func: Any, kwargs: dict[str, Any]) -> Any:
         try:
             return func(**kwargs)
         except TypeError as first_exc:
@@ -81,6 +98,51 @@ class AKShareAdapter(BaseDataAdapter):
             if filtered == kwargs or not filtered:
                 raise first_exc
             return func(**filtered)
+
+    @staticmethod
+    def _is_transient_network_error(exc: Exception) -> bool:
+        transient_types = {
+            "ConnectionError",
+            "ChunkedEncodingError",
+            "Timeout",
+            "ReadTimeout",
+            "ConnectTimeout",
+            "ProtocolError",
+            "RemoteDisconnected",
+            "IncompleteRead",
+        }
+        if type(exc).__name__ in transient_types:
+            return True
+        msg = str(exc).lower()
+        return any(
+            token in msg
+            for token in (
+                "response ended prematurely",
+                "connection aborted",
+                "connection reset",
+                "remote end closed connection",
+                "timed out",
+                "max retries exceeded",
+            )
+        )
+
+    def _invoke_with_transient_retry(self, fn: Callable[[], Any], attempts: int = 3) -> Any:
+        delay = 0.5
+        for attempt in range(max(1, attempts)):
+            try:
+                return fn()
+            except Exception as exc:  # noqa: BLE001
+                if attempt == attempts - 1 or not self._is_transient_network_error(exc):
+                    # Annotate with the number of retries already spent so the eventual
+                    # ProviderFetchResult error can report a truthful retry_count.
+                    try:
+                        exc._transient_retry_count = attempt  # type: ignore[attr-defined]
+                    except Exception:  # noqa: BLE001
+                        pass
+                    raise
+                time_module.sleep(delay)
+                delay = min(delay * 2, 4.0)
+        raise RuntimeError("unreachable: transient retry loop exited without returning or raising")
 
     def _records(self, df: Any) -> list[dict[str, Any]]:
         if df is None:
@@ -267,25 +329,55 @@ class AKShareAdapter(BaseDataAdapter):
 
     @contextmanager
     def _eastmoney_cookie_request_headers(self) -> Iterator[None]:
+        """Inject browser Cookie/UA/Referer into every eastmoney.com request made while active.
+
+        Eastmoney anti-scraping rejects many ``*_em`` endpoints unless a valid browser
+        Cookie is supplied. AKShare issues these requests via ``requests.get``/``post`` and
+        its ``akshare.request`` helper, which all funnel through ``requests.Session.request``;
+        patching that single hook therefore covers get/post/Session uniformly. ``curl_cffi``
+        is patched best-effort for the few endpoints that may bypass ``requests``.
+        """
         headers = self._eastmoney_money_flow_headers()
         if not headers:
             yield
             return
 
-        import requests  # type: ignore
-
-        original_get = requests.get
-
-        def _get_with_eastmoney_headers(url: Any, *args: Any, **kwargs: Any) -> Any:
+        def _maybe_inject(url: Any, kwargs: dict[str, Any]) -> None:
             if "eastmoney.com" in str(url):
-                kwargs["headers"] = {**headers, **dict(kwargs.get("headers") or {})}
-            return original_get(url, *args, **kwargs)
+                # Caller-supplied headers stay as the base; our anti-scraping headers win.
+                kwargs["headers"] = {**dict(kwargs.get("headers") or {}), **headers}
 
-        requests.get = _get_with_eastmoney_headers
+        def _wrap_request(original: Any) -> Any:
+            def _patched(session: Any, method: Any, url: Any, *args: Any, **kwargs: Any) -> Any:
+                _maybe_inject(url, kwargs)
+                return original(session, method, url, *args, **kwargs)
+
+            return _patched
+
+        patches: list[tuple[Any, str, Any]] = []
+        try:
+            import requests  # type: ignore
+
+            original_request = requests.sessions.Session.request
+            requests.sessions.Session.request = _wrap_request(original_request)
+            patches.append((requests.sessions.Session, "request", original_request))
+        except Exception:  # noqa: BLE001
+            pass
+
+        try:
+            from curl_cffi import requests as cffi_requests  # type: ignore
+
+            original_cffi = cffi_requests.Session.request
+            cffi_requests.Session.request = _wrap_request(original_cffi)
+            patches.append((cffi_requests.Session, "request", original_cffi))
+        except Exception:  # noqa: BLE001
+            pass
+
         try:
             yield
         finally:
-            requests.get = original_get
+            for target, attr, original in patches:
+                setattr(target, attr, original)
 
     def _eastmoney_money_flow_records(self, request: StockDataRequest) -> list[dict[str, Any]]:
         import requests  # type: ignore
@@ -758,6 +850,7 @@ class AKShareAdapter(BaseDataAdapter):
                         with self._eastmoney_cookie_request_headers():
                             df = self._call_ak(
                                 ak.stock_zh_a_hist,
+                                retry_on_transient=False,
                                 symbol=symbol,
                                 period=self._period(request),
                                 start_date=self._start_date(request),
@@ -810,7 +903,7 @@ class AKShareAdapter(BaseDataAdapter):
         started = now_asia_shanghai()
         try:
             ak = self._import_ak(source_api, started)
-            rows = self._records(ak.stock_zh_a_spot_em())
+            rows = self._records(self._call_ak(ak.stock_zh_a_spot_em))
             if request.tickers:
                 codes = self._wanted_codes(request)
                 rows = [r for r in rows if str(self._value(r, "代码")) in codes]
@@ -998,7 +1091,7 @@ class AKShareAdapter(BaseDataAdapter):
                     continue
 
                 # Fallback: current Eastmoney A-share spot table exposes PE/PB/market-cap fields.
-                for row in self._records(ak.stock_zh_a_spot_em()):
+                for row in self._records(self._call_ak(ak.stock_zh_a_spot_em)):
                     if str(self._value(row, "代码")) != symbol:
                         continue
                     row = self._add_identity(row, normalized)
@@ -1036,7 +1129,7 @@ class AKShareAdapter(BaseDataAdapter):
             records: list[dict[str, Any]] = []
 
             if include_industry:
-                industry_names = self._records(ak.stock_board_industry_name_em())
+                industry_names = self._records(self._call_ak(ak.stock_board_industry_name_em))
                 for i, board in enumerate(industry_names):
                     if max_boards is not None and i >= int(max_boards):
                         break
@@ -1045,9 +1138,9 @@ class AKShareAdapter(BaseDataAdapter):
                     if not board_name and not board_code:
                         continue
                     try:
-                        cons = self._records(ak.stock_board_industry_cons_em(symbol=str(board_name or board_code)))
+                        cons = self._records(self._call_ak(ak.stock_board_industry_cons_em, symbol=str(board_name or board_code)))
                     except Exception:  # noqa: BLE001
-                        cons = self._records(ak.stock_board_industry_cons_em(symbol=str(board_code))) if board_code else []
+                        cons = self._records(self._call_ak(ak.stock_board_industry_cons_em, symbol=str(board_code))) if board_code else []
                     for row in cons:
                         ticker = self._safe_normalize(self._value(row, "代码", "股票代码"))
                         if not ticker or (wanted and ticker not in wanted):
@@ -1067,7 +1160,7 @@ class AKShareAdapter(BaseDataAdapter):
                         records.append(row)
 
             if include_concept:
-                concept_names = self._records(ak.stock_board_concept_name_em())
+                concept_names = self._records(self._call_ak(ak.stock_board_concept_name_em))
                 for i, board in enumerate(concept_names):
                     if max_boards is not None and i >= int(max_boards):
                         break
@@ -1076,9 +1169,9 @@ class AKShareAdapter(BaseDataAdapter):
                     if not board_name and not board_code:
                         continue
                     try:
-                        cons = self._records(ak.stock_board_concept_cons_em(symbol=str(board_name or board_code)))
+                        cons = self._records(self._call_ak(ak.stock_board_concept_cons_em, symbol=str(board_name or board_code)))
                     except Exception:  # noqa: BLE001
-                        cons = self._records(ak.stock_board_concept_cons_em(symbol=str(board_code))) if board_code else []
+                        cons = self._records(self._call_ak(ak.stock_board_concept_cons_em, symbol=str(board_code))) if board_code else []
                     for row in cons:
                         ticker = self._safe_normalize(self._value(row, "代码", "股票代码"))
                         if not ticker or (wanted and ticker not in wanted):
@@ -1116,7 +1209,7 @@ class AKShareAdapter(BaseDataAdapter):
                 symbol = self._ak_symbol(normalized)
                 market = self._market_code(normalized)
                 with self._eastmoney_cookie_request_headers():
-                    rows = self._records(self._call_ak(ak.stock_individual_fund_flow, stock=symbol, market=market))
+                    rows = self._records(self._call_ak(ak.stock_individual_fund_flow, retry_on_transient=False, stock=symbol, market=market))
                 for row in rows:
                     if not self._date_in_request_range(self._value(row, "日期", "trade_date"), request):
                         continue
@@ -1143,13 +1236,17 @@ class AKShareAdapter(BaseDataAdapter):
             if os.getenv("EASTMONEY_COOKIE", "").strip():
                 fallback_source_api = "stock_individual_fund_flow+eastmoney_fflow_daykline"
                 try:
-                    records = self._eastmoney_money_flow_records(request)
+                    # Daykline is the last-resort money-flow source, so retry transient drops here.
+                    records = self._invoke_with_transient_retry(lambda: self._eastmoney_money_flow_records(request))
                     return self._empty_result(fallback_source_api, records, started)
                 except Exception as fallback_exc:  # noqa: BLE001
+                    retry_count = getattr(fallback_exc, "_transient_retry_count", 0)
                     if "RemoteDisconnected" in repr(fallback_exc) or "Connection aborted" in repr(fallback_exc):
-                        fallback_exc = RuntimeError(
+                        wrapped = RuntimeError(
                             f"{fallback_exc}; Eastmoney browser cookie may be expired. Refresh EASTMONEY_COOKIE from a verified browser session."
                         )
+                        wrapped._transient_retry_count = retry_count  # type: ignore[attr-defined]
+                        fallback_exc = wrapped
                     return self._error_result(fallback_source_api, started, fallback_exc, ErrorCode.UNKNOWN_ERROR, retryable=True)
             return self._error_result(source_api, started, exc, ErrorCode.UNKNOWN_ERROR, retryable=True)
 
@@ -1284,7 +1381,7 @@ class AKShareAdapter(BaseDataAdapter):
                         records.append(row)
 
             if "repurchase" in action_types:
-                repurchase_rows = self._records(ak.stock_repurchase_em())
+                repurchase_rows = self._records(self._call_ak(ak.stock_repurchase_em))
                 for row in repurchase_rows:
                     ticker = self._safe_normalize(self._value(row, "股票代码", "代码"))
                     if not ticker or (request.tickers and ticker not in self._wanted_tickers(request)):

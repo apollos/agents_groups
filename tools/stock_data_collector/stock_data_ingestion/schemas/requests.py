@@ -104,6 +104,7 @@ class StockDataRequest(BaseModel):
                 provider=self.canonical_provider,
                 tickers=self.tickers,
                 universe_id=self.universe_id,
+                exchanges=self.exchanges,
                 start_date=self.start_date,
                 end_date=self.end_date,
                 frequency=str(self.frequency) if self.frequency else None,

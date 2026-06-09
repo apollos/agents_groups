@@ -74,6 +74,9 @@ class BaseDataAdapter(ABC):
                 source_site=self.source_site,
                 error_code=code,
                 retryable=retryable,
+                # Surface how many transient-retry attempts were spent before giving up.
+                # Adapters that retry annotate the exception via _invoke_with_transient_retry.
+                retry_count=int(getattr(exc, "_transient_retry_count", 0) or 0),
             ),
         )
 

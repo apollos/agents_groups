@@ -28,6 +28,7 @@ def generate_idempotency_key(
     provider: str,
     tickers: Iterable[str] | None = None,
     universe_id: Optional[str] = None,
+    exchanges: Iterable[str] | None = None,
     start_date: str | date | datetime | None = None,
     end_date: str | date | datetime | None = None,
     frequency: Optional[str] = None,
@@ -36,11 +37,20 @@ def generate_idempotency_key(
     provider_set: Iterable[str] | None = None,
     schema_version: str = "v0.1",
 ) -> str:
+    # Identity slot: tickers when present, else an explicit universe, else the exchange set.
+    # The exchange fallback keeps exchange-scoped request types (e.g. trade_calendar) from
+    # collapsing to a single shared key across exchanges.
+    if tickers:
+        identity = _sorted_join(tickers)
+    elif universe_id:
+        identity = universe_id
+    else:
+        identity = _sorted_join(exchanges)
     parts = [
         module_name,
         request_type,
         provider,
-        _sorted_join(tickers) if tickers else (universe_id or "none"),
+        identity,
         _fmt_date(start_date),
         _fmt_date(end_date),
         frequency or "none",

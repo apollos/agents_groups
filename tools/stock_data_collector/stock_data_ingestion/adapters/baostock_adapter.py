@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import math
 import re
 from datetime import date, datetime
@@ -58,7 +60,10 @@ class BaoStockAdapter(BaseDataAdapter):
             return False
         import baostock as bs  # type: ignore
 
-        lg = bs.login()
+        # BaoStock's SDK prints "login success!" to stdout; redirect it so the CLI
+        # stdout stays a clean single JSON document (see StockDataResponse contract).
+        with contextlib.redirect_stdout(io.StringIO()):
+            lg = bs.login()
         if getattr(lg, "error_code", "0") != "0":
             return False
         self._bs = bs
@@ -69,7 +74,8 @@ class BaoStockAdapter(BaseDataAdapter):
         if self._bs is None or not self._authenticated:
             return
         try:
-            self._bs.logout()
+            with contextlib.redirect_stdout(io.StringIO()):
+                self._bs.logout()
         except Exception:  # noqa: BLE001
             pass
         finally:
@@ -122,16 +128,22 @@ class BaoStockAdapter(BaseDataAdapter):
         error_code = str(getattr(result, "error_code", "0"))
         if error_code != "0":
             raise RuntimeError(f"BaoStock {source_api} failed: {error_code} {getattr(result, 'error_msg', '')}")
+        # Prefer the row-by-row cursor API. BaoStock's ResultData.get_data() concatenates
+        # paginated results via the removed pandas.DataFrame.append, which raises
+        # "'DataFrame' object has no attribute 'append'" under pandas>=2.0 for multi-page
+        # endpoints such as query_all_stock. next()/get_row_data() paginate safely.
+        if hasattr(result, "next") and hasattr(result, "get_row_data"):
+            rows: list[dict[str, Any]] = []
+            fields = list(getattr(result, "fields", []) or [])
+            while result.next():
+                rows.append(self._clean_row(dict(zip(fields, result.get_row_data()))))
+            return rows
         if hasattr(result, "get_data"):
             df = result.get_data()
             if df is None or bool(getattr(df, "empty", False)):
                 return []
             return [self._clean_row(dict(row)) for row in df.to_dict(orient="records")]
-        rows: list[dict[str, Any]] = []
-        fields = list(getattr(result, "fields", []))
-        while result.next():
-            rows.append(self._clean_row(dict(zip(fields, result.get_row_data()))))
-        return rows
+        return []
 
     @staticmethod
     def _date_to_baostock(value: Any) -> str | None:

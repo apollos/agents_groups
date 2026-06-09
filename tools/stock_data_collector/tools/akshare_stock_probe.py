@@ -22,6 +22,12 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
+# Allow running as a standalone script (python tools/akshare_stock_probe.py): ensure the repo
+# root is importable so the probe can reuse the production adapter's cookie-injection mechanism.
+_REPO_ROOT = str(Path(__file__).resolve().parent.parent)
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
 STATUS_PASS = "PASS"
 STATUS_PASS_WARNING = "PASS_WITH_WARNING"
 STATUS_EMPTY = "EMPTY"
@@ -189,25 +195,18 @@ def eastmoney_headers() -> dict[str, str]:
 
 @contextmanager
 def eastmoney_cookie_request_headers() -> Iterator[None]:
-    headers = eastmoney_headers()
-    if not headers:
+    """Inject Eastmoney browser Cookie/UA/Referer into every eastmoney.com request.
+
+    Delegates to the production AKShareAdapter context manager so the probe uses the exact
+    same injection mechanism as the live ingestion path: it patches
+    ``requests.sessions.Session.request`` AND ``curl_cffi.requests.Session.request`` (not just
+    ``requests.get``), and the anti-scraping headers take precedence over caller-supplied ones.
+    This keeps probe results faithful to what the adapter actually does for ``*_em`` endpoints.
+    """
+    from stock_data_ingestion.adapters.akshare_adapter import AKShareAdapter
+
+    with AKShareAdapter()._eastmoney_cookie_request_headers():  # noqa: SLF001 - shared injection mechanism
         yield
-        return
-
-    import requests  # type: ignore
-
-    original_get = requests.get
-
-    def get_with_eastmoney_headers(url: Any, *args: Any, **kwargs: Any) -> Any:
-        if "eastmoney.com" in str(url):
-            kwargs["headers"] = {**headers, **dict(kwargs.get("headers") or {})}
-        return original_get(url, *args, **kwargs)
-
-    requests.get = get_with_eastmoney_headers
-    try:
-        yield
-    finally:
-        requests.get = original_get
 
 
 def eastmoney_secid(ticker: str) -> str:

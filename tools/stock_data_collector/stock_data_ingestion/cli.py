@@ -108,7 +108,24 @@ def cmd_fetch_trade_calendar(args: argparse.Namespace) -> None:
         status = "partial_success"
     else:
         status = "failed"
-    print(json.dumps({"status": status, "exchanges": exchanges, "responses": payloads}, ensure_ascii=False, indent=2, default=_json_default))
+    # Surface an aggregate persistence summary at the top level so agents relying on the
+    # documented response contract still see whether writes happened, even though each
+    # exchange keeps its own detailed `persistence`/`data` block under `responses`.
+    saved_flags = [bool((payload.get("persistence") or {}).get("saved")) for payload in payloads]
+    persistence_summary = {
+        "saved": bool(saved_flags) and all(saved_flags),
+        "saved_any": any(saved_flags),
+        "exchanges_saved": sum(1 for flag in saved_flags if flag),
+        "exchanges_total": len(payloads),
+    }
+    print(
+        json.dumps(
+            {"status": status, "exchanges": exchanges, "persistence": persistence_summary, "responses": payloads},
+            ensure_ascii=False,
+            indent=2,
+            default=_json_default,
+        )
+    )
 
 
 def cmd_fetch_historical_bars(args: argparse.Namespace) -> None:
@@ -400,7 +417,10 @@ def cmd_verify_raw(args: argparse.Namespace) -> None:
 
 
 def cmd_verify_eastmoney_cookie(args: argparse.Namespace) -> None:
+    import sys
+
     from stock_data_ingestion.adapters.akshare_adapter import AKShareAdapter
+    from stock_data_ingestion.schemas.records import AdapterFetchStatus
 
     request = StockDataRequest(
         request_id="verify_eastmoney_cookie",
@@ -412,14 +432,59 @@ def cmd_verify_eastmoney_cookie(args: argparse.Namespace) -> None:
         canonical_provider="akshare",
     )
     adapter = AKShareAdapter()
-    ok = False
-    if adapter._eastmoney_money_flow_headers():  # noqa: SLF001 - CLI verifies this adapter-specific credential path.
+
+    # `verify eastmoney-cookie` answers one question: does the cookie-gated Eastmoney daykline
+    # endpoint return data with the configured EASTMONEY_COOKIE? stdout stays a clean true/false
+    # so scripts can branch on it; human-readable diagnostics go to stderr.
+    cookie_present = bool(adapter._eastmoney_money_flow_headers())  # noqa: SLF001 - CLI verifies this adapter-specific credential path.
+    cookie_path_ok = False
+    cookie_error = ""
+    if cookie_present:
         try:
-            ok = bool(adapter._eastmoney_money_flow_records(request))  # noqa: SLF001
-        except Exception:
-            ok = False
-    print("true" if ok else "false")
-    if not ok:
+            # Retry transient network failures so a flaky connection or short-lived Eastmoney
+            # throttle does not get misreported as an invalid/expired cookie.
+            rows = adapter._invoke_with_transient_retry(  # noqa: SLF001
+                lambda: adapter._eastmoney_money_flow_records(request)  # noqa: SLF001
+            )
+            cookie_path_ok = bool(rows)
+        except Exception as exc:  # noqa: BLE001
+            cookie_error = f"{type(exc).__name__}: {exc}"
+
+    print("true" if cookie_path_ok else "false")
+
+    if cookie_path_ok:
+        print("eastmoney-cookie: OK - cookie-gated daykline endpoint returned data.", file=sys.stderr)
+    elif not cookie_present:
+        print(
+            "eastmoney-cookie: no EASTMONEY_COOKIE configured; set it in .env to enable cookie-gated Eastmoney endpoints.",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            f"eastmoney-cookie: cookie-gated daykline path failed ({cookie_error or 'no rows returned'}).",
+            file=sys.stderr,
+        )
+        # Disambiguate "cookie expired/invalid" from "transient network / Eastmoney throttling"
+        # by probing the AKShare-native money-flow path, which does not need the cookie.
+        native_ok = False
+        try:
+            native = adapter.fetch_money_flow(request)
+            native_ok = native.status == AdapterFetchStatus.success and native.rows_fetched > 0
+        except Exception:  # noqa: BLE001
+            native_ok = False
+        if native_ok:
+            print(
+                "eastmoney-cookie: note - AKShare-native money-flow path still returned data, so "
+                "`fetch money-flow` may succeed anyway. The cookie may be expired OR Eastmoney just throttled this probe.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "eastmoney-cookie: note - native money-flow path also returned no data; refresh EASTMONEY_COOKIE and/or retry later.",
+                file=sys.stderr,
+            )
+
+    if not cookie_path_ok:
         raise SystemExit(1)
 
 
