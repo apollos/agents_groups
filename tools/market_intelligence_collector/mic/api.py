@@ -24,7 +24,10 @@ class AnalystAPI:
     def collect_intelligence(self, target_id: str, task_profile: dict[str, Any],
                             model_policy_version: str | None = None,
                             query_plan_version: str | None = None) -> dict:
-        return self.pipeline.collect_intelligence(target_id, task_profile)
+        return self.pipeline.collect_intelligence(
+            target_id, task_profile,
+            model_policy_version=model_policy_version,
+            query_plan_version=query_plan_version)
 
     # 20.2
     def get_recent_events(self, target_id: str, since: str = "30d",

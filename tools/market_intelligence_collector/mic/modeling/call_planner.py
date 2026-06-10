@@ -11,6 +11,7 @@ NOT decide cheap-vs-strong; all model selection comes from config.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from mic.config import MICConfig
 from mic.modeling.adapter import ModelCallResult, ModelRegistry
@@ -20,8 +21,11 @@ from mic.modeling.prompts import (
     build_bundle_messages,
 )
 from mic.profile import TargetProfile
-from mic.reader import ReadResult
 from mic.schemas import Passage, TriageResult
+
+if TYPE_CHECKING:  # type-hint only; a runtime import would be circular
+    # (reader -> modeling.vision -> modeling/__init__ -> call_planner -> reader)
+    from mic.reader import ReadResult
 
 
 @dataclass
@@ -85,11 +89,40 @@ class ModelCallPlanner:
         skip = gov.get("skip_model_when", {})
         if duplicate and skip.get("duplicate_canonical_url_analyzed"):
             return False, "duplicate_canonical_url"
-        if not triage.need_model:
+        # Note: same_content_hash_analyzed is enforced upstream in the pipeline
+        # (content-hash reuse paths run before any model call), and
+        # title_snippet_low_relevance is enforced by triage (skip_for_now links
+        # never reach this planner).
+        reason = self._call_trigger(triage, source_type, gov.get("call_model_when", {}))
+        if reason is None:
             return False, "triage_no_model"
         if not self.budget.can_call(1):
             return False, "run_budget_exhausted"
-        return True, "ok"
+        return True, reason
+
+    @staticmethod
+    def _call_trigger(triage: TriageResult, source_type: str,
+                      call: dict) -> str | None:
+        """First matched call_model_when condition (spec 15.2), or None.
+
+        ``rule_score_between`` is what triage encoded into ``need_model``; the
+        other conditions can promote a read-decision link that fell outside the
+        score band.
+        """
+        if triage.need_model:
+            return "rule_score_between"
+        signals = set(triage.matched_signals)
+        if call.get("contains_metric_or_amount") and "amount_mentioned" in signals:
+            return "contains_metric_or_amount"
+        if call.get("high_value_keyword_matched") and "strong_fact_keyword" in signals:
+            return "high_value_keyword_matched"
+        if call.get("contains_relation_signal") and signals & {
+                "customer_keyword", "supplier_keyword",
+                "order_keyword", "tender_keyword"}:
+            return "contains_relation_signal"
+        if source_type in call.get("source_type_in", []):
+            return "source_type_in"
+        return None
 
     def select_task(self, triage: TriageResult, source_type: str,
                     materiality_score: float) -> str:
@@ -325,6 +358,12 @@ class ModelCallPlanner:
         if res.status != "success" or res.parsed is None:
             return False
         cond = self.early_stop.get("stop_fallback_when", {})
-        conf_ok = res.parsed.get("confidence", 0.0) >= cond.get("confidence_gte", 0.75)
+        confidence = res.parsed.get("confidence", 0.0)
+        conf_ok = (confidence >= cond.get("confidence_gte", 0.75)
+                   and confidence >= conf_threshold)
         schema_ok = bool(res.parsed.get("schema_version"))
-        return schema_ok and conf_ok
+        objects_ok = True
+        if cond.get("required_objects_extracted"):
+            objects_ok = any(
+                res.parsed.get(k) for k in ("facts", "metrics", "events", "relations"))
+        return schema_ok and conf_ok and objects_ok

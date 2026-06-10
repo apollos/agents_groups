@@ -81,7 +81,9 @@ class BundleValidator:
                        warnings: list[str]) -> None:
         if not valid_pids:
             return
-        for attr in ("facts", "metrics", "events", "relations", "risks"):
+        for attr in ("facts", "metrics", "events", "relations", "risks",
+                     "customer_supplier_signals", "price_cost_margin_signals",
+                     "policy_signals"):
             for item in getattr(bundle, attr):
                 loc = getattr(item, "evidence_locator", None)
                 if loc is None:
@@ -142,6 +144,13 @@ class BundleValidator:
             obj = r.object_entity.name if r.object_entity else None
             if obj and unsupported(r, obj):
                 discount(r, f"relation object '{obj}' not found in cited passage")
+        for cs in bundle.customer_supplier_signals:
+            if cs.customer_or_supplier and unsupported(cs, cs.customer_or_supplier):
+                discount(cs, f"signal counterparty '{cs.customer_or_supplier}' "
+                             "not found in cited passage")
+        for pcm in bundle.price_cost_margin_signals:
+            if unsupported(pcm, pcm.value):
+                discount(pcm, f"price/cost value {pcm.value} not found in cited passage")
 
     def _normalize_relations(self, bundle: BundleExtraction, warnings: list[str]) -> None:
         for rel in bundle.relations:

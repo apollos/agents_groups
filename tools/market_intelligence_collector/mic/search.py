@@ -3,7 +3,7 @@
 Discovers links via a search engine / API. Ships with:
   - MockSearchProvider: deterministic synthetic hits so the whole pipeline runs
     offline with no keys (the demo default).
-  - SerpApiProvider / BingProvider: real OpenAI-style HTTP search APIs.
+  - SerpApiProvider: real SERP results via SerpApi (engine=baidu/google/bing).
 
 The mock provider also exposes synthetic page bodies so the Link Reader can run
 end-to-end offline (see ``MockSearchProvider.page_body``).
@@ -12,6 +12,7 @@ end-to-end offline (see ``MockSearchProvider.page_body``).
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import random
 from abc import ABC, abstractmethod
@@ -21,6 +22,8 @@ import httpx
 
 from mic.schemas import SearchHit
 from mic.utils import domain_of
+
+logger = logging.getLogger(__name__)
 
 
 class SearchProvider(ABC):
@@ -119,13 +122,22 @@ class SerpApiProvider(SearchProvider):
         self.engine = cfg.get("engine", "baidu")
         self.api_key = os.environ.get(cfg.get("api_key_env", "SERPAPI_API_KEY"), "")
         self.hits_per_query = cfg.get("hits_per_query", 10)
+        # Instance-level name keeps engines distinguishable when several SerpApi
+        # engines (e.g. baidu + google) run together in a CompositeSearchProvider.
+        self.name = f"serpapi:{self.engine}"
+
+    # SerpApi uses a different "number of results" param per backing engine:
+    # google -> num, baidu -> rn, bing -> count. Unknown engines fall back to
+    # "num" (the most common convention among SerpApi engines).
+    _COUNT_PARAM = {"google": "num", "baidu": "rn", "bing": "count"}
 
     def search(self, query: str, query_family: str | None = None,
                limit: int = 10) -> list[SearchHit]:
         if not self.api_key:
             raise RuntimeError("SERPAPI_API_KEY not set")
+        count_param = self._COUNT_PARAM.get(self.engine, "num")
         params = {"engine": self.engine, "q": query, "api_key": self.api_key,
-                  "num": min(limit, self.hits_per_query)}
+                  count_param: min(limit, self.hits_per_query)}
         resp = httpx.get(self.endpoint, params=params, timeout=20)
         resp.raise_for_status()
         data = resp.json()
@@ -141,75 +153,316 @@ class SerpApiProvider(SearchProvider):
         return hits
 
 
-class BingProvider(SearchProvider):
-    name = "bing"
+# Note: the native Bing Search API v7 was retired by Microsoft on 2025-08-11
+# (no new keys, existing ones disabled). Bing results are available via
+# SerpApiProvider with engine=bing, or through a SearXNG instance.
+
+
+class SearxngProvider(SearchProvider):
+    """Self-hosted SearXNG metasearch instance (free, no per-query cost).
+
+    One query fans out to the engines configured on the instance (e.g.
+    baidu + google + bing) and comes back as structured JSON. The instance
+    must enable the JSON output format (``search.formats: [html, json]`` in
+    its settings.yml); see ``searxng/`` in this repo for a ready-to-run
+    docker-compose setup.
+    """
+
+    name = "searxng"
 
     def __init__(self, cfg: dict[str, Any]):
-        self.endpoint = cfg.get("endpoint", "https://api.bing.microsoft.com/v7.0/search")
-        self.api_key = os.environ.get(cfg.get("api_key_env", "BING_SEARCH_API_KEY"), "")
+        env_name = cfg.get("base_url_env", "SEARXNG_BASE_URL")
+        self.base_url = (os.environ.get(env_name, "")
+                         or cfg.get("base_url", "http://localhost:8888")).rstrip("/")
+        self.engines = cfg.get("engines", [])
+        self.language = cfg.get("language", "zh-CN")
         self.hits_per_query = cfg.get("hits_per_query", 10)
+        self.name = "searxng"
+
+    def is_available(self) -> bool:
+        """Cheap liveness probe so the factory can skip a down instance."""
+        try:
+            resp = httpx.get(f"{self.base_url}/healthz", timeout=3)
+            return resp.status_code == 200
+        except Exception:  # noqa: BLE001
+            return False
+
+    def search(self, query: str, query_family: str | None = None,
+               limit: int = 10) -> list[SearchHit]:
+        params: dict[str, Any] = {
+            "q": query, "format": "json", "language": self.language,
+            "categories": "general",
+        }
+        if self.engines:
+            params["engines"] = ",".join(self.engines)
+        resp = httpx.get(f"{self.base_url}/search", params=params, timeout=20)
+        resp.raise_for_status()
+        data = resp.json()
+        results = data.get("results", [])
+        n = min(limit, self.hits_per_query)
+        hits = []
+        for rank, r in enumerate(results[:n], start=1):
+            url = r.get("url", "")
+            engine = r.get("engine", "")
+            hits.append(SearchHit(
+                query=query, title=r.get("title", ""), snippet=r.get("content", ""),
+                url=url, domain=domain_of(url), rank=rank,
+                provider=f"searxng:{engine}" if engine else self.name,
+                publish_time_guess=r.get("publishedDate"), query_family=query_family,
+            ))
+        return hits
+
+
+class TavilyProvider(SearchProvider):
+    """Tavily search API (https://tavily.com) - LLM-oriented web search.
+
+    Bills per API call like SerpApi (basic search = 1 credit; the free tier is
+    1000 credits/month). Returns extracted-content snippets that are longer and
+    cleaner than classic SERP snippets, which helps triage scoring. Coverage of
+    the Chinese financial web (baijiahao, cls.cn, ...) is weaker than Baidu, so
+    it fits best as a zero-ops rescue ``fallback`` or a supplementary engine
+    rather than the sole primary for A-share targets.
+    """
+
+    name = "tavily"
+
+    def __init__(self, cfg: dict[str, Any]):
+        self.endpoint = cfg.get("endpoint", "https://api.tavily.com/search")
+        self.api_key = os.environ.get(cfg.get("api_key_env", "TAVILY_API_KEY"), "")
+        self.hits_per_query = cfg.get("hits_per_query", 10)
+        self.topic = cfg.get("topic", "general")
+        # "basic" costs 1 credit per call, "advanced" costs 2.
+        self.search_depth = cfg.get("search_depth", "basic")
 
     def search(self, query: str, query_family: str | None = None,
                limit: int = 10) -> list[SearchHit]:
         if not self.api_key:
-            raise RuntimeError("BING_SEARCH_API_KEY not set")
-        headers = {"Ocp-Apim-Subscription-Key": self.api_key}
-        params = {"q": query, "count": min(limit, self.hits_per_query), "mkt": "zh-CN"}
-        resp = httpx.get(self.endpoint, headers=headers, params=params, timeout=20)
+            raise RuntimeError("TAVILY_API_KEY not set")
+        body = {
+            "query": query,
+            "topic": self.topic,
+            "search_depth": self.search_depth,
+            "max_results": min(limit, self.hits_per_query, 20),
+        }
+        resp = httpx.post(self.endpoint, json=body, timeout=20,
+                          headers={"Authorization": f"Bearer {self.api_key}"})
         resp.raise_for_status()
         data = resp.json()
-        results = data.get("webPages", {}).get("value", [])
         hits = []
-        for rank, r in enumerate(results[:limit], start=1):
+        for rank, r in enumerate(data.get("results", []), start=1):
             url = r.get("url", "")
             hits.append(SearchHit(
-                query=query, title=r.get("name", ""), snippet=r.get("snippet", ""),
+                query=query, title=r.get("title", ""), snippet=r.get("content", ""),
                 url=url, domain=domain_of(url), rank=rank, provider=self.name,
-                publish_time_guess=r.get("dateLastCrawled"), query_family=query_family,
+                publish_time_guess=r.get("published_date"), query_family=query_family,
             ))
         return hits
+
+
+# --- Composite (fan-out to several engines) ---------------------------------
+
+
+class CompositeSearchProvider(SearchProvider):
+    """Runs several engines per query and merges their hits.
+
+    Each query is sent to every child provider; results are concatenated and
+    keep their own ``provider`` tag (e.g. ``serpapi:baidu`` / ``bing``).
+    Cross-engine overlap is deduplicated downstream by canonical URL in the
+    pipeline, so here we simply collect everything. A single engine failing
+    (network error, etc.) is logged and skipped rather than aborting the query.
+    """
+
+    name = "composite"
+
+    def __init__(self, providers: list[SearchProvider]):
+        if not providers:
+            raise ValueError("CompositeSearchProvider requires at least one provider")
+        self.providers = providers
+        self.name = "composite(" + "+".join(p.name for p in providers) + ")"
+
+    def search(self, query: str, query_family: str | None = None,
+               limit: int = 10) -> list[SearchHit]:
+        hits: list[SearchHit] = []
+        for provider in self.providers:
+            try:
+                hits.extend(provider.search(query, query_family, limit=limit))
+            except Exception as exc:  # noqa: BLE001 - one engine shouldn't kill the query
+                logger.warning("search_engine_failed engine=%s query=%r error=%s",
+                               provider.name, query, exc)
+        return hits
+
+    def page_body(self, url: str) -> str | None:
+        for provider in self.providers:
+            body = provider.page_body(url)
+            if body is not None:
+                return body
+        return None
+
+
+# --- Fallback (primary engines -> rescue engine) ----------------------------
+
+
+class FallbackSearchProvider(SearchProvider):
+    """Wraps a primary provider with a rescue provider.
+
+    The fallback fires when the primary raises *or* returns zero hits (a
+    composite primary swallows per-engine errors, so "all engines failed"
+    surfaces here as an empty list). If the fallback itself fails, the
+    exception propagates to the pipeline's per-query error isolation.
+    """
+
+    name = "fallback"
+
+    def __init__(self, primary: SearchProvider, fallback: SearchProvider):
+        self.primary = primary
+        self.fallback = fallback
+        self.name = f"{primary.name} -> fallback({fallback.name})"
+
+    def search(self, query: str, query_family: str | None = None,
+               limit: int = 10) -> list[SearchHit]:
+        hits: list[SearchHit] = []
+        try:
+            hits = self.primary.search(query, query_family, limit=limit)
+        except Exception as exc:  # noqa: BLE001 - rescue instead of failing the query
+            logger.warning("primary_search_failed provider=%s query=%r error=%s",
+                           self.primary.name, query, exc)
+        if hits:
+            return hits
+        logger.info("search_fallback_engaged fallback=%s query=%r",
+                    self.fallback.name, query)
+        return self.fallback.search(query, query_family, limit=limit)
+
+    def page_body(self, url: str) -> str | None:
+        body = self.primary.page_body(url)
+        if body is not None:
+            return body
+        return self.fallback.page_body(url)
 
 
 def _mock_from_config(pcfg: dict[str, Any]) -> MockSearchProvider:
     return MockSearchProvider(pcfg.get("hits_per_query", 6))
 
 
+def _build_one(name: str, providers: dict[str, Any]) -> SearchProvider | None:
+    """Build a single configured provider.
+
+    Returns the provider, or ``None`` when it should be skipped because a real
+    engine is selected but its API key is missing. Mock providers are always
+    built. Key/fallback policy across the whole selection is decided by the
+    caller so it can honour ``MIC_ALLOW_MOCK`` consistently.
+    """
+    pcfg = providers.get(name, {})
+    ptype = pcfg.get("type", name)
+
+    if ptype == "mock":
+        return _mock_from_config(pcfg)
+    if ptype == "serpapi":
+        provider = SerpApiProvider(pcfg)
+        return provider if provider.api_key else None
+    if ptype == "searxng":
+        searx = SearxngProvider(pcfg)
+        return searx if searx.is_available() else None
+    if ptype == "tavily":
+        tavily = TavilyProvider(pcfg)
+        return tavily if tavily.api_key else None
+
+    logger.warning("unknown_search_provider name=%s type=%s", name, ptype)
+    return None
+
+
 def build_search_provider(config) -> SearchProvider:
     """Factory based on search_providers.yaml + MIC_ALLOW_MOCK.
 
-    Real providers are validated at construction time. If a real provider is
-    selected but its key is missing, ``MIC_ALLOW_MOCK=true`` falls back to the
-    deterministic mock provider; ``MIC_ALLOW_MOCK=false`` fails fast. This keeps
-    the README contract honest and avoids silent zero-hit runs where every query
-    raises inside ``search()`` and gets swallowed by the pipeline's per-query
-    error isolation.
+    ``active`` may be a single provider name (string) or a list of names to run
+    together. Each name refers to an entry under ``providers`` (so the same
+    SerpApi backend can appear several times with different ``engine`` values,
+    e.g. ``serpapi_baidu`` + ``serpapi_google``).
+
+    An optional ``fallback`` key names one rescue provider or an ordered list
+    of them (e.g. ``[tavily, searxng]``): when every active engine fails or a
+    query yields zero hits, the same query is retried against each fallback in
+    turn until one returns results.
+
+    Real providers are validated at construction time. Engines whose API key is
+    missing (or whose SearXNG instance is down) are skipped (logged). If at
+    least one real engine remains, the run proceeds with those; multiple
+    engines are wrapped in a ``CompositeSearchProvider``. If nothing usable is
+    built, ``MIC_ALLOW_MOCK=true`` falls back to the deterministic mock provider
+    while ``MIC_ALLOW_MOCK=false`` fails fast. This keeps the README contract
+    honest and avoids silent zero-hit runs where every query raises inside
+    ``search()`` and gets swallowed by the pipeline's per-query error isolation.
     """
     sp_cfg = config.search_providers
     active = sp_cfg.get("active", "mock")
     providers = sp_cfg.get("providers", {})
-    pcfg = providers.get(active, {})
-    ptype = pcfg.get("type", active)
+    names = [active] if isinstance(active, str) else list(active)
 
-    if ptype == "mock":
-        return _mock_from_config(pcfg)
+    built: list[SearchProvider] = []
+    for name in names:
+        provider = _build_one(name, providers)
+        if provider is not None:
+            built.append(provider)
+        else:
+            logger.warning("search_provider_skipped name=%s (missing key or unknown)", name)
 
-    if ptype == "serpapi":
-        provider = SerpApiProvider(pcfg)
-        if provider.api_key:
-            return provider
+    primary: SearchProvider | None = None
+    if len(built) == 1:
+        primary = built[0]
+    elif built:
+        primary = CompositeSearchProvider(built)
+
+    if primary is None:
+        # Nothing usable (missing keys / down instances / unknown types).
+        # Try the fallback provider alone before resorting to mock.
+        fallback = _build_fallback(sp_cfg, providers, names)
+        if fallback is not None:
+            logger.warning("search_using_fallback_only fallback=%s", fallback.name)
+            return fallback
         if config.allow_mock:
-            return _mock_from_config(pcfg)
-        raise RuntimeError("SERPAPI_API_KEY not set and MIC_ALLOW_MOCK=false")
+            first_cfg = providers.get(names[0], {}) if names else {}
+            return _mock_from_config(first_cfg)
+        raise RuntimeError(
+            f"No usable search provider for active={active!r} and MIC_ALLOW_MOCK=false "
+            "(check API keys / SearXNG instance)")
 
-    if ptype == "bing":
-        provider = BingProvider(pcfg)
-        if provider.api_key:
-            return provider
-        if config.allow_mock:
-            return _mock_from_config(pcfg)
-        raise RuntimeError("BING_SEARCH_API_KEY not set and MIC_ALLOW_MOCK=false")
+    # Mock never fails, so wrapping it in a fallback only adds noise.
+    if isinstance(primary, MockSearchProvider):
+        return primary
 
-    # Unknown type -> mock fallback if allowed.
-    if config.allow_mock:
-        return _mock_from_config(pcfg)
-    raise ValueError(f"Unknown search provider type: {ptype}")
+    fallback = _build_fallback(sp_cfg, providers, names)
+    if fallback is not None:
+        return FallbackSearchProvider(primary, fallback)
+    return primary
+
+
+def _build_fallback(sp_cfg: dict[str, Any], providers: dict[str, Any],
+                    active_names: list[str]) -> SearchProvider | None:
+    """Build the configured ``fallback`` provider(s), if any and usable.
+
+    ``fallback`` accepts a single name or an ordered list (e.g.
+    ``[tavily, searxng]``): the first usable provider is tried first and each
+    later one rescues the previous, by nesting ``FallbackSearchProvider``.
+    Names already running as active engines are skipped (they would only
+    repeat the same query), as are unusable ones (missing key / down instance).
+    """
+    fallback_cfg = sp_cfg.get("fallback")
+    if not fallback_cfg:
+        return None
+    names = [fallback_cfg] if isinstance(fallback_cfg, str) else list(fallback_cfg)
+
+    built: list[SearchProvider] = []
+    for name in names:
+        if name in active_names:
+            continue
+        provider = _build_one(name, providers)
+        if provider is None:
+            logger.warning("search_fallback_unavailable name=%s", name)
+            continue
+        built.append(provider)
+    if not built:
+        return None
+
+    chained = built[-1]
+    for provider in reversed(built[:-1]):
+        chained = FallbackSearchProvider(provider, chained)
+    return chained

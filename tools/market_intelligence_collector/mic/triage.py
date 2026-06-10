@@ -31,12 +31,18 @@ class SearchHitTriage:
         self.entity_terms: list[str] = []
         self.strong_fact_keywords = config.strong_fact_keywords or []
         self.source_type_by_domain = config.source_type_by_domain or {}
+        self.source_feedback: dict[str, float] = {}
         gov = (config.call_governance or {}).get("triggers", {}).get("call_model_when", {})
         rng = gov.get("rule_score_between", [40, 90])
         self.thresholds = TriageThresholds(model_lo=rng[0], model_hi=rng[1])
 
     def for_profile(self, profile: TargetProfile) -> SearchHitTriage:
         self.entity_terms = profile.all_entity_terms()
+        return self
+
+    def set_source_feedback(self, weights: dict[str, float]) -> SearchHitTriage:
+        """Per-source-type feedback multipliers (spec 22.2)."""
+        self.source_feedback = weights or {}
         return self
 
     def source_type(self, domain: str) -> str:
@@ -46,7 +52,7 @@ class SearchHitTriage:
         return "media" if domain else "unknown"
 
     def triage(self, hit: SearchHit, source_link_id: str,
-               is_duplicate: bool = False, seen_low_value: bool = False) -> TriageResult:
+               is_duplicate: bool = False) -> TriageResult:
         text = f"{hit.title} {hit.snippet}"
         signals: list[str] = []
         score = 0.0
@@ -85,6 +91,13 @@ class SearchHitTriage:
         # Source pack families are already curated for credibility.
         if hit.query_family and hit.query_family.startswith("source_pack:"):
             score += 8
+
+        # Feedback loop (spec 22.2): source types that historically produced
+        # useful/correct objects get up-weighted, noisy ones down-weighted.
+        fb_weight = self.source_feedback.get(stype)
+        if fb_weight is not None and fb_weight != 1.0:
+            score *= fb_weight
+            signals.append(f"source_type_feedback_x{fb_weight}")
 
         decision = "skip_for_now"
         if is_duplicate:

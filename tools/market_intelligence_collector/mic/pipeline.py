@@ -16,6 +16,7 @@ from mic.logging_utils import get_logger, setup_logging
 from mic.merge import ModelContribution, MultiModelMerger
 from mic.modeling.adapter import ModelRegistry
 from mic.modeling.call_planner import CallBudget, LinkModelResult, ModelCallPlanner
+from mic.modeling.vision import VisionExtractor
 from mic.planner import QueryPlanner
 from mic.profile import TargetProfile
 from mic.reader import LinkReader
@@ -33,6 +34,7 @@ logger = get_logger("pipeline")
 class RunStats:
     queries_generated: int = 0
     queries_executed: int = 0
+    queries_skipped_by_hit_budget: int = 0
     search_hits: int = 0
     unique_source_links: int = 0
     deduplicated_links: int = 0
@@ -46,6 +48,7 @@ class RunStats:
     split_extractions: int = 0
     batch_triaged_hits: int = 0
     batch_triage_calls: int = 0
+    vision_calls: int = 0
     cached_or_reused_results: int = 0
     estimated_model_cost: float = 0.0
     passage_selection_saved_chars: int = 0
@@ -66,22 +69,46 @@ class Pipeline:
         self.planner = QueryPlanner(self.config)
         self.search = build_search_provider(self.config)
         self.triage = SearchHitTriage(self.config)
-        self.reader = LinkReader(self.config, search_provider=self.search)
         self.registry = ModelRegistry(self.config)
+        self.vision = VisionExtractor(self.config, self.registry)
+        self.reader = LinkReader(self.config, search_provider=self.search,
+                                 vision=self.vision)
         self.merger = MultiModelMerger(self.config)
         self.validator = BundleValidator((self.config.output_schema or {}).get("limits", {}))
         self.policy_version = self.config.model_policies.get("version", "model_policy_v0.3")
         self.query_plan_version = self.config.query_families.get("version", "query_plan_v0.3")
+        # Per-query SERP request cap; providers additionally apply their own
+        # hits_per_query limit.
+        self._hits_per_query = (self.config.search_providers or {}).get(
+            "max_hits_per_query", 12)
 
     # --- public ------------------------------------------------------------
 
-    def collect_intelligence(self, target_id: str, task_profile: dict[str, Any]) -> dict:
+    def collect_intelligence(self, target_id: str, task_profile: dict[str, Any],
+                             model_policy_version: str | None = None,
+                             query_plan_version: str | None = None) -> dict:
         profile_cfg = self.config.get_target_profile(target_id)
         if profile_cfg is None:
             raise ValueError(f"Unknown target_id: {target_id}")
+        # Version pinning (spec 20.1): only one config version is loaded per
+        # process, so a mismatching pin is an error rather than a silent ignore.
+        if model_policy_version and model_policy_version != self.policy_version:
+            raise ValueError(
+                f"model_policy_version {model_policy_version!r} not loaded "
+                f"(active: {self.policy_version!r})")
+        if query_plan_version and query_plan_version != self.query_plan_version:
+            raise ValueError(
+                f"query_plan_version {query_plan_version!r} not loaded "
+                f"(active: {self.query_plan_version!r})")
         profile = TargetProfile.from_config(profile_cfg)
         self.repo.upsert_target_profile(profile_cfg)
-        self.triage.for_profile(profile)
+
+        # Feedback-driven weights (spec 22.2). Loaded once per run.
+        self._model_feedback = self.repo.model_feedback_scores()
+        self._family_feedback = self.repo.family_feedback_weights()
+        self._source_feedback = self.repo.source_type_feedback_weights()
+
+        self.triage.for_profile(profile).set_source_feedback(self._source_feedback)
 
         budget_profile = task_profile.get("budget_profile", {})
         gov = (self.config.call_governance or {}).get("budgets", {})
@@ -93,11 +120,6 @@ class Pipeline:
             max_batch_triage_calls=gov.get("max_batch_triage_calls", max(1, run_calls // 6)),
         )
         call_planner = ModelCallPlanner(self.config, self.registry, call_budget)
-
-        # Feedback-driven weights (spec 22.2). Loaded once per run.
-        self._model_feedback = self.repo.model_feedback_scores()
-        self._family_feedback = self.repo.family_feedback_weights()
-        self._source_feedback = self.repo.source_type_feedback_weights()
 
         run_id = self.repo.create_search_run(
             target_id, task_profile, budget_profile,
@@ -123,28 +145,45 @@ class Pipeline:
 
     def _execute(self, run_id: str, profile: TargetProfile, task_profile: dict,
                  call_planner: ModelCallPlanner, stats: RunStats) -> None:
+        self.vision.reset_run()
         budget_profile = task_profile.get("budget_profile", {})
-        max_hits = budget_profile.get("max_search_hits", 800)
+        max_queries = budget_profile.get("max_queries", 80)
+        max_hits = budget_profile.get("max_search_hits")
+        if max_hits is None:
+            # Derive a coherent default from the rest of the budget so multi-
+            # engine setups don't silently starve the query plan: every planned
+            # query gets room for a full SERP from every active engine.
+            max_hits = self._default_max_hits(max_queries)
+            logger.info("max_search_hits_derived run_id=%s value=%s", run_id, max_hits)
         max_links_to_read = budget_profile.get("max_links_to_read", 100)
 
-        planned = self.planner.plan(profile, task_profile)
+        planned = self.planner.plan(profile, task_profile,
+                                    family_feedback=self._family_feedback)
         stats.queries_generated = len(planned)
 
         seen_canonical: set[str] = set()
         seen_content_hash: set[str] = set()
         triaged: list[tuple[str, SearchHit, Any]] = []  # (link_id, hit, triage)
 
-        for pq in planned:
+        for qi, pq in enumerate(planned):
             if stats.search_hits >= max_hits:
+                # Queries are priority-ordered, so the budget drops the lowest-
+                # value tail - but never silently.
+                stats.queries_skipped_by_hit_budget = len(planned) - qi
+                logger.warning(
+                    "hit_budget_truncated_queries run_id=%s max_search_hits=%s "
+                    "executed=%s skipped=%s", run_id, max_hits,
+                    stats.queries_executed, stats.queries_skipped_by_hit_budget)
                 break
             query_id = self.repo.save_query(run_id, {**pq.to_record(), "executed": True})
-            stats.queries_executed += 1
             try:
-                hits = self.search.search(pq.query_text, pq.query_family, limit=12)
+                hits = self.search.search(pq.query_text, pq.query_family,
+                                          limit=self._hits_per_query)
             except Exception as exc:  # noqa: BLE001 - one bad query shouldn't kill the run
                 logger.warning("search_query_failed run_id=%s query=%r error=%s",
                                run_id, pq.query_text, exc)
                 continue
+            stats.queries_executed += 1
             for hit in hits:
                 if stats.search_hits >= max_hits:
                     break
@@ -216,15 +255,20 @@ class Pipeline:
                 "failure_reason": read.failure_reason,
             })
             if read.read_status != "read":
-                self.repo.update_link_read(link_id, "failed", None, None)
+                self.repo.update_link_read(
+                    link_id, "failed", None, None,
+                    document_type=read.document_type,
+                    access_profile_id=self.reader.access_profile_id)
                 continue
             stats.links_read += 1
 
             # Content-hash reuse (spec 15.1 A): same body within this run.
             if read.content_hash in seen_content_hash:
                 stats.cached_or_reused_results += 1
-                self.repo.update_link_read(link_id, "link_record_only",
-                                           read.content_hash, read.simhash)
+                self.repo.update_link_read(
+                    link_id, "link_record_only", read.content_hash, read.simhash,
+                    document_type=read.document_type,
+                    access_profile_id=self.reader.access_profile_id)
                 continue
             # Cross-run content-hash reuse: identical body already analyzed for
             # this target in a prior run -> clone instead of calling models.
@@ -237,13 +281,18 @@ class Pipeline:
                     reason=f"cross-run content_hash reuse: {prior_body.id}",
                     signals=[*tri.matched_signals, "cross_run_content_hash_reuse"],
                     need_model=False)
-                self.repo.update_link_read(link_id, "link_record_only",
-                                           read.content_hash, read.simhash)
+                self.repo.update_link_read(
+                    link_id, "link_record_only", read.content_hash, read.simhash,
+                    document_type=read.document_type,
+                    access_profile_id=self.reader.access_profile_id)
                 self._tally_counts(stats, self.repo.clone_latest_analysis(
                     prior_body.id, link_id, profile.target_id))
                 continue
             seen_content_hash.add(read.content_hash)
-            self.repo.update_link_read(link_id, "read", read.content_hash, read.simhash)
+            self.repo.update_link_read(
+                link_id, "read", read.content_hash, read.simhash,
+                document_type=read.document_type,
+                access_profile_id=self.reader.access_profile_id)
 
             # Passage selection saving estimate (spec 19 call_efficiency): chars
             # of full body that were NOT sent to the model.
@@ -273,7 +322,8 @@ class Pipeline:
                 stats.cascade_calls += 1
             elif link_result.call_mode in ("priority_fallback", "single_model") and \
                     len(link_result.outputs) > 1:
-                stats.fallback_calls += 1
+                # Every output beyond the first is an actual fallback call.
+                stats.fallback_calls += len(link_result.outputs) - 1
 
             contributions = self._persist_model_outputs(
                 link_id, link_result, read, stats)
@@ -316,7 +366,19 @@ class Pipeline:
         # Persist run-level coverage gaps that weren't tied to a saved link.
         self.repo.save_coverage_gaps(run_id, profile.target_id, self._run_gaps(stats))
         stats.model_calls = call_planner.budget.calls_used
-        stats.estimated_model_cost = self._cost_from_runs(stats)
+        stats.vision_calls = self.vision.calls_used
+        stats.estimated_model_cost = self._cost_from_runs(stats) + \
+            round(self.vision.estimated_cost, 6)
+
+    def _default_max_hits(self, max_queries: int, cap: int = 800) -> int:
+        """Budget-coherent default for max_search_hits.
+
+        max_queries x active engines x per-query request cap, bounded by a hard
+        run-level guardrail.
+        """
+        primary = getattr(self.search, "primary", self.search)
+        engines = len(getattr(primary, "providers", [])) or 1
+        return min(cap, max_queries * engines * self._hits_per_query)
 
     # --- batch triage ------------------------------------------------------
 
@@ -359,8 +421,6 @@ class Pipeline:
                            for m in policy.get("models", [])}
         for res in link_result.outputs:
             stats.estimated_model_cost += res.estimated_cost
-            if res.is_mock:
-                pass
             model_run_id = self.repo.save_model_run({
                 "source_link_id": link_id, "task_name": link_result.task_name,
                 "call_mode": link_result.call_mode, "provider_type": res.provider_type,
@@ -456,6 +516,7 @@ class Pipeline:
             "summary": {
                 "queries_generated": stats.queries_generated,
                 "queries_executed": stats.queries_executed,
+                "queries_skipped_by_hit_budget": stats.queries_skipped_by_hit_budget,
                 "search_hits": stats.search_hits,
                 "unique_source_links": stats.unique_source_links,
                 "links_read": stats.links_read,
@@ -467,6 +528,7 @@ class Pipeline:
                 "arbitration_calls": stats.arbitration_calls,
                 "split_extractions": stats.split_extractions,
                 "batch_triage_calls": stats.batch_triage_calls,
+                "vision_calls": stats.vision_calls,
                 "cached_or_reused_results": stats.cached_or_reused_results,
                 "estimated_model_cost": round(stats.estimated_model_cost, 4),
             },

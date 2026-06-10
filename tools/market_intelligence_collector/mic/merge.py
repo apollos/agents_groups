@@ -84,6 +84,7 @@ class MultiModelMerger:
         if len(contributions) == 1:
             c = contributions[0]
             c.bundle.source_link_id = source_link_id
+            c.bundle.relations = self._sanitize_relations(c.bundle.relations)
             self._apply_decision_rules(c.bundle)
             return MergeResult(
                 c.bundle, "low", "single_model",
@@ -112,7 +113,8 @@ class MultiModelMerger:
             contributions, "policy_signals",
             lambda s: f"{s.policy_type}|{_norm(s.issuer)}|{_norm(s.summary)}")
         questions = [q for c in contributions for q in c.bundle.analyst_questions]
-        gaps = [g for c in contributions for g in c.bundle.coverage_gaps]
+        gaps = self._dedup_gaps(
+            [g for c in contributions for g in c.bundle.coverage_gaps])
         brief = max(contributions, key=lambda c: c.effective_weight).bundle.brief
         source_quality = max(contributions,
                             key=lambda c: c.effective_weight).bundle.source_quality
@@ -267,12 +269,31 @@ class MultiModelMerger:
                 conflicts.append({"object": "event", "key": key,
                                   "field": "impact_direction", "values": dirs,
                                   "resolution": "mark_mixed_or_unclear"})
-            # Corroboration: multiple models => multi_source unless conflicting.
-            if len(members) > 1 and base.source_corroboration_status == "single_source":
-                base.source_corroboration_status = "multi_source"
+            # Note: source_corroboration_status stays single_source here even when
+            # several MODELS agree — corroboration means independent SOURCES
+            # (different links/publishers), not multiple models reading the same
+            # article (spec 13.4). Cross-source upgrade is a higher-level concern.
             base.confidence = self._weighted_median([(m[0].confidence, m[1]) for m in members])
             merged.append(base)
         return merged, conflicts
+
+    @staticmethod
+    def _sanitize_relations(relations: list[RelationRecord]) -> list[RelationRecord]:
+        """Drop vague-entity relations and collapse alias duplicates.
+
+        Used on the single-model path, which bypasses ``_merge_relations``;
+        the multi-model path applies the same rules inline during merging.
+        """
+        seen: dict[str, RelationRecord] = {}
+        for r in relations:
+            if r.subject_entity.is_vague() or r.object_entity.is_vague():
+                continue
+            key = (f"{r.subject_entity.identity_key()}|{r.relation_type}|"
+                   f"{r.object_entity.identity_key()}|"
+                   f"{_norm(str(r.qualifiers.get('product', '')))}")
+            if key not in seen or r.confidence > seen[key].confidence:
+                seen[key] = r
+        return list(seen.values())
 
     def _merge_relations(self, contributions: list[ModelContribution]
                          ) -> tuple[list[RelationRecord], list[dict]]:
@@ -281,11 +302,16 @@ class MultiModelMerger:
         # Direction conflict (spec 14.5): for the SAME ordered (subject, object,
         # product), one model asserts a relation while another asserts its inverse
         # (e.g. company supplier_of client vs company customer_of client).
+        # Entities dedup on identity_key (ticker over name spelling) so that
+        # alias spellings of the same company collapse into one relation, and
+        # vague collective entities ("多家锂电设备商") are dropped outright.
         ordered: dict[tuple[str, str, str], set[str]] = {}
         for c in contributions:
             for r in c.bundle.relations:
-                subj = _norm(r.subject_entity.name)
-                obj = _norm(r.object_entity.name)
+                if r.subject_entity.is_vague() or r.object_entity.is_vague():
+                    continue
+                subj = r.subject_entity.identity_key()
+                obj = r.object_entity.identity_key()
                 product = _norm(str(r.qualifiers.get("product", "")))
                 key = f"{subj}|{r.relation_type}|{obj}|{product}"
                 if key not in seen or r.confidence > seen[key].confidence:
@@ -351,6 +377,16 @@ class MultiModelMerger:
             if k and k not in seen:
                 seen.add(k)
                 out.append(q)
+        return out
+
+    @staticmethod
+    def _dedup_gaps(gaps: list) -> list:
+        seen, out = set(), []
+        for g in gaps:
+            k = f"{g.gap_type}|{_norm(g.description)}"
+            if k not in seen:
+                seen.add(k)
+                out.append(g)
         return out
 
     # --- diagnostics -------------------------------------------------------

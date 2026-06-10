@@ -188,11 +188,13 @@ def test_cross_run_reuse_clones_analysis():
         "budget_profile": {"max_queries": 20, "max_links_to_read": 12, "max_model_calls": 15},
     }
     first = api.collect_intelligence("company_300750", task)
-    assert first["summary"]["cached_or_reused_results"] == 0
+    # The first run may already reuse within-run (identical mock bodies under
+    # different URLs), but has no prior run to clone from.
+    first_reused = first["summary"]["cached_or_reused_results"]
     # Same target + deterministic mock search => identical canonical URLs, so the
     # second run should reuse prior analysis instead of re-calling models.
     second = api.collect_intelligence("company_300750", task)
-    assert second["summary"]["cached_or_reused_results"] > 0
+    assert second["summary"]["cached_or_reused_results"] > first_reused
     # Reused structured rows are still tallied (cloned briefs/events/etc.).
     assert second["structured_outputs"]["briefs"] >= 1
 
@@ -251,8 +253,8 @@ def test_real_search_provider_missing_key_fails_fast_when_mock_disabled(monkeypa
     from mic.config import load_config
     from mic.search import build_search_provider
     cfg = load_config()
-    cfg.raw["search_providers"]["active"] = "bing"
-    monkeypatch.delenv("BING_SEARCH_API_KEY", raising=False)
+    cfg.raw["search_providers"]["active"] = "serpapi_bing"
+    monkeypatch.setenv("SERPAPI_API_KEY", "")
     monkeypatch.setenv("MIC_ALLOW_MOCK", "false")
     with pytest.raises(RuntimeError):
         build_search_provider(cfg)

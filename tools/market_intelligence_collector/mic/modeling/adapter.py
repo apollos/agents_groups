@@ -59,12 +59,18 @@ class ModelAdapter:
     pricing: dict[str, float] = field(default_factory=dict)
     allow_mock: bool = True
     json_output: bool = True
+    max_output_tokens: int = 4096
+    _client: Any = field(default=None, repr=False, compare=False)
 
     @property
     def usable(self) -> bool:
         return self.enabled and (bool(self.api_key) or self.allow_mock)
 
-    def complete(self, messages: list[dict], max_tokens: int = 2048) -> ModelCallResult:
+    def complete(self, messages: list[dict], max_tokens: int | None = None,
+                 json_mode: bool | None = None) -> ModelCallResult:
+        """``json_mode`` overrides the registry's json_output capability for a
+        single call - vision transcription wants plain text, not a JSON bundle.
+        """
         input_chars = sum(len(m.get("content", "")) for m in messages)
         if not self.api_key or OpenAI is None:
             if self.allow_mock:
@@ -75,17 +81,21 @@ class ModelAdapter:
                 status="request_failed", input_chars=input_chars,
                 error_type="no_api_key", error_message="API key missing and mock disabled",
             )
-        return self._api_complete(messages, max_tokens, input_chars)
+        return self._api_complete(messages, max_tokens or self.max_output_tokens,
+                                  input_chars, json_mode=json_mode)
 
     # --- real API ----------------------------------------------------------
 
     def _api_complete(self, messages: list[dict], max_tokens: int,
-                     input_chars: int) -> ModelCallResult:
-        client = OpenAI(api_key=self.api_key, base_url=self.endpoint)
+                     input_chars: int, json_mode: bool | None = None) -> ModelCallResult:
+        if self._client is None:
+            self._client = OpenAI(api_key=self.api_key, base_url=self.endpoint)
+        client = self._client
         start = time.time()
+        want_json = self.json_output if json_mode is None else json_mode
         kwargs: dict[str, Any] = {"model": self.model, "messages": messages,
                                   "max_tokens": max_tokens, "temperature": 0.2}
-        if self.json_output:
+        if want_json:
             kwargs["response_format"] = {"type": "json_object"}
         try:
             resp = client.chat.completions.create(**kwargs)
@@ -102,20 +112,30 @@ class ModelAdapter:
         usage = getattr(resp, "usage", None)
         in_tok = getattr(usage, "prompt_tokens", 0) or 0
         out_tok = getattr(usage, "completion_tokens", 0) or 0
+        # Cached prompt tokens: OpenAI-style prompt_tokens_details.cached_tokens,
+        # DeepSeek-style prompt_cache_hit_tokens (spec 15.4 H).
         cached = 0
         details = getattr(usage, "prompt_tokens_details", None)
         if details is not None:
             cached = getattr(details, "cached_tokens", 0) or 0
+        if not cached:
+            cached = getattr(usage, "prompt_cache_hit_tokens", 0) or 0
+        reasoning = 0
+        out_details = getattr(usage, "completion_tokens_details", None)
+        if out_details is not None:
+            reasoning = getattr(out_details, "reasoning_tokens", 0) or 0
         result = ModelCallResult(
             model_config_id=self.model_config_id, provider=self.provider,
             provider_type=self.provider_type, model_name=self.model, status="success",
             raw_text=text, input_chars=input_chars, input_tokens=in_tok,
-            output_tokens=out_tok, cached_tokens=cached, latency_ms=latency_ms,
+            output_tokens=out_tok, reasoning_tokens=reasoning, cached_tokens=cached,
+            latency_ms=latency_ms,
         )
         result.estimated_cost = self._estimate_cost(in_tok, out_tok)
-        result.parsed = self._parse_json(text)
-        if result.parsed is None:
-            result.status = "json_invalid"
+        if want_json:
+            result.parsed = self._parse_json(text)
+            if result.parsed is None:
+                result.status = "json_invalid"
         return result
 
     def _estimate_cost(self, in_tok: int, out_tok: int) -> float:
@@ -362,7 +382,9 @@ class ModelRegistry:
         self._build()
 
     def _build(self) -> None:
-        models = self.config.model_registry.get("models", {})
+        registry = self.config.model_registry
+        models = registry.get("models", {})
+        default_max_out = registry.get("default_max_output_tokens", 4096)
         pricing = self.config.pricing_hints
         for mid, spec in models.items():
             api_key = os.environ.get(spec.get("api_key_env", ""), "")
@@ -373,6 +395,7 @@ class ModelRegistry:
                 api_key=api_key, enabled=spec.get("enabled", True),
                 pricing=pricing.get(mid, {}), allow_mock=self.config.allow_mock,
                 json_output=spec.get("capabilities", {}).get("json_output", True),
+                max_output_tokens=spec.get("max_output_tokens", default_max_out),
             )
 
     def get(self, model_config_id: str) -> ModelAdapter | None:

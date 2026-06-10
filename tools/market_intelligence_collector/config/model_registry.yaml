@@ -3,6 +3,11 @@
 model_registry:
   version: model_registry_v0.3
 
+  # Default output-token cap for models that don't set max_output_tokens.
+  # A full bundle (facts/metrics/events/relations/signals/questions/gaps) easily
+  # exceeds 2k tokens; truncation produces json_invalid and wastes fallback calls.
+  default_max_output_tokens: 4096
+
   models:
     deepseek_v4_pro:
       provider_type: openai_compatible_direct
@@ -11,6 +16,7 @@ model_registry:
       api_key_env: DEEPSEEK_API_KEY
       model: "deepseek-chat"
       enabled: true
+      max_output_tokens: 8192
       capabilities:
         json_output: true
         tool_calling: true
@@ -24,6 +30,7 @@ model_registry:
       api_key_env: DASHSCOPE_API_KEY
       model: "qwen-plus"
       enabled: true
+      max_output_tokens: 8192
       capabilities:
         json_output: true
         tool_calling: true
@@ -36,22 +43,29 @@ model_registry:
       api_key_env: SILICONFLOW_API_KEY
       model: "Qwen/Qwen3-32B"
       enabled: true
+      max_output_tokens: 4096
       capabilities:
         json_output: true
       tags: [cn, platform]
 
+    # OpenClaw gateway. MIC uses this entry's endpoint + token for vision
+    # rescue extraction (scanned PDFs, embedded page images) via the
+    # gateway's /v1/responses API with an x-openclaw-model override - see
+    # call_governance.yaml -> vision_extract. Requires
+    # gateway.http.endpoints.chatCompletions.enabled=true on the OpenClaw side.
     openclaw_research:
       provider_type: openai_compatible_gateway
       provider: openclaw
       endpoint: "http://127.0.0.1:18789/v1"
       api_key_env: OPENCLAW_GATEWAY_TOKEN
       model: "openclaw/research"
-      enabled: false
+      enabled: true
       capabilities:
         chat: true
+        vision: true
         gateway_routing: true
         agent_routing: true
-      tags: [gateway, configurable_backend]
+      tags: [gateway, configurable_backend, vision]
 
 # Rough price hints (USD per 1M tokens) used only for cost estimation/logging.
 # Not used for selection.

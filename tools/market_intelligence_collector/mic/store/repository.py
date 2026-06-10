@@ -117,7 +117,7 @@ class Repository:
                 id=link_id, search_run_id=run_id, query_id=query_id,
                 provider=hit.provider, rank=hit.rank, title=hit.title,
                 snippet=hit.snippet, url=hit.url, canonical_url=canonical_url,
-                domain=hit.domain, source_type=source_type,
+                domain=hit.domain, source_name=hit.domain, source_type=source_type,
                 publish_time_guess=_to_dt(hit.publish_time_guess),
                 retrieved_at=now(), read_status="pending",
                 metadata_={"query_family": hit.query_family},
@@ -201,7 +201,9 @@ class Repository:
                     row.metadata_ = meta
 
     def update_link_read(self, link_id: str, read_status: str,
-                         content_hash: str | None, simhash: str | None) -> None:
+                         content_hash: str | None, simhash: str | None,
+                         document_type: str | None = None,
+                         access_profile_id: str | None = None) -> None:
         with self.db.session() as s:
             row = s.get(m.SourceLink, link_id)
             if row:
@@ -210,6 +212,10 @@ class Repository:
                     row.content_hash = content_hash
                 if simhash:
                     row.simhash = simhash
+                if document_type:
+                    row.document_type = document_type
+                if access_profile_id:
+                    row.access_profile_id = access_profile_id
 
     def get_link(self, link_id: str) -> m.SourceLink | None:
         with self.db.session() as s:
@@ -715,12 +721,30 @@ class Repository:
             if relation_types:
                 stmt = stmt.where(m.RelationRecordRow.relation_type.in_(relation_types))
             rows = s.scalars(stmt.order_by(m.RelationRecordRow.confidence.desc())).all()
-            return [{
-                "relation_id": r.id, "subject_entity": r.subject_entity,
-                "relation_type": r.relation_type, "object_entity": r.object_entity,
-                "qualifiers": r.qualifiers, "confidence": r.confidence,
-                "source_link_id": r.source_link_id,
-            } for r in rows]
+            # Cross-source dedup: alias spellings of one company (matched via
+            # ticker) yield duplicate rows from different links. Keep the
+            # highest-confidence row per (subject, type, object) and report how
+            # many independent links corroborate it. Vague collective entities
+            # ("多家锂电设备商") are filtered out entirely.
+            out: dict[str, dict] = {}
+            for r in rows:
+                subj = schemas.EntityRef(**(r.subject_entity or {}))
+                obj = schemas.EntityRef(**(r.object_entity or {}))
+                if subj.is_vague() or obj.is_vague():
+                    continue
+                key = f"{subj.identity_key()}|{r.relation_type}|{obj.identity_key()}"
+                if key in out:
+                    if r.source_link_id not in out[key]["source_link_ids"]:
+                        out[key]["source_link_ids"].append(r.source_link_id)
+                    continue
+                out[key] = {
+                    "relation_id": r.id, "subject_entity": r.subject_entity,
+                    "relation_type": r.relation_type, "object_entity": r.object_entity,
+                    "qualifiers": r.qualifiers, "confidence": r.confidence,
+                    "source_link_id": r.source_link_id,
+                    "source_link_ids": [r.source_link_id],
+                }
+            return list(out.values())
 
     def search_facts(self, target_id: str, query: str | None = None,
                     fact_types: list[str] | None = None,
@@ -740,11 +764,13 @@ class Repository:
                 "confidence": r.confidence, "source_link_id": r.source_link_id,
             } for r in rows]
             if query:
+                # No-match means empty result; silently returning everything
+                # would make the keyword filter meaningless to callers.
                 terms = [t for t in query.split() if t]
                 results = [
                     r for r in results
                     if any(t in (r["fact_statement"] or "") for t in terms)
-                ] or results
+                ]
             return results
 
     def get_risks(self, target_id: str, since: str | None = None,

@@ -51,7 +51,8 @@ class QueryPlanner:
 
     # --- public ------------------------------------------------------------
 
-    def plan(self, profile: TargetProfile, task_profile: dict[str, Any]) -> list[PlannedQuery]:
+    def plan(self, profile: TargetProfile, task_profile: dict[str, Any],
+             family_feedback: dict[str, float] | None = None) -> list[PlannedQuery]:
         focus = task_profile.get("focus", [])
         budget = task_profile.get("budget_profile", {})
         max_queries = budget.get("max_queries", 80)
@@ -61,6 +62,15 @@ class QueryPlanner:
 
         entity_terms = profile.all_entity_terms()
         scored = self._score_all(candidates, entity_terms)
+
+        # Feedback loop (spec 22.2): families that historically produced
+        # useful/correct objects get up-weighted, noisy ones down-weighted.
+        if family_feedback:
+            for q in scored:
+                weight = family_feedback.get(q.query_family)
+                if weight is not None and weight != 1.0:
+                    q.score *= weight
+                    q.why.append(f"历史反馈权重 x{weight}")
 
         # Filter low-value, sort by score, cap by budget.
         eligible = [q for q in scored if q.score >= self.min_score]
@@ -144,14 +154,10 @@ class QueryPlanner:
             norm = _normalize_query(q.query_text)
             self._score_one(q, entity_terms)
             existing = seen_normalized.get(norm)
-            if existing is None:
+            if existing is None or q.score > existing.score:
+                # Near-duplicates collapse to the single highest-scoring query;
+                # the duplicate itself is dropped, the survivor keeps its score.
                 seen_normalized[norm] = q
-            else:
-                # Duplicate query: keep the higher base, penalize duplication.
-                if q.score > existing.score:
-                    q.score -= self.weights.get("duplication_penalty", 25.0)
-                    q.why.append("near-duplicate of existing query")
-                    seen_normalized[norm] = q
         return list(seen_normalized.values())
 
     def _score_one(self, q: PlannedQuery, entity_terms: list[str]) -> None:

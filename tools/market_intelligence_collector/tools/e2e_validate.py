@@ -85,6 +85,11 @@ def main() -> int:
                                  console=not args.quiet)
     if not args.real:
         os.environ["MIC_ALLOW_MOCK"] = "true"
+        # Offline mode must stay offline even when .env carries real keys or a
+        # local SearXNG instance is running (set before load_config/dotenv).
+        os.environ["SERPAPI_API_KEY"] = ""
+        os.environ["TAVILY_API_KEY"] = ""
+        os.environ["SEARXNG_BASE_URL"] = "http://127.0.0.1:1"
     db_path = Path(args.db_path) if args.db_path else log_directory / f"e2e_{stamp}.db"
     if not db_path.is_absolute():
         db_path = PROJECT_ROOT / db_path

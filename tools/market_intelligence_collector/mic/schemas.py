@@ -102,6 +102,33 @@ class EntityRef(BaseModel):
     type: str = "company"
     ticker: str | None = None
 
+    def identity_key(self) -> str:
+        """Stable identity for dedup: ticker wins over name spelling.
+
+        "宁德时代" and "宁德时代新能源科技股份有限公司" share ticker 300750 and
+        must collapse to one entity; without a ticker fall back to the
+        normalized name.
+        """
+        if self.ticker:
+            return f"ticker:{str(self.ticker).strip().lower()}"
+        return f"name:{(self.name or '').strip().lower()}"
+
+    def is_vague(self) -> bool:
+        """Collective/unspecific entities like "多家锂电设备商" or "相关供应商".
+
+        Such names identify a group, not a counterparty, so relations built on
+        them carry no analytical value and pollute the relation graph. An
+        entity with a ticker is never vague.
+        """
+        if self.ticker:
+            return False
+        name = (self.name or "").strip()
+        if not name:
+            return True
+        vague_markers = ("多家", "若干", "部分", "相关", "一批", "数家", "各大",
+                         "多个", "某", "等企业", "等公司", "等厂商")
+        return any(mk in name for mk in vague_markers)
+
 
 class RelationRecord(BaseModel):
     relation_id: str | None = None

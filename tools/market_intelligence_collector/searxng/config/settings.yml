@@ -1,0 +1,25 @@
+# SearXNG settings for the MIC search provider.
+# Minimal overrides on top of the image defaults. The crucial bits:
+#   - search.formats must include "json" (MIC talks JSON to /search)
+#   - limiter off: this instance is private/local, only MIC calls it
+use_default_settings: true
+
+server:
+  # Replace before first start:
+  #   sed -i "s|c3d9913307ab4276d38f703fe38f0ad2a75ff5b1bb31ba730358e23a7c1e9791|$(openssl rand -hex 32)|" config/settings.yml
+  secret_key: "c3d9913307ab4276d38f703fe38f0ad2a75ff5b1bb31ba730358e23a7c1e9791"
+  limiter: false
+  public_instance: false
+
+search:
+  formats:
+    - html
+    - json
+
+engines:
+  - name: baidu
+    disabled: false
+  - name: google
+    disabled: false
+  - name: bing
+    disabled: false

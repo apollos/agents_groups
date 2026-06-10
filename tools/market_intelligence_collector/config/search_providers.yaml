@@ -1,24 +1,81 @@
 search_providers:
   version: search_providers_v0.3
 
-  # The active provider. "mock" produces deterministic synthetic hits so the
-  # pipeline can run with no external dependency. "serpapi" / "bing" require keys.
-  active: mock
+  # The active provider(s). Accepts either a single name (string) or a list of
+  # names to run together. Each name refers to an entry under "providers".
+  #   active: mock                              # offline, no keys (default)
+  #   active: searxng                           # self-hosted metasearch (free)
+  #   active: serpapi_baidu                     # one real engine
+  #   active: [serpapi_baidu, serpapi_bing]     # two engines, merged + deduped
+  #   active: [serpapi_baidu, serpapi_google, serpapi_bing]   # all three
+  # When several engines run, hits are merged and deduplicated downstream by
+  # canonical URL; each hit keeps its own "provider" tag (e.g. serpapi:baidu).
+  # Engines missing their API key are skipped (logged); if none remain,
+  # MIC_ALLOW_MOCK=true falls back to mock, MIC_ALLOW_MOCK=false fails fast.
+  active: serpapi_google
+
+  # Rescue provider(s): when every active engine fails for a query (or it
+  # yields zero hits), the same query is retried against the fallback chain in
+  # order until one returns results. Accepts a single name or a list. tavily
+  # first (zero-ops cloud API, free tier 1000 calls/month), then searxng (free
+  # but needs the local docker instance up). Names already in "active" and
+  # unusable providers (missing key / down instance) are skipped.
+  fallback: [tavily, searxng]
+
+  # Per-query SERP request cap used by the pipeline; each provider's own
+  # hits_per_query further limits what it returns. Note: SerpApi bills per
+  # API call, NOT per result - so a deeper SERP page costs nothing extra.
+  max_hits_per_query: 15
 
   providers:
     mock:
       type: mock
       hits_per_query: 6
 
-    serpapi:
+    # Self-hosted SearXNG metasearch: one query fans out to baidu/google/bing
+    # on the instance side and returns merged JSON. Free, no API key needed.
+    # Start a local instance with:  cd searxng && docker compose up -d
+    searxng:
+      type: searxng
+      base_url_env: SEARXNG_BASE_URL   # default http://localhost:8888
+      engines: [baidu, google, bing]
+      language: zh-CN
+      hits_per_query: 10
+
+    # Tavily (https://tavily.com): LLM-oriented search API, bills per call
+    # (basic=1 credit, advanced=2; free tier 1000 credits/month). Snippets are
+    # extracted page content - longer/cleaner than SERP snippets. Chinese
+    # financial-web coverage is weaker than Baidu, so best used as fallback or
+    # a supplementary engine, not the sole primary for A-share targets.
+    tavily:
+      type: tavily
+      endpoint: "https://api.tavily.com/search"
+      api_key_env: TAVILY_API_KEY
+      topic: general
+      search_depth: basic
+      hits_per_query: 10
+
+    # SerpApi is an aggregator; the engine field selects the backing search
+    # engine. Both entries share one SERPAPI_API_KEY.
+    serpapi_baidu:
       type: serpapi
       endpoint: "https://serpapi.com/search"
       api_key_env: SERPAPI_API_KEY
       engine: baidu
-      hits_per_query: 10
+      hits_per_query: 15
 
-    bing:
-      type: bing
-      endpoint: "https://api.bing.microsoft.com/v7.0/search"
-      api_key_env: BING_SEARCH_API_KEY
-      hits_per_query: 10
+    serpapi_google:
+      type: serpapi
+      endpoint: "https://serpapi.com/search"
+      api_key_env: SERPAPI_API_KEY
+      engine: google
+      hits_per_query: 15
+
+    # Bing results also come via SerpApi: Microsoft retired the native Bing
+    # Search API v7 on 2025-08-11 (no new keys, existing ones disabled).
+    serpapi_bing:
+      type: serpapi
+      endpoint: "https://serpapi.com/search"
+      api_key_env: SERPAPI_API_KEY
+      engine: bing
+      hits_per_query: 15

@@ -12,6 +12,38 @@ call_governance:
     max_input_chars_per_model_call: 8000
     max_selected_passages_per_link: 8
 
+  # Vision rescue extraction (PDF page images / embedded page images) via a
+  # multimodal model. The default model is the OpenClaw gateway, which routes
+  # to a text+image backend configured on the OpenClaw side - MIC just sends
+  # OpenAI-style multimodal messages. Calls are budgeted per run and reported
+  # in the run summary as vision_calls.
+  vision_extract:
+    enabled: true
+    # Registry entry that supplies the gateway endpoint + token. The call
+    # itself uses OpenClaw's /v1/responses API: input_image goes into the
+    # model prompt there, whereas /v1/chat/completions demotes images to
+    # agent attachments that text-only primaries never see.
+    model_config_id: openclaw_research
+    # Agent route requested in the payload's "model" field.
+    request_model: openclaw/default
+    # x-openclaw-model header: forces a vision-capable (text+image) backend
+    # for image transcription calls, so the gateway's default text-only model
+    # is never asked to look at pictures. Deployment-specific; set
+    # OPENCLAW_VISION_MODEL in .env (it takes precedence over this value).
+    model_override: ""
+    timeout_seconds: 120
+    max_output_tokens: 4096
+    # Scanned PDFs: text layer shorter than this triggers page rendering.
+    min_pdf_text_chars: 200
+    max_pdf_pages: 5
+    # Embedded HTML images ("公告截图 + 一句话" pages). Off by default: most
+    # page images are ads/chrome, and the same event usually has a text
+    # version on another site. Enable after observing real information loss.
+    html_images_enabled: false
+    html_min_body_chars: 500
+    max_images_per_page: 3
+    max_calls_per_run: 10
+
   reuse:
     canonical_url_cache: true
     content_hash_cache: true
@@ -37,15 +69,22 @@ call_governance:
       required_objects_extracted: true
 
   triggers:
+    # Any matched condition triggers a model call for a link that triage
+    # decided to read. rule_score_between feeds triage's need_model band; the
+    # rest can promote links that fell outside the band.
     call_model_when:
       rule_score_between: [40, 90]
       high_value_keyword_matched: true
       source_type_in: [official, exchange, regulator, company, industry]
       contains_metric_or_amount: true
       contains_relation_signal: true
-      coverage_gap_related: true
+      # coverage_gap_related: requires gap->link attribution; not implemented yet.
     skip_model_when:
       duplicate_canonical_url_analyzed: true
+      # same_content_hash_analyzed is enforced by the pipeline's content-hash
+      # reuse paths before any model call.
       same_content_hash_analyzed: true
+      # title_snippet_low_relevance is enforced by rule triage (skip_for_now).
       title_snippet_low_relevance: true
-      same_event_high_confidence_already_exists: true
+      # same_event_high_confidence_already_exists: requires cross-link event
+      # identity matching; not implemented yet.

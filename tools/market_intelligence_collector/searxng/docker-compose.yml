@@ -1,0 +1,25 @@
+# Self-hosted SearXNG metasearch instance for MIC's "searxng" search provider.
+#
+# Usage:
+#   1. (once) generate a secret key:
+#      sed -i "s|CHANGE_ME_RANDOM_SECRET|$(openssl rand -hex 32)|" config/settings.yml
+#   2. docker compose up -d
+#   3. check: curl 'http://localhost:8888/search?q=test&format=json' | head
+#
+# MIC reads SEARXNG_BASE_URL from .env (default http://localhost:8888).
+
+# version is required by legacy docker-compose v1 (e.g. 1.29); harmless and
+# ignored by the modern "docker compose" plugin.
+version: "3.8"
+
+services:
+  searxng:
+    image: searxng/searxng:latest
+    container_name: mic-searxng
+    ports:
+      - "8888:8080"
+    volumes:
+      - ./config:/etc/searxng
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8888/
+    restart: unless-stopped

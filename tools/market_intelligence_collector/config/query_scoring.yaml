@@ -1,6 +1,7 @@
 # Query scoring weights (spec section 8.3).
 # query_score = topic_priority + source_credibility_expectation + concrete_fact_expectation
-#             + time_sensitivity + coverage_gap_value + entity_match - duplication_penalty
+#             + time_sensitivity + coverage_gap_value + entity_match
+# (near-duplicate queries are collapsed to the highest-scoring instance)
 query_scoring:
   version: query_scoring_v0.3
 
@@ -11,7 +12,8 @@ query_scoring:
     source_credibility_expectation: 6.0
     time_sensitivity: 5.0
     coverage_gap_value: 10.0
-    duplication_penalty: 25.0    # subtracted for (near) duplicate queries
+    # Near-duplicate queries are collapsed to the highest-scoring one (no
+    # penalty needed): see QueryPlanner._score_all.
 
   # Keywords that hint a query is likely to surface concrete facts.
   concrete_fact_keywords:
