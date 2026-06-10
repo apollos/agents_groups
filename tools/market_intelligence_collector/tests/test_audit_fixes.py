@@ -1,6 +1,8 @@
 """Tests for the spec-alignment audit fixes (max_tokens, PDF, feedback loop,
 call triggers, merge semantics, stats hygiene)."""
 
+import pytest
+
 from mic.api import AnalystAPI
 from mic.merge import ModelContribution, MultiModelMerger
 from mic.modeling.adapter import ModelCallResult, ModelRegistry
@@ -420,3 +422,19 @@ def test_get_relations_dedups_aliases_across_links():
     assert len(rels) == 1  # aliases collapsed, vague counterparty dropped
     assert rels[0]["confidence"] == 0.9
     assert set(rels[0]["source_link_ids"]) == {"link_a", "link_b"}
+
+
+# --- release / tool safety -------------------------------------------------
+
+
+def test_e2e_real_mode_rejects_mock_active(config):
+    from tools.e2e_validate import enforce_real_mode_config
+
+    config.raw["search_providers"]["active"] = "mock"
+    with pytest.raises(RuntimeError):
+        enforce_real_mode_config(config)
+
+
+def test_governance_does_not_advertise_unimplemented_same_event_cache(config):
+    reuse = config.call_governance.get("reuse", {})
+    assert reuse.get("same_event_cache") is False

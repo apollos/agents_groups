@@ -16,6 +16,13 @@ def _env(tmp_path, monkeypatch):
     monkeypatch.setenv("SERPAPI_API_KEY", "")
     monkeypatch.setenv("TAVILY_API_KEY", "")
     monkeypatch.setenv("SEARXNG_BASE_URL", "http://127.0.0.1:1")
+    # Blank model keys too: adapters prefer a real call whenever a key is set,
+    # so a developer's real .env would otherwise make these offline tests hit
+    # live APIs (non-deterministic, slow, and costly). Mock stays forced.
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "")
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "")
+    monkeypatch.setenv("SILICONFLOW_API_KEY", "")
+    monkeypatch.setenv("OPENCLAW_GATEWAY_TOKEN", "")
     monkeypatch.delenv("OPENCLAW_VISION_MODEL", raising=False)
     # Reset the database singleton so the new URL is honored.
     import mic.store.database as dbmod

@@ -3,7 +3,7 @@ search_providers:
 
   # The active provider(s). Accepts either a single name (string) or a list of
   # names to run together. Each name refers to an entry under "providers".
-  #   active: mock                              # offline, no keys (default)
+  #   active: mock                              # offline, no keys (safe default)
   #   active: searxng                           # self-hosted metasearch (free)
   #   active: serpapi_baidu                     # one real engine
   #   active: [serpapi_baidu, serpapi_bing]     # two engines, merged + deduped
@@ -12,7 +12,7 @@ search_providers:
   # canonical URL; each hit keeps its own "provider" tag (e.g. serpapi:baidu).
   # Engines missing their API key are skipped (logged); if none remain,
   # MIC_ALLOW_MOCK=true falls back to mock, MIC_ALLOW_MOCK=false fails fast.
-  active: serpapi_google
+  active: mock
 
   # Rescue provider(s): when every active engine fails for a query (or it
   # yields zero hits), the same query is retried against the fallback chain in

@@ -9,7 +9,7 @@ MIC 是一个**搜索结果驱动、模型完全配置化**的情报采集与结
 5. **本地校验并合并**多模型输出（含实体归一化：同 ticker 不同写法的公司视为同一实体，"多家供应商"等集合名词关系被过滤）；
 6. 只持久化**链接 + 结构化结果**（事实、指标、事件、关系、风险、催化剂、信号、后续问题、覆盖缺口），**从不保存网页原文**。
 
-本项目是对设计文档 [`market_intelligence_collector.md`](./market_intelligence_collector.md) 的完整实现。
+当前工程实现覆盖设计文档 [`market_intelligence_collector.md`](./market_intelligence_collector.md) 的主链路和大部分 V0.3 机制；少数生产增强能力（如事件级语义复用、复杂反爬处理）在文档中明确为边界或后续增强项。
 
 ---
 
@@ -22,6 +22,15 @@ MIC 是一个**搜索结果驱动、模型完全配置化**的情报采集与结
 - **费用控制 = 减少无效调用**，而非选便宜模型：URL/内容指纹复用、query 去重、规则先行、SERP 批量初筛、段落选择、一次性 bundle 抽取、早停。
 - **只持久化链接与结构化结果**：HTML / PDF / 全文 / 截图都不入库（`config/storage_policy.yaml`）。
 - **关系型数据是一等公民**，但用关系表实现，不上图数据库。
+- **默认不产生外部费用**：交付版默认 `active: mock` 且 `.env.example` 里 `MIC_ALLOW_MOCK=true`；真实搜索/模型必须显式配置 API Key、切换真实 search provider，并把 `MIC_ALLOW_MOCK=false`。
+
+---
+
+## 当前明确边界
+
+- 不登录、不复用个人 Cookie、不绕过验证码/付费墙；遇到反爬/验证码页会标记失败并记录日志。
+- `canonical_url` / `content_hash` 复用已实现；**事件级语义复用**暂未启用（`call_governance.yaml -> reuse.same_event_cache: false`），避免把不同来源的相似事件误判为同一事件。
+- SearXNG / Tavily / SerpApi / 视觉转写等真实外部服务都可能产生失败或费用，真实模式必须小预算验证后再放大。
 
 ---
 
@@ -60,11 +69,15 @@ QueryPlanner（搜索计划） → SearchProvider（搜索源） → SearchHitTr
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e .
-# 可选：PostgreSQL 驱动
-pip install -e ".[postgres]"
-# 可选：开发依赖（pytest / ruff）
-pip install -e ".[dev]"
+python -m pip install --upgrade pip
+# 推荐：开发/测试安装，后续可直接跑 pytest 和 tools/e2e_validate.py
+python -m pip install -e ".[dev]"
+
+# 仅运行程序、不跑测试时可用：
+# python -m pip install -e .
+
+# 需要 PostgreSQL 驱动时可用：
+# python -m pip install -e ".[postgres]"
 ```
 
 也可以用拆分后的 requirements 文件按需安装：
@@ -84,11 +97,13 @@ pip install -r requirements-dev.txt      # 测试 / lint
 cp .env.example .env
 ```
 
+> 安全要求：`.env`、`mic.db`、`logs/*.log`、`logs/*.db` 都是本地运行产物，**不能提交或打进交付 zip**。如果 `.env` 曾经被分享过，应立即在对应平台撤销/轮换里面的 API Key。
+
 ---
 
 ## 离线演示（无需任何 API Key）
 
-默认 `MIC_ALLOW_MOCK=true` 时，搜索源与模型适配层会回退到**确定性 mock**，整条流水线可在无外部服务的情况下端到端跑通。
+交付版默认 `config/search_providers.yaml -> active: mock`，且 `MIC_ALLOW_MOCK=true` 时模型适配层也会使用**确定性 mock**，整条流水线可在无外部服务、无外部费用的情况下端到端跑通。
 
 命令行：
 
@@ -127,7 +142,7 @@ events = api.get_recent_events("company_300750", since="30d")
 ## 接入真实模型与搜索源
 
 1. 在 `.env` 填入密钥（`DEEPSEEK_API_KEY`、`DASHSCOPE_API_KEY`、`SILICONFLOW_API_KEY`、`SERPAPI_API_KEY` 等）。视觉救援（扫描版 PDF / 页面图片转写）还需 `OPENCLAW_GATEWAY_TOKEN` 加 `OPENCLAW_VISION_MODEL`（OpenClaw 侧一个支持图片输入的模型名，如 `custom-api-siliconflow-cn/Pro/moonshotai/Kimi-K2.6`；不配则视觉调用会落到网关默认模型，纯文本模型看不到图片）。
-2. 在 `config/search_providers.yaml` 把 `active` 改为某个真实引擎，或一个引擎列表以**同时**调用多个引擎并合并去重，例如：
+2. 在 `config/search_providers.yaml` 把 `active: mock` 改为某个真实引擎，或一个引擎列表以**同时**调用多个引擎并合并去重，例如：
    - `active: serpapi_baidu`（仅百度）
    - `active: [serpapi_baidu, serpapi_bing]`（百度 + Bing）
    - `active: [serpapi_baidu, serpapi_google, serpapi_bing]`（百度 + 谷歌 + Bing）
@@ -139,7 +154,7 @@ events = api.get_recent_events("company_300750", since="30d")
 ### Tavily（默认兜底引擎）
 
 [Tavily](https://tavily.com) 是面向 LLM 的搜索 API，按调用计费（basic 1 积分/次，免费档 1000 积分/月），Key 配在 `.env` 的 `TAVILY_API_KEY`。返回的 snippet 是抽取后的正文片段，比传统 SERP 摘要更长更干净，利好初筛打分。**中文财经站点覆盖弱于 Baidu**（百家号、财联社类站点召回偏低），因此默认定位是 `fallback: tavily`（零运维兜底，已是默认配置）或 active 里的补充引擎，不建议单独作为 A 股目标的唯一主引擎。
-3. 设 `MIC_ALLOW_MOCK=false` 强制走真实调用（否则缺 Key 时会自动回退 mock）。
+3. 设 `MIC_ALLOW_MOCK=false` 强制走真实调用（否则缺 Key 时会自动回退 mock）。`python tools/e2e_validate.py --real` 会自动强制 `MIC_ALLOW_MOCK=false`，并且如果 `active` 仍是 `mock` 会直接失败，避免假阳性。
 4. 生产环境把 `MIC_DATABASE_URL` 指向 PostgreSQL，例如
    `postgresql+psycopg://user:pass@localhost:5432/mic`。
 
@@ -311,6 +326,7 @@ pytest -q
 python tools/e2e_validate.py --quiet      # 跑通整条链路并断言结果，PASS/FAIL
 bash tools/run_offline_e2e.sh             # 同上，强制 mock 模式
 bash tools/run_tests.sh                   # pytest + e2e，日志落 logs/
+python tools/check_release_clean.py .      # 交付/打包前检查是否混入 .env、db、logs 或疑似密钥
 ```
 
 检查项包括 query/search/read/model/validate/merge/store/API/explain，以及 DB 行数与

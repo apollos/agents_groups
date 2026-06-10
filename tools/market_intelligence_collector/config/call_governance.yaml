@@ -47,7 +47,10 @@ call_governance:
   reuse:
     canonical_url_cache: true
     content_hash_cache: true
-    same_event_cache: true
+    # Event-level semantic cache is intentionally off until a robust
+    # cross-link event identity matcher is implemented. URL/content-hash
+    # reuse already covers exact duplicate links and bodies.
+    same_event_cache: false
     same_query_batch_cache: true
 
   batching:

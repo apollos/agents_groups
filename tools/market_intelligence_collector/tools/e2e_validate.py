@@ -77,19 +77,58 @@ def add_check(checks: list[dict[str, Any]], name: str, condition: bool,
     checks.append({"name": name, "passed": bool(condition), "detail": detail})
 
 
+def active_provider_names(config) -> list[str]:
+    """Return configured active search provider names as a list."""
+    active = config.search_providers.get("active", "mock")
+    return [active] if isinstance(active, str) else list(active)
+
+
+def enforce_real_mode_config(config) -> None:
+    """Fail fast when --real would still run the mock search provider.
+
+    The flag means "prove real search/model plumbing", so using an explicit
+    mock provider would give a false PASS. Real mode also sets
+    MIC_ALLOW_MOCK=false before config/model/provider construction, so missing
+    keys fail visibly instead of falling back to deterministic mocks.
+    """
+    providers = config.search_providers.get("providers", {})
+    names = active_provider_names(config)
+    mock_names = [
+        name for name in names
+        if name == "mock" or providers.get(name, {}).get("type") == "mock"
+    ]
+    if mock_names:
+        raise RuntimeError(
+            "--real requires config/search_providers.yaml active to be a real "
+            f"provider, not {mock_names!r}. For example use serpapi_baidu, "
+            "serpapi_google, tavily, searxng, or a real provider list."
+        )
+
+
 def main() -> int:
     args = parse_args()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     log_directory = logs_dir(args.log_dir)
     log_path = configure_logging(log_dir=log_directory, log_file=f"e2e_{stamp}.log",
                                  console=not args.quiet)
-    if not args.real:
+    if args.real:
+        # Real mode must fail fast when a search/model key is missing; otherwise
+        # a green E2E run could merely prove the deterministic mock path.
+        os.environ["MIC_ALLOW_MOCK"] = "false"
+    else:
         os.environ["MIC_ALLOW_MOCK"] = "true"
         # Offline mode must stay offline even when .env carries real keys or a
         # local SearXNG instance is running (set before load_config/dotenv).
         os.environ["SERPAPI_API_KEY"] = ""
         os.environ["TAVILY_API_KEY"] = ""
         os.environ["SEARXNG_BASE_URL"] = "http://127.0.0.1:1"
+        # Model keys too: MIC_ALLOW_MOCK only enables the mock *fallback*, so a
+        # real key in .env would still send offline runs to live model APIs
+        # (cost + non-determinism). Blanking forces the deterministic mock.
+        os.environ["DEEPSEEK_API_KEY"] = ""
+        os.environ["DASHSCOPE_API_KEY"] = ""
+        os.environ["SILICONFLOW_API_KEY"] = ""
+        os.environ["OPENCLAW_GATEWAY_TOKEN"] = ""
     db_path = Path(args.db_path) if args.db_path else log_directory / f"e2e_{stamp}.db"
     if not db_path.is_absolute():
         db_path = PROJECT_ROOT / db_path
@@ -108,7 +147,15 @@ def main() -> int:
         },
     }
     logger.info("e2e_start target=%s db=%s", args.target_id, db_path)
-    api = AnalystAPI(load_config())
+    cfg = load_config()
+    if args.real:
+        try:
+            enforce_real_mode_config(cfg)
+        except RuntimeError as exc:
+            print(f"FAIL MIC E2E validation: {exc}")
+            logger.error("e2e_real_mode_config_invalid error=%s", exc)
+            return 2
+    api = AnalystAPI(cfg)
     report = api.collect_intelligence(args.target_id, task_profile)
     run_id = report["search_run_id"]
     summary = report["summary"]
