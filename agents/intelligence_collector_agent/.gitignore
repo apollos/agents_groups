@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+build/
+*.egg-info/
+
+# runtime artifacts
+data/*
+!data/README.md
+logs/
+reports/
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
+.env

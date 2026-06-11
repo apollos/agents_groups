@@ -1,0 +1,20 @@
+{
+  "schema_version": "demand.v1",
+  "demand_id": "test_demand_tool_capability_check_001",
+  "demand_type": "tool_capability_check",
+  "source_type": "test_harness",
+  "status": "active",
+  "created_by": "cli",
+  "owner": "test_owner",
+  "priority": "high",
+  "active_from": "2026-06-11",
+  "active_to": "2026-06-11",
+  "target_scope": {"scope_type": "tool", "include_tickers": []},
+  "targets": [],
+  "cadence_profile": "manual",
+  "task_profile": {},
+  "alert_policy": {"notify_on": ["P0", "P1"], "notify_owner": false, "notify_channels": ["ticket"]},
+  "output_contract": {"emit_data_quality_ticket": true, "write_public_data_pool": true},
+  "test_mode": true,
+  "idempotency_key": "test:demand:tool_capability_check:20260611"
+}

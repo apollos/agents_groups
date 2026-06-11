@@ -1,0 +1,132 @@
+agent:
+  agent_id: intelligence_collector_a_share
+  agent_group: intelligence_collector
+
+openclaw:
+  # This agent must not silently inherit OpenClaw's default model.
+  # Use a model ref already registered in OpenClaw, e.g. openai/gpt-5.5, deepseek/deepseek-reasoner, qwen/qwen3-max.
+  model:
+    primary: "REPLACE_WITH_REGISTERED_OPENCLAW_MODEL"
+    fallbacks: []
+    require_registered: true
+    allow_openclaw_default: false
+
+runtime:
+  # workspace_root can be an absolute path, "auto" to use OPENCLAW_WORKSPACE_ROOT/OPENCLAW_WORKSPACE,
+  # or "openclaw" to try the OpenClaw CLI and then environment fallback. Relative runtime paths
+  # are resolved against workspace_root, not process CWD.
+  workspace_root: "auto"
+  # Split stores: state is this Agent's private memory/checkpoint/session; bus is shared messages
+  # and Tickets; data stores Demand/collection outputs. They may point to the same file for a
+  # tiny local test, but production OpenClaw multi-Agent mode should keep at least state separate.
+  state_sqlite_path: "data/intelligence_collector_state.db"
+  bus_sqlite_path: "data/ticket_bus.db"
+  data_sqlite_path: "data/intelligence_collector_data.db"
+  log_dir: "logs"
+  timezone: "Asia/Shanghai"
+
+logging:
+  level: INFO
+  retention_days: 14
+
+queue:
+  backend: sqlite
+  consume_topics:
+    - intelligence.collection
+  lease_seconds: 300
+  retry_delay_seconds: 60
+
+circuit_breaker:
+  failure_threshold: 5
+  cooldown_seconds: 600
+
+schedule:
+  market_windows:
+    pre_market: ["08:00", "09:25"]
+    morning: ["09:30", "11:30"]
+    lunch_break: ["11:30", "13:00"]
+    afternoon: ["13:00", "15:00"]
+    post_market: ["15:00", "20:30"]
+  allow_non_trading_day_intraday: false
+  allow_lunch_break_intraday: false
+  allow_off_hours_intraday: false
+  allow_non_trading_day_black_swan: false
+  allow_lunch_break_black_swan: true
+  allow_off_hours_black_swan: true
+
+cadence:
+  intraday_bucket_minutes: 10
+  held_sellable_intraday_minutes: 10
+  held_t1_locked_intraday_minutes: 30
+  trading_candidate_intraday_minutes: 10
+  watchlist_intraday_minutes: 60
+  black_swan_held_sellable_minutes: 60
+  black_swan_candidate_minutes: 120
+  industry_deep_collect_hours: 4
+
+# Default MIC task profiles. Demand task_profile overrides these. No budget should be
+# hardcoded in agent code.
+mic_task_defaults:
+  deep_collect:
+    focus: [risk, operating_update, policy, supply_chain]
+    time_window: "30d"
+    budget_profile:
+      max_queries: 20
+      max_links_to_read: 10
+      max_model_calls: 8
+  black_swan:
+    focus: [risk, legal_compliance, shareholder_action]
+    time_window: "7d"
+    budget_profile:
+      max_queries: 8
+      max_links_to_read: 4
+      max_model_calls: 3
+  # Applied as an upper bound whenever demand.test_mode is true.
+  test_mode_budget_profile:
+    max_queries: 2
+    max_links_to_read: 1
+    max_model_calls: 1
+
+quality:
+  minimum_quality_for_public_pool: 0.80
+  critical_conflict_action: quarantine_and_alert
+  high_conflict_action: accept_with_review
+
+intraday:
+  # Agent bucket remains configurable. When the source supports 5m, Agent fetches then queries
+  # stored bars and aggregates into the configured bucket. If only 15m is verified, features are
+  # explicitly marked degraded.
+  use_query_bars_after_fetch: true
+  query_bars_trading_ready: false
+
+market_features:
+  abnormality_ticket_threshold: 0.75
+
+reports:
+  output_dir: "reports"
+
+capability_verification:
+  stock_data_collector:
+    # Set these to a recent trading day before running tools verify-capabilities.
+    ticker: "600519.SH"
+    start_date: "2026-06-01"
+    end_date: "2026-06-01"
+    frequencies: ["5m", "15m"]
+    fallback_order: ["5m", "15m", "none"]
+    unverified_default_frequency: "15m"
+
+tools:
+  python_executable: "python"
+  market_intelligence_collector:
+    enabled: true
+    # Optional; MIC itself usually reads its own config/env.
+    config_dir: null
+  stock_data_collector:
+    enabled: true
+    # Use an absolute path, or leave null to let stock_data_collector resolve its own config/env.
+    # Do not use process-CWD-relative paths in OpenClaw multi-Agent deployments.
+    config_dir: null
+    # If stock_data_ingestion is not importable from OpenClaw's worker environment, set this to an
+    # absolute path to the stock_data_collector project root.
+    working_dir: null
+    timeout_seconds: 180
