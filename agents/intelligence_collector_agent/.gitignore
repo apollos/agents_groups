@@ -9,6 +9,9 @@ data/*
 !data/README.md
 logs/
 reports/
+# MIC defaults to sqlite:///mic.db relative to process CWD; running the agent
+# from the project root regenerates this file. Keep it out of the repo.
+mic.db
 *.db-wal
 *.db-shm
 *.sqlite-wal

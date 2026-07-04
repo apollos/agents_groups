@@ -23,6 +23,7 @@ from .queue import SQLiteMessageQueue
 from .reader import IntelligenceReader
 from .recovery import RecoveryManager
 from .reports import DailyReportBuilder
+from .request_center import RequestCenter, list_mic_targets, resolve_mic_config_dir
 from .runtime import RuntimeController
 from .session import AgentSessionRepository
 from .stores import create_stores, init_unique_stores
@@ -164,6 +165,57 @@ def main(argv: list[str] | None = None) -> None:
     tools = sub.add_parser("tools")
     tools_sub = tools.add_subparsers(dest="tools_command", required=True)
     tools_sub.add_parser("verify-capabilities")
+    tools_sub.add_parser("list-mic-targets")
+
+    request = sub.add_parser("request", help="One-command collection requests for industries / companies / stocks")
+    request_sub = request.add_subparsers(dest="request_command", required=True)
+    req_ind = request_sub.add_parser("industry", help="Register an industry line: MIC profile + daily demand target")
+    req_ind.add_argument("--name", required=True, help="Industry name used in search queries, e.g. AI算力")
+    req_ind.add_argument("--target-id", help="Explicit target_id; defaults to industry_<hash>")
+    req_ind.add_argument("--aliases", help="Comma-separated aliases")
+    req_ind.add_argument("--products", help="Comma-separated products / sub-segments")
+    req_ind.add_argument("--upstream", help="Comma-separated upstream terms")
+    req_ind.add_argument("--downstream", help="Comma-separated downstream terms")
+    req_ind.add_argument("--metrics", help="Comma-separated core metrics to track")
+    req_ind.add_argument("--companies", help="Comma-separated representative companies")
+    req_ind.add_argument("--demand-id", default=None)
+    req_ind.add_argument("--priority", default="normal")
+    req_ind.add_argument("--test-mode", action="store_true")
+    req_com = request_sub.add_parser("company", help="Register a company: MIC profile + daily demand target (+pool if A-share)")
+    req_com.add_argument("--name", required=True, help="Company short name, e.g. 北方华创")
+    req_com.add_argument("--ticker", help="A-share (002371.SZ) or HK (0700.HK) ticker")
+    req_com.add_argument("--target-id", help="Explicit target_id; defaults to company_<code>")
+    req_com.add_argument("--aliases", help="Comma-separated aliases")
+    req_com.add_argument("--products", help="Comma-separated products")
+    req_com.add_argument("--segments", help="Comma-separated business segments")
+    req_com.add_argument("--customers", help="Comma-separated known customers")
+    req_com.add_argument("--competitors", help="Comma-separated competitors")
+    req_com.add_argument("--upstream", help="Comma-separated upstream terms")
+    req_com.add_argument("--downstream", help="Comma-separated downstream terms")
+    req_com.add_argument("--markets", help="Comma-separated markets, e.g. A股,港股通")
+    req_com.add_argument("--demand-id", default=None)
+    req_com.add_argument("--pool-layer", default="watchlist")
+    req_com.add_argument("--no-pool", action="store_true")
+    req_com.add_argument("--priority", default="normal")
+    req_com.add_argument("--test-mode", action="store_true")
+    req_stk = request_sub.add_parser("stock", help="Register an A-share ticker for post-close data refresh (+pool)")
+    req_stk.add_argument("--ticker", required=True)
+    req_stk.add_argument("--company-name")
+    req_stk.add_argument("--demand-id", default=None)
+    req_stk.add_argument("--pool-layer", default="watchlist")
+    req_stk.add_argument("--no-pool", action="store_true")
+    req_stk.add_argument("--priority", default="normal")
+    req_stk.add_argument("--test-mode", action="store_true")
+    req_rm = request_sub.add_parser("remove", help="Remove a target from a managed demand")
+    req_rm.add_argument("--demand-id", required=True)
+    req_rm.add_argument("--target-id")
+    req_rm.add_argument("--ticker")
+    req_batch = request_sub.add_parser(
+        "batch", help="Register a whole research pool from one YAML/JSON spec (see examples/research_pool_full.yaml)"
+    )
+    req_batch.add_argument("--file", required=True, help="Spec file with defaults / demands / industries / companies / stocks")
+    req_batch.add_argument("--test-mode", action="store_true", help="Force test_mode on all entries (budget clamped)")
+    request_sub.add_parser("status", help="Show MIC-registered targets, managed demands and pool members")
 
     oc = sub.add_parser("openclaw")
     oc_sub = oc.add_subparsers(dest="openclaw_command", required=True)
@@ -247,7 +299,17 @@ def main(argv: list[str] | None = None) -> None:
             _print({"status": "valid"})
         elif args.demand_command == "register":
             demand = _load_structured_file(args.file)
-            _print(registry.register(demand, activate=args.activate))
+            result = registry.register(demand, activate=args.activate)
+            # Warn early when targets are missing from MIC's target_profiles.yaml:
+            # MIC collection would otherwise fail at execution time with Unknown target_id.
+            missing = RequestCenter(cfg, data_store=data_store, bus_store=bus_store).unregistered_mic_targets(demand)
+            if missing:
+                result["mic_unregistered_targets"] = missing
+                result["warning"] = (
+                    "these target_ids are not registered in MIC target_profiles.yaml; "
+                    "use `intel-agent request industry|company` or edit the file before collection runs"
+                )
+            _print(result)
         elif args.demand_command == "list":
             _print({"items": registry.list(status=args.status)})
         elif args.demand_command == "get":
@@ -420,6 +482,69 @@ def main(argv: list[str] | None = None) -> None:
             worker = IntelligenceCollectorAgent(cfg)
             res = worker.capabilities.verify_stock_intraday()
             _print({"capability_id": res.capability_id, "status": res.status, "capabilities": res.capabilities, "errors": res.errors})
+        elif args.tools_command == "list-mic-targets":
+            config_dir = resolve_mic_config_dir(cfg)
+            _print({"mic_config_dir": str(config_dir), "items": list_mic_targets(config_dir)})
+        return
+
+    if args.command == "request":
+        center = RequestCenter(cfg, data_store=data_store, bus_store=bus_store)
+        if args.request_command == "industry":
+            _print(
+                center.request_industry(
+                    name=args.name,
+                    target_id=args.target_id,
+                    aliases=args.aliases,
+                    products=args.products,
+                    upstream=args.upstream,
+                    downstream=args.downstream,
+                    metrics=args.metrics,
+                    companies=args.companies,
+                    demand_id=args.demand_id,
+                    priority=args.priority,
+                    test_mode=args.test_mode,
+                )
+            )
+        elif args.request_command == "company":
+            _print(
+                center.request_company(
+                    name=args.name,
+                    ticker=args.ticker,
+                    target_id=args.target_id,
+                    aliases=args.aliases,
+                    products=args.products,
+                    segments=args.segments,
+                    customers=args.customers,
+                    competitors=args.competitors,
+                    upstream=args.upstream,
+                    downstream=args.downstream,
+                    markets=args.markets,
+                    demand_id=args.demand_id,
+                    pool_layer=None if args.no_pool else args.pool_layer,
+                    priority=args.priority,
+                    test_mode=args.test_mode,
+                )
+            )
+        elif args.request_command == "stock":
+            _print(
+                center.request_stock(
+                    ticker=args.ticker,
+                    company_name=args.company_name,
+                    demand_id=args.demand_id,
+                    pool_layer=None if args.no_pool else args.pool_layer,
+                    priority=args.priority,
+                    test_mode=args.test_mode,
+                )
+            )
+        elif args.request_command == "batch":
+            spec = _load_structured_file(args.file)
+            if args.test_mode:
+                spec.setdefault("defaults", {})["test_mode"] = True
+            _print(center.request_batch(spec))
+        elif args.request_command == "remove":
+            _print(center.remove_target(demand_id=args.demand_id, target_id=args.target_id, ticker=args.ticker))
+        elif args.request_command == "status":
+            _print(center.status())
         return
 
     if args.command == "openclaw":

@@ -1,3 +1,13 @@
+# Target profiles for MIC collection.
+#
+# Layout:
+#   1) Legacy/demo targets (company_300750, industry_pv_glass).
+#   2) Research-pool industry lines (industry_*): the 8 priority tracks from
+#      《A股_港股通_可迭代股票研究池_跟踪建议.md》, used by demand_industry_research_daily.
+#   3) Research-pool core companies (company_*): first batch of core watch companies,
+#      used by demand_company_research_daily.
+#
+# New targets can be appended with:  intel-agent request industry|company ...
 target_profiles:
   company_300750:
     target_id: company_300750
@@ -72,3 +82,630 @@ target_profiles:
       - 福莱特
       - 信义光能
       - 亚玛顿
+
+  # ==========================================================================
+  # Research-pool industry lines (priority order from the tracking plan)
+  # ==========================================================================
+
+  industry_ai_semi:
+    target_id: industry_ai_semi
+    type: industry
+    canonical_name: "AI算力"
+    aliases:
+      - 半导体
+      - 光模块
+      - AI服务器
+      - PCB
+      - 先进封装
+    products:
+      - AI服务器
+      - 800G光模块
+      - 1.6T光模块
+      - 高多层PCB
+      - 覆铜板
+      - 半导体设备
+      - 先进封装
+      - HBM
+      - CPO硅光
+      - 液冷服务器
+    upstream_terms:
+      - 玻纤布
+      - 铜箔
+      - 硅片
+      - 光芯片
+      - 晶圆代工
+      - CoWoS
+    downstream_terms:
+      - 云厂商资本开支
+      - 数据中心
+      - 智算中心
+      - 算力租赁
+    core_metrics:
+      - AI服务器订单
+      - 光模块出货量
+      - 合同负债
+      - 应收账款
+      - 存货
+      - 毛利率
+      - 国产替代
+      - 出口管制
+    representative_companies:
+      - 工业富联
+      - 中际旭创
+      - 新易盛
+      - 沪电股份
+      - 生益科技
+      - 北方华创
+      - 中微公司
+      - 海光信息
+      - 澜起科技
+      - 中芯国际
+      - 华虹半导体
+    regions:
+      - 中国
+      - 北美
+
+  industry_high_end_equipment:
+    target_id: industry_high_end_equipment
+    type: industry
+    canonical_name: "高端装备"
+    aliases:
+      - 机器人
+      - 工业自动化
+      - 人形机器人
+      - 航空航天
+    products:
+      - 工业机器人
+      - 人形机器人
+      - 谐波减速器
+      - RV减速器
+      - 伺服系统
+      - 行星滚柱丝杠
+      - 运动控制器
+      - 机器视觉
+      - 航空发动机
+      - 轨交装备
+    upstream_terms:
+      - 稀土永磁
+      - 精密轴承
+      - 齿轮钢
+    downstream_terms:
+      - 汽车产线
+      - 3C自动化
+      - 锂电设备
+      - 低空经济
+    core_metrics:
+      - 工业机器人产量
+      - 订单
+      - 合同负债
+      - 交付周期
+      - 毛利率
+      - 核心零部件自制率
+      - 客户集中度
+      - 存货
+    representative_companies:
+      - 汇川技术
+      - 埃斯顿
+      - 绿的谐波
+      - 埃夫特
+      - 中控技术
+      - 中国中车
+      - 中航沈飞
+      - 潍柴动力
+
+  industry_power_grid:
+    target_id: industry_power_grid
+    type: industry
+    canonical_name: "电力系统"
+    aliases:
+      - 电网
+      - 特高压
+      - 智能电网
+      - 储能
+      - 核电
+    products:
+      - 特高压设备
+      - 柔性直流
+      - 换流阀
+      - 变压器
+      - 高压开关
+      - 储能系统
+      - 智能电表
+      - 核电设备
+    upstream_terms:
+      - 铜
+      - 取向硅钢
+      - IGBT
+      - 储能电芯
+    downstream_terms:
+      - 电网投资
+      - 新能源消纳
+      - 电力现货市场
+      - 辅助服务
+      - 虚拟电厂
+    core_metrics:
+      - 国家电网招标
+      - 南方电网招标
+      - 特高压核准
+      - 储能中标价格
+      - 新能源消纳率
+      - 核电核准
+      - 燃气顺价
+      - 自由现金流
+    representative_companies:
+      - 国电南瑞
+      - 许继电气
+      - 平高电气
+      - 中国西电
+      - 特变电工
+      - 阳光电源
+      - 长江电力
+      - 中国核电
+      - 中广核电力
+      - 新奥能源
+
+  industry_pharma:
+    target_id: industry_pharma
+    type: industry
+    canonical_name: "创新药"
+    aliases:
+      - 医药
+      - 医疗器械
+      - CXO
+      - 生物医药
+    products:
+      - 创新药
+      - 医疗器械
+      - ADC
+      - 双抗
+      - CDMO
+      - 高端影像设备
+      - IVD
+    upstream_terms:
+      - 原料药
+      - 培养基
+      - 临床CRO
+    downstream_terms:
+      - 医保目录
+      - 商保创新药目录
+      - 集采
+      - 医院设备更新
+    core_metrics:
+      - CDE受理
+      - 临床试验默示许可
+      - 突破性治疗
+      - NDA
+      - license-out
+      - 医保谈判
+      - 集采
+      - 现金储备
+    representative_companies:
+      - 恒瑞医药
+      - 迈瑞医疗
+      - 联影医疗
+      - 百济神州
+      - 信达生物
+      - 康方生物
+      - 药明康德
+      - 药明生物
+
+  industry_dividend_soe:
+    target_id: industry_dividend_soe
+    type: industry
+    canonical_name: "高股息央国企"
+    aliases:
+      - 红利资产
+      - 央企红利
+      - 高股息
+    products:
+      - 电信运营
+      - 煤炭
+      - 油气
+      - 水电
+      - 核电运营
+      - 银行
+    upstream_terms:
+      - 油价
+      - 煤价
+      - 天然气价
+    downstream_terms:
+      - 长债利率
+      - 央企市值管理
+      - 红利指数
+    core_metrics:
+      - 分红率
+      - 股息率
+      - 自由现金流
+      - 资本开支
+      - 回购注销
+      - 中期分红
+    representative_companies:
+      - 中国移动
+      - 中国电信
+      - 中国神华
+      - 中国海油
+      - 长江电力
+      - 工商银行
+      - 陕西煤业
+
+  industry_internet_consumer:
+    target_id: industry_internet_consumer
+    type: industry
+    canonical_name: "平台互联网"
+    aliases:
+      - 互联网平台
+      - 电商
+      - 本地生活
+      - 新消费
+      - 品牌出海
+    products:
+      - 电商
+      - 本地生活
+      - 即时零售
+      - 游戏
+      - 广告
+      - 潮玩IP
+      - 运动服饰
+    upstream_terms:
+      - 云计算
+      - 物流履约
+      - 服务器
+    downstream_terms:
+      - GMV
+      - 用户时长
+      - 出境游
+      - 海外门店
+    core_metrics:
+      - GMV
+      - MAU
+      - take rate
+      - 广告收入
+      - 履约成本
+      - 回购
+      - 游戏版号
+      - 酒店RevPAR
+    representative_companies:
+      - 腾讯控股
+      - 阿里巴巴
+      - 美团
+      - 京东集团
+      - 携程集团
+      - 快手
+      - 网易
+      - 泡泡玛特
+      - 安踏体育
+
+  industry_resource_cycle:
+    target_id: industry_resource_cycle
+    type: industry
+    canonical_name: "资源周期"
+    aliases:
+      - 有色金属
+      - 煤炭
+      - 化工
+      - 航运
+    products:
+      - 铜
+      - 电解铝
+      - 稀土
+      - 动力煤
+      - 原油
+      - 化工品
+      - 集运
+      - 油运
+    upstream_terms:
+      - 铜精矿
+      - 氧化铝
+      - TC/RC加工费
+      - 矿山供给
+    downstream_terms:
+      - 电网用铜
+      - 新能源车
+      - 家电
+      - 基建
+    core_metrics:
+      - LME库存
+      - SHFE仓单
+      - 港口库存
+      - 化工价差
+      - 开工率
+      - BDI
+      - SCFI
+      - 动力煤长协价
+    representative_companies:
+      - 紫金矿业
+      - 洛阳钼业
+      - 中国铝业
+      - 北方稀土
+      - 江西铜业
+      - 兖矿能源
+      - 中国宏桥
+      - 中远海控
+
+  industry_export_manufacturing:
+    target_id: industry_export_manufacturing
+    type: industry
+    canonical_name: "出海制造"
+    aliases:
+      - 出口制造
+      - 制造业出海
+    products:
+      - 汽车零部件
+      - 工程机械
+      - 家电
+      - 船舶
+      - 轨交装备
+    upstream_terms:
+      - 海运费
+      - 汇率
+      - 钢材
+    downstream_terms:
+      - 海外渠道
+      - 经销商库存
+      - 海外产能
+      - 本地化生产
+    core_metrics:
+      - 海外订单
+      - 海外收入占比
+      - 关税
+      - 反倾销
+      - 汇兑损益
+      - 毛利率
+      - 客户去库存
+    representative_companies:
+      - 三一重工
+      - 中联重科
+      - 美的集团
+      - 海尔智家
+      - 潍柴动力
+      - 中国中车
+      - 顺丰控股
+
+  # ==========================================================================
+  # Research-pool core companies (first batch)
+  # ==========================================================================
+
+  company_601138:
+    target_id: company_601138
+    type: company
+    canonical_name: "富士康工业互联网股份有限公司"
+    aliases: [工业富联, "601138"]
+    markets: [A股]
+    products: [AI服务器, 云计算硬件, 通信网络设备, 精密制造]
+    business_segments: [云计算, 通信及移动网络设备, 工业互联网]
+    known_customers: [英伟达, 苹果, 亚马逊, 微软]
+    competitors: [立讯精密, 浪潮信息, 中科曙光]
+    upstream_terms: [GPU, 液冷, 电源模块]
+    downstream_terms: [云厂商资本开支, 数据中心]
+    regions: [中国, 北美]
+
+  company_300308:
+    target_id: company_300308
+    type: company
+    canonical_name: "中际旭创股份有限公司"
+    aliases: [中际旭创, 旭创科技, "300308"]
+    markets: [A股]
+    products: [800G光模块, 1.6T光模块, 硅光模块]
+    business_segments: [高速光模块]
+    known_customers: [谷歌, 英伟达, Meta, 亚马逊]
+    competitors: [新易盛, Coherent, 光迅科技]
+    upstream_terms: [光芯片, 激光器, EML]
+    downstream_terms: [数据中心, AI算力集群]
+    regions: [中国, 北美]
+
+  company_002371:
+    target_id: company_002371
+    type: company
+    canonical_name: "北方华创科技集团股份有限公司"
+    aliases: [北方华创, "002371"]
+    markets: [A股]
+    products: [刻蚀设备, 薄膜沉积设备, 清洗设备, 炉管设备]
+    business_segments: [半导体装备, 真空装备, 新能源装备]
+    known_customers: [中芯国际, 华虹半导体, 长江存储]
+    competitors: [中微公司, 拓荆科技, 应用材料, 泛林集团]
+    upstream_terms: [精密零部件, 射频电源, 真空泵]
+    downstream_terms: [晶圆厂扩产, 国产替代]
+    regions: [中国]
+
+  company_002463:
+    target_id: company_002463
+    type: company
+    canonical_name: "沪士电子股份有限公司"
+    aliases: [沪电股份, "002463"]
+    markets: [A股]
+    products: [AI服务器PCB, 高多层PCB, 汽车PCB]
+    business_segments: [企业通讯市场板, 汽车板]
+    known_customers: [英伟达, 思科, 华为]
+    competitors: [深南电路, 胜宏科技, 景旺电子]
+    upstream_terms: [覆铜板, 玻纤布, 铜箔]
+    downstream_terms: [AI服务器, 高速交换机]
+    regions: [中国]
+
+  company_300124:
+    target_id: company_300124
+    type: company
+    canonical_name: "深圳市汇川技术股份有限公司"
+    aliases: [汇川技术, "300124"]
+    markets: [A股]
+    products: [伺服系统, 变频器, PLC, 新能源汽车电驱]
+    business_segments: [通用自动化, 新能源汽车, 智慧电梯]
+    known_customers: [锂电设备厂商, 3C自动化厂商]
+    competitors: [西门子, 台达, 禾川科技]
+    upstream_terms: [IGBT, 芯片, 电机]
+    downstream_terms: [工业机器人, 人形机器人, 产线改造]
+    regions: [中国]
+
+  company_688017:
+    target_id: company_688017
+    type: company
+    canonical_name: "苏州绿的谐波传动科技股份有限公司"
+    aliases: [绿的谐波, "688017"]
+    markets: [A股]
+    products: [谐波减速器, 机电一体化执行器]
+    business_segments: [精密传动装置]
+    known_customers: [埃斯顿, 埃夫特, 机器人整机厂]
+    competitors: [哈默纳科, 双环传动, 来福谐波]
+    upstream_terms: [轴承钢, 精密加工]
+    downstream_terms: [人形机器人, 工业机器人, 协作机器人]
+    regions: [中国]
+
+  company_600406:
+    target_id: company_600406
+    type: company
+    canonical_name: "国电南瑞科技股份有限公司"
+    aliases: [国电南瑞, 南瑞, "600406"]
+    markets: [A股]
+    products: [电网自动化系统, 继电保护, 换流阀, 电力信息通信]
+    business_segments: [电网自动化及工业控制, 继电保护及柔性输电]
+    known_customers: [国家电网, 南方电网]
+    competitors: [许继电气, 四方股份, 东方电子]
+    upstream_terms: [芯片, IGBT]
+    downstream_terms: [特高压, 电网投资, 电力现货市场]
+    regions: [中国]
+
+  company_300274:
+    target_id: company_300274
+    type: company
+    canonical_name: "阳光电源股份有限公司"
+    aliases: [阳光电源, "300274"]
+    markets: [A股]
+    products: [光伏逆变器, 储能系统, 风电变流器]
+    business_segments: [光伏逆变器, 储能, 新能源投资开发]
+    known_customers: [电站开发商, 海外储能集成商]
+    competitors: [华为数字能源, 上能电气, 特斯拉储能]
+    upstream_terms: [IGBT, 储能电芯]
+    downstream_terms: [储能招标, 光伏装机, 电网侧储能]
+    regions: [中国, 欧洲, 北美]
+
+  company_300760:
+    target_id: company_300760
+    type: company
+    canonical_name: "深圳迈瑞生物医疗电子股份有限公司"
+    aliases: [迈瑞医疗, "300760"]
+    markets: [A股]
+    products: [监护仪, IVD试剂与设备, 超声影像]
+    business_segments: [生命信息与支持, 体外诊断, 医学影像]
+    known_customers: [医院, 海外经销商]
+    competitors: [联影医疗, GE医疗, 飞利浦, 新产业]
+    upstream_terms: [电子元器件, 诊断原料]
+    downstream_terms: [医疗设备更新, 集采, 海外市场]
+    regions: [中国, 海外]
+
+  company_600276:
+    target_id: company_600276
+    type: company
+    canonical_name: "江苏恒瑞医药股份有限公司"
+    aliases: [恒瑞医药, "600276"]
+    markets: [A股]
+    products: [创新药, 肿瘤药, 麻醉药, ADC]
+    business_segments: [创新药, 仿制药]
+    known_customers: [医院, 海外授权合作方]
+    competitors: [百济神州, 信达生物, 石药集团]
+    upstream_terms: [原料药, 临床CRO]
+    downstream_terms: [医保谈判, license-out, 商业化放量]
+    regions: [中国, 海外]
+
+  company_600941:
+    target_id: company_600941
+    type: company
+    canonical_name: "中国移动有限公司"
+    aliases: [中国移动, "600941"]
+    markets: [A股, 港股通]
+    products: [移动通信, 宽带, 云计算, 算力网络]
+    business_segments: [个人市场, 家庭市场, 政企市场, 新兴市场]
+    competitors: [中国电信, 中国联通]
+    upstream_terms: [通信设备, 服务器, 光缆]
+    downstream_terms: [算力网络, 云业务, 分红率]
+    regions: [中国]
+
+  company_601088:
+    target_id: company_601088
+    type: company
+    canonical_name: "中国神华能源股份有限公司"
+    aliases: [中国神华, "601088"]
+    markets: [A股, 港股通]
+    products: [煤炭, 电力, 铁路运输, 煤化工]
+    business_segments: [煤炭, 发电, 运输, 煤化工]
+    competitors: [陕西煤业, 兖矿能源, 中煤能源]
+    upstream_terms: [煤炭产能, 长协价]
+    downstream_terms: [电厂日耗, 港口库存, 分红]
+    regions: [中国]
+
+  company_hk_00700:
+    target_id: company_hk_00700
+    type: company
+    canonical_name: "腾讯控股有限公司"
+    aliases: [腾讯控股, 腾讯, "0700.HK"]
+    markets: [港股通]
+    products: [游戏, 社交, 广告, 金融科技, 云]
+    business_segments: [增值服务, 网络广告, 金融科技及企业服务]
+    competitors: [网易, 阿里巴巴, 字节跳动]
+    upstream_terms: [服务器, 游戏版号, AI芯片]
+    downstream_terms: [回购, 南向持股, 小游戏]
+    regions: [中国]
+
+  company_hk_03690:
+    target_id: company_hk_03690
+    type: company
+    canonical_name: "美团"
+    aliases: [美团, 美团-W, "3690.HK"]
+    markets: [港股通]
+    products: [外卖, 到店酒旅, 即时零售, 闪购]
+    business_segments: [核心本地商业, 新业务]
+    competitors: [抖音本地生活, 饿了么, 京东]
+    upstream_terms: [骑手成本, 履约成本]
+    downstream_terms: [佣金率, 补贴强度, 即时零售]
+    regions: [中国]
+
+  company_601899:
+    target_id: company_601899
+    type: company
+    canonical_name: "紫金矿业集团股份有限公司"
+    aliases: [紫金矿业, "601899"]
+    markets: [A股, 港股通]
+    products: [铜, 金, 锌, 锂]
+    business_segments: [矿产铜, 矿产金, 矿产锌]
+    competitors: [洛阳钼业, 江西铜业, 山东黄金]
+    upstream_terms: [铜精矿, 矿山产能, 资本开支]
+    downstream_terms: [铜价, 金价, LME库存]
+    regions: [中国, 海外]
+
+  company_601919:
+    target_id: company_601919
+    type: company
+    canonical_name: "中远海运控股股份有限公司"
+    aliases: [中远海控, "601919"]
+    markets: [A股, 港股通]
+    products: [集装箱航运, 码头运营]
+    business_segments: [集装箱航运, 码头]
+    competitors: [马士基, 达飞, 长荣海运]
+    upstream_terms: [新造船订单, 燃油成本]
+    downstream_terms: [SCFI, 运价, 全球贸易]
+    regions: [中国, 全球]
+
+  company_600031:
+    target_id: company_600031
+    type: company
+    canonical_name: "三一重工股份有限公司"
+    aliases: [三一重工, "600031"]
+    markets: [A股]
+    products: [挖掘机, 混凝土机械, 起重机]
+    business_segments: [挖掘机械, 混凝土机械, 起重机械]
+    competitors: [中联重科, 徐工机械, 卡特彼勒]
+    upstream_terms: [钢材, 液压件, 发动机]
+    downstream_terms: [基建投资, 海外收入, 挖机销量]
+    regions: [中国, 海外]
+
+  company_000333:
+    target_id: company_000333
+    type: company
+    canonical_name: "美的集团股份有限公司"
+    aliases: [美的集团, 美的, "000333"]
+    markets: [A股, 港股通]
+    products: [家用电器, 暖通空调, 机器人与自动化]
+    business_segments: [智能家居, 工业技术, 楼宇科技, 机器人与自动化]
+    known_customers: [海外渠道商, 房地产链]
+    competitors: [格力电器, 海尔智家, 海信家电]
+    upstream_terms: [铜, 钢材, 压缩机]
+    downstream_terms: [家电出海, 以旧换新, 海外产能]
+    regions: [中国, 海外]

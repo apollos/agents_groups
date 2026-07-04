@@ -1,10 +1,34 @@
-# 情报收集员 Agent 代码包 V0.6
+# 情报收集员 Agent 代码包 V0.7
 
 这是 Agent交易公司多 Agent A 股交易辅助系统中的 **情报收集员 Agent**。它面向 OpenClaw 多 Agent 运行环境设计，负责 Demand → Ticket → Message → 工具调用 → 质量闸门 → 事件/特征/日报的采集闭环。
 
 本 Agent **不输出买卖建议、仓位、目标价或交易指令**。它只做采集、结构化、质量检查、消息投递、Checkpoint、Memory 和日报。
 
-## 0. V0.6 关键变更（按设计说明书补齐功能）
+完整版本历史见 [ChangeLog.md](ChangeLog.md)。
+
+## 0. V0.7 关键变更（研究池启动 + 一键申请采集）
+
+按《A股_港股通_可迭代股票研究池_跟踪建议.md》落地"行业信息 + 目标公司信息"采集：
+
+1. **一键申请采集工具 `intel-agent request`**（`request_center.py`）：一条命令申请对行业 / 公司 / 股票开始采集。
+   - `request industry`：写入/合并 MIC `target_profiles.yaml` 行业档案，并把目标加入托管 Demand `demand_industry_research_daily`（不存在则自动创建为 active 的 daily_collection），发布 `demand.registered` 供 runtime tick 拾取。
+   - `request company`：同上写公司档案 + 加入 `demand_company_research_daily`；A 股代码同时进 `pool_members`（默认 watchlist 层），港股代码自动 `collect_stock=false`（stock_data_collector 仅覆盖 A 股）。
+   - `request stock`：仅股票数据（`collect_mic=false`），加入 `demand_stock_eod_daily`（盘后日线刷新）+ 股票池。
+   - `request batch --file`：**一个 YAML/JSON 配置文件一次性注册整个研究池**（行业 + 公司 + 股票 + 每个 Demand 的预算/优先级覆盖）。MIC 档案单次写盘，每个托管 Demand 只升一个版本；重复执行幂等。完整示例：`examples/research_pool_full.yaml`（覆盖跟踪建议 md 的 8 条主线 + §3 核心名单约 108 家 + §4 上下游观察名单约 67 家，观察层走低预算 `demand_company_watch_daily`）。
+   - `request remove / status`：从托管 Demand 移除目标；查看 MIC 已注册目标、托管 Demand 与股票池全景。
+2. **目标级工具开关**：Demand target 支持 `collect_mic: false`（跳过 MIC 任务）与 `collect_stock: false`（跳过盘后行情刷新）；行业目标（无 ticker）不再在盘后误生成股票任务。
+3. **MIC 注册一致性校验**：新增 `tools list-mic-targets`；`demand register` 时对将走 MIC 的 target_id 检查是否在 MIC `target_profiles.yaml` 注册，未注册的在输出中给出 `mic_unregistered_targets` warning（不阻断），避免执行期才报 `Unknown target_id`。
+4. **研究池内容配置（MIC 侧，均为 YAML 无代码改动）**：
+   - `target_profiles.yaml`：新增 8 条行业主线档案（AI算力/高端装备/电力系统/创新药/高股息央国企/平台互联网/资源周期/出海制造，含关注指标、上下游术语、代表公司）+ 首批 18 家核心公司档案。
+   - `query_families.yaml` v0.4：新增 `early_signal`（涨价函/排产/中标候选人/盈利警告等早期信号词，跟踪建议 §6.10）与 `hk_connect`（港股通资格/南向持股/回购）两个查询族。
+   - `source_packs.yaml` v0.4：新增 `industry_stats` 源包（统计局/能源局/工信部/行业协会），域名信源映射补充北交所、港交所、医保局、CDE、NMPA、行业协会等（跟踪建议 §5）。
+5. **示例 Demand**（`examples/demands/`）：`industry_research_daily.json`（8 行业每日深采）、`company_research_daily.json`（18 家核心公司每日深采 + A 股盘后行情）、`market_black_swan.json`（行业级黑天鹅扫描，无需股票代码）。
+6. **日报**：结构化事件 Top N 与覆盖缺口现在带 `target_id`，行业级（无 ticker）产出不再显示为空目标。
+7. **仓库清理**：删除项目根目录误提交的运行产物 `mic.db`（MIC 默认 `sqlite:///mic.db` 相对进程 CWD，在项目根运行会重新生成），并加入 `.gitignore`；有意保留的数据库仍在 `data/` 下（已被忽略）。
+
+本版验证：`PYTHONPATH=src pytest -q` 48 个离线测试全部通过（新增 13 个 request/batch/planner 测试）；MIC 侧配置经 MIC 自身测试套件（73 个）与 QueryPlanner 冒烟验证（行业/公司档案均能展开出中文查询计划）；CLI 冒烟覆盖 `request industry/company/stock/status` → `runtime tick` 消费 `demand.registered` 并编译采集请求 → `demand register` 未注册 target 告警全链路。
+
+## 0.0 V0.6 关键变更（按设计说明书补齐功能）
 
 1. **消息化查询服务（设计 §11）**：新增 `query.intelligence.request` / `query.intelligence.response` 消息和 `INTELLIGENCE_QUERY_REQUEST/RESPONSE_TICKET`。其他 Agent 通过队列发起查询（`recent_events`、`market_features`、`collection_status`、`data_quality`、`tool_capabilities`），本 Agent 消费后经内部 Reader 执行并把结果 Ticket + 消息投回请求方。CLI：`query request` / `query responses`。
 2. **Demand 消息流（设计 §6.2）**：`demand register` 落库后发布 `demand.registered`，`suspend/resume/cancel` 发布 `demand.changed`。新增 `RuntimeController`（`runtime.py`）：`runtime tick` 先消费 demand 消息，Demand 被暂停/取消时**取消其未完成的 Request/Task Ticket 并 ack 对应消息**，再编译活跃 Demand。
@@ -369,6 +393,55 @@ intel-agent --config config/intelligence_collector.yaml runtime capability-valid
 intel-agent --config config/intelligence_collector.yaml runtime tick --now "2026-06-11T08:30:00+08:00" --run-capability-validation
 ```
 
+### 一键申请采集（V0.7）
+
+不写 JSON、不手改 MIC 配置，一条命令申请对某个行业 / 公司 / 股票开始采集：
+
+```bash
+CFG=config/intelligence_collector.yaml
+
+# 申请采集一个行业主线（写 MIC 行业档案 + 加入 demand_industry_research_daily）
+intel-agent --config $CFG request industry --name "AI算力" \
+  --products "AI服务器,800G光模块,高多层PCB" \
+  --companies "工业富联,中际旭创,沪电股份" \
+  --metrics "AI服务器订单,合同负债,毛利率"
+
+# 申请采集一家公司（写 MIC 公司档案 + 加入 demand_company_research_daily + A股进股票池）
+intel-agent --config $CFG request company --name 北方华创 --ticker 002371.SZ \
+  --products "刻蚀设备,薄膜沉积设备" --competitors "中微公司,拓荆科技"
+
+# 港股公司：自动跳过 stock_data_collector（仅 MIC 采集）
+intel-agent --config $CFG request company --name 腾讯控股 --ticker 0700.HK
+
+# 只要股票日线数据（不做 MIC 情报，盘后刷新，加入 demand_stock_eod_daily + 股票池）
+intel-agent --config $CFG request stock --ticker 600519.SH --company-name 贵州茅台
+
+# 一次性注册整个研究池（行业 + 核心公司 + 上下游观察名单），来自跟踪建议 md 的完整清单。
+# 第一次建议加 --test-mode 小预算试跑，确认链路后不带 --test-mode 重跑一次即恢复正式预算（幂等）。
+intel-agent --config $CFG request batch --file examples/research_pool_full.yaml --test-mode
+intel-agent --config $CFG request batch --file examples/research_pool_full.yaml
+
+# 观察层（上下游扩展名单）想暂停/恢复：
+intel-agent --config $CFG demand suspend --demand-id demand_company_watch_daily
+intel-agent --config $CFG demand resume  --demand-id demand_company_watch_daily
+
+# 查看全景：MIC 已注册目标 / 托管 Demand 的目标清单 / 股票池
+intel-agent --config $CFG request status
+
+# 从托管 Demand 移除目标（MIC 档案保留，便于以后恢复）
+intel-agent --config $CFG request remove --demand-id demand_company_research_daily --ticker 002371.SZ
+
+# 列出 MIC 已注册的 target_id（demand register 时会自动校验并对未注册目标告警）
+intel-agent --config $CFG tools list-mic-targets
+```
+
+说明：
+
+- 托管 Demand（`demand_industry_research_daily` / `demand_company_research_daily` / `demand_stock_eod_daily`）首次申请时自动创建为 active；每次申请都会升 Demand 版本并发布 `demand.registered`，下一次 `runtime tick` 自动拾取，无需手工 compile。
+- MIC 档案定位顺序：`tools.market_intelligence_collector.config_dir` > 已安装 `mic` 包所在目录 > 仓库内 `tools/market_intelligence_collector/config`。
+- 重复申请同一目标是幂等更新（合并档案字段、替换 Demand 内目标），不会产生重复目标。
+- 想控制预算先小规模试跑：加 `--test-mode`（预算被 `mic_task_defaults.test_mode_budget_profile` 钳制）。
+
 ### 实时监控看板
 
 内置一个动态看板（前后端一体，标准库实现，无额外依赖）。后端每次请求都直接读三个 SQLite store 的当前状态，前端定时轮询 `/api/overview` 自动刷新，Agent / runtime 在其它进程持续写入时看板同步变化（WAL 允许并发读）：
@@ -571,10 +644,14 @@ intel-agent --config config/intelligence_collector.yaml openclaw validate-model
 # 5. 验证 stock_data 盘中能力
 intel-agent --config config/intelligence_collector.yaml tools verify-capabilities
 
-# 6. 注册 Demand
+# 6. 注册 Demand（研究池启动：8 行业日采 + 核心公司深采 + 黑天鹅扫描）
 intel-agent --config config/intelligence_collector.yaml demand register \
-  --file examples/demands/held_sellable_10m.json \
-  --activate
+  --file examples/demands/industry_research_daily.json --activate
+intel-agent --config config/intelligence_collector.yaml demand register \
+  --file examples/demands/company_research_daily.json --activate
+intel-agent --config config/intelligence_collector.yaml demand register \
+  --file examples/demands/market_black_swan.json --activate
+# （或用 intel-agent request industry/company/stock 逐个申请；盘中监测示例见 held_sellable_10m.json）
 
 # 7. Runtime tick
 intel-agent --config config/intelligence_collector.yaml runtime tick \

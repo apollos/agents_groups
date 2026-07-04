@@ -1,0 +1,55 @@
+{
+  "schema_version": "demand.v1",
+  "demand_id": "demand_market_black_swan_scan",
+  "demand_type": "black_swan_scan",
+  "source_type": "research_pool_request",
+  "status": "active",
+  "created_by": "operator",
+  "owner": "operator",
+  "priority": "high",
+  "market": "A_SHARE_AND_HK",
+  "timezone": "Asia/Shanghai",
+  "description": "市场级黑天鹅扫描：对 8 条行业主线做高频风险/政策/合规扫描，无需股票代码。",
+  "target_scope": {
+    "scope_type": "explicit_targets"
+  },
+  "targets": [
+    {"target_type": "industry", "target_id": "industry_ai_semi", "industry_name": "AI算力", "collect_mic": true},
+    {"target_type": "industry", "target_id": "industry_high_end_equipment", "industry_name": "高端装备", "collect_mic": true},
+    {"target_type": "industry", "target_id": "industry_power_grid", "industry_name": "电力系统", "collect_mic": true},
+    {"target_type": "industry", "target_id": "industry_pharma", "industry_name": "创新药", "collect_mic": true},
+    {"target_type": "industry", "target_id": "industry_dividend_soe", "industry_name": "高股息央国企", "collect_mic": true},
+    {"target_type": "industry", "target_id": "industry_internet_consumer", "industry_name": "平台互联网", "collect_mic": true},
+    {"target_type": "industry", "target_id": "industry_resource_cycle", "industry_name": "资源周期", "collect_mic": true},
+    {"target_type": "industry", "target_id": "industry_export_manufacturing", "industry_name": "出海制造", "collect_mic": true}
+  ],
+  "schedule_window": {
+    "allow_non_trading_day": false
+  },
+  "task_profile": {
+    "mic": {
+      "enabled": true,
+      "black_swan_focus": ["risk", "policy", "legal_compliance"],
+      "black_swan_time_window": "7d",
+      "black_swan_budget_profile": {
+        "max_queries": 8,
+        "max_links_to_read": 4,
+        "max_model_calls": 3
+      }
+    }
+  },
+  "alert_policy": {
+    "notify_on": ["P0", "P1"],
+    "notify_owner": false,
+    "notify_channels": ["ticket"],
+    "black_swan_keywords_enabled": true
+  },
+  "output_contract": {
+    "emit_event_ticket": true,
+    "emit_data_quality_ticket": true,
+    "emit_collection_result_ticket": true,
+    "write_public_data_pool": true
+  },
+  "test_mode": false,
+  "idempotency_key": "research_pool:demand_market_black_swan_scan"
+}

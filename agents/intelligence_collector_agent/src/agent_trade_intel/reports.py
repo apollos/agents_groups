@@ -89,7 +89,7 @@ class DailyReportBuilder:
             gaps_count = con.execute("SELECT COUNT(*) c FROM coverage_gaps WHERE date(created_at)=date(?)", (trade_date,)).fetchone()["c"]
             top_events = con.execute(
                 """
-                SELECT ticker, event_type, event_date, summary_cn, confidence, data_quality
+                SELECT target_id, ticker, event_type, event_date, summary_cn, confidence, data_quality
                 FROM structured_events WHERE date(created_at)=date(?)
                 ORDER BY COALESCE(confidence, 0) DESC, created_at DESC LIMIT ?
                 """,
@@ -113,7 +113,7 @@ class DailyReportBuilder:
             ).fetchall()
             gap_details = con.execute(
                 """
-                SELECT ticker, priority, status, description
+                SELECT target_id, ticker, priority, status, description
                 FROM coverage_gaps WHERE date(created_at)=date(?)
                 ORDER BY created_at DESC LIMIT ?
                 """,
@@ -152,7 +152,7 @@ class DailyReportBuilder:
                 (trade_date, top_n),
             ).fetchall()
             open_gaps = con.execute(
-                "SELECT ticker, description FROM coverage_gaps WHERE status='open' ORDER BY created_at DESC LIMIT ?",
+                "SELECT target_id, ticker, description FROM coverage_gaps WHERE status='open' ORDER BY created_at DESC LIMIT ?",
                 (top_n,),
             ).fetchall()
         with self.bus_store.session() as con:
@@ -325,7 +325,7 @@ def _followup_suggestions(open_gaps, failed_tasks, dead_messages) -> list[str]:
     """Next-day recollection suggestions (design §15.2 item 12)."""
     suggestions: list[str] = []
     for row in open_gaps:
-        target = row["ticker"] or "未知目标"
+        target = row["ticker"] or row["target_id"] or "未知目标"
         suggestions.append(f"补采覆盖缺口：{target} —— {str(row['description'])[:120]}")
     for row in failed_tasks:
         suggestions.append(f"重跑失败任务：{row['ticker'] or '未知标的'} 的 {row['task_type']}。")

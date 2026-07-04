@@ -5,7 +5,7 @@
 # from the target profile.
 
 query_families:
-  version: query_families_v0.3
+  version: query_families_v0.4
 
   families:
     official_ir:
@@ -239,3 +239,48 @@ query_families:
         - "{company} 网站流量"
         - "{industry} 航运 库存"
         - "{industry} 港口 库存"
+
+    # Early-warning signal words (research-pool tracking plan section 6.10).
+    # These are the words that tend to move before headlines: pricing letters,
+    # production schedule changes, tender shortlists, guidance warnings.
+    early_signal:
+      label: 早期信号
+      base_priority: 83
+      focus: [operating_update, risk, catalyst, financial_leading_indicator]
+      templates:
+        - "{company} 涨价函"
+        - "{company} 排产"
+        - "{company} 订单超预期"
+        - "{company} 中标候选人"
+        - "{company} 独家供应商"
+        - "{company} 首次供应"
+        - "{company} 批量交付"
+        - "{company} 通过认证"
+        - "{company} 客户验证"
+        - "{company} 产能爬坡"
+        - "{company} 良率提升"
+        - "{company} 业绩预告 预增"
+        - "{company} 盈利警告"
+        - "{company} 商誉减值"
+        - "{company} 定增终止"
+        - "{industry} 涨价函"
+        - "{industry} 排产上调"
+        - "{industry} 供给收缩"
+        - "{industry} 库存去化"
+        - "{industry} 价格修复"
+        - "{product} 涨价函"
+        - "{product} 排产"
+
+    # Southbound / HK Connect signals (tracking plan section 5.1): eligibility,
+    # southbound holdings and buybacks matter for HK-listed research targets.
+    hk_connect:
+      label: 港股通与南向资金
+      base_priority: 74
+      focus: [capital_markets, catalyst]
+      templates:
+        - "{company} 纳入港股通"
+        - "{company} 港股通 调整"
+        - "{company} 南向持股"
+        - "{company} 南向资金 增持"
+        - "{company} 回购 注销"
+        - "{company} AH溢价"

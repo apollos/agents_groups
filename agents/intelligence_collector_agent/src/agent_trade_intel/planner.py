@@ -168,6 +168,9 @@ class TaskGraphPlanner:
     ) -> list[dict[str, Any]]:
         tasks: list[dict[str, Any]] = []
         for target in targets or [None]:
+            # Ticker-only targets (e.g. stock EOD requests) opt out of MIC via collect_mic=false.
+            if target is not None and target.get("collect_mic") is False:
+                continue
             tasks.append(self._task(demand, request_ticket_id, target, task_type, "market_intelligence_collector", as_of))
         return tasks
 
@@ -176,6 +179,10 @@ class TaskGraphPlanner:
     ) -> list[dict[str, Any]]:
         tasks: list[dict[str, Any]] = []
         for target in targets:
+            # Industry targets have no ticker; HK-only targets set collect_stock=false because
+            # stock_data_collector covers A-share tickers only.
+            if not target or not target.get("ticker") or target.get("collect_stock") is False:
+                continue
             tasks.append(self._task(demand, request_ticket_id, target, "post_close_stock_refresh", "stock_data_collector", as_of))
         return tasks
 

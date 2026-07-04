@@ -1,0 +1,67 @@
+{
+  "schema_version": "demand.v1",
+  "demand_id": "demand_company_research_daily",
+  "demand_type": "daily_collection",
+  "source_type": "research_pool_request",
+  "status": "active",
+  "created_by": "operator",
+  "owner": "operator",
+  "priority": "normal",
+  "market": "A_SHARE_AND_HK",
+  "timezone": "Asia/Shanghai",
+  "description": "研究池首批核心公司每日深采（盘后另跑 A 股日线刷新）。港股公司 collect_stock=false，因为 stock_data_collector 仅覆盖 A 股。",
+  "target_scope": {
+    "scope_type": "explicit_targets"
+  },
+  "targets": [
+    {"target_type": "company", "target_id": "company_601138", "ticker": "601138.SH", "company_name": "工业富联", "collect_mic": true, "collect_stock": true},
+    {"target_type": "company", "target_id": "company_300308", "ticker": "300308.SZ", "company_name": "中际旭创", "collect_mic": true, "collect_stock": true},
+    {"target_type": "company", "target_id": "company_002371", "ticker": "002371.SZ", "company_name": "北方华创", "collect_mic": true, "collect_stock": true},
+    {"target_type": "company", "target_id": "company_002463", "ticker": "002463.SZ", "company_name": "沪电股份", "collect_mic": true, "collect_stock": true},
+    {"target_type": "company", "target_id": "company_300124", "ticker": "300124.SZ", "company_name": "汇川技术", "collect_mic": true, "collect_stock": true},
+    {"target_type": "company", "target_id": "company_688017", "ticker": "688017.SH", "company_name": "绿的谐波", "collect_mic": true, "collect_stock": true},
+    {"target_type": "company", "target_id": "company_600406", "ticker": "600406.SH", "company_name": "国电南瑞", "collect_mic": true, "collect_stock": true},
+    {"target_type": "company", "target_id": "company_300274", "ticker": "300274.SZ", "company_name": "阳光电源", "collect_mic": true, "collect_stock": true},
+    {"target_type": "company", "target_id": "company_300760", "ticker": "300760.SZ", "company_name": "迈瑞医疗", "collect_mic": true, "collect_stock": true},
+    {"target_type": "company", "target_id": "company_600276", "ticker": "600276.SH", "company_name": "恒瑞医药", "collect_mic": true, "collect_stock": true},
+    {"target_type": "company", "target_id": "company_600941", "ticker": "600941.SH", "company_name": "中国移动", "collect_mic": true, "collect_stock": true},
+    {"target_type": "company", "target_id": "company_601088", "ticker": "601088.SH", "company_name": "中国神华", "collect_mic": true, "collect_stock": true},
+    {"target_type": "company", "target_id": "company_hk_00700", "ticker": "0700.HK", "company_name": "腾讯控股", "collect_mic": true, "collect_stock": false},
+    {"target_type": "company", "target_id": "company_hk_03690", "ticker": "3690.HK", "company_name": "美团", "collect_mic": true, "collect_stock": false},
+    {"target_type": "company", "target_id": "company_601899", "ticker": "601899.SH", "company_name": "紫金矿业", "collect_mic": true, "collect_stock": true},
+    {"target_type": "company", "target_id": "company_601919", "ticker": "601919.SH", "company_name": "中远海控", "collect_mic": true, "collect_stock": true},
+    {"target_type": "company", "target_id": "company_600031", "ticker": "600031.SH", "company_name": "三一重工", "collect_mic": true, "collect_stock": true},
+    {"target_type": "company", "target_id": "company_000333", "ticker": "000333.SZ", "company_name": "美的集团", "collect_mic": true, "collect_stock": true}
+  ],
+  "schedule_window": {
+    "allow_non_trading_day": true
+  },
+  "task_profile": {
+    "mic": {
+      "enabled": true,
+      "focus": ["operating_update", "financial_leading_indicator", "risk", "capital_markets"],
+      "time_window": "30d",
+      "budget_profile": {
+        "max_queries": 15,
+        "max_links_to_read": 8,
+        "max_model_calls": 6
+      }
+    },
+    "stock_data": {
+      "enabled": true
+    }
+  },
+  "alert_policy": {
+    "notify_on": ["P0", "P1"],
+    "notify_owner": false,
+    "notify_channels": ["ticket"]
+  },
+  "output_contract": {
+    "emit_event_ticket": true,
+    "emit_data_quality_ticket": true,
+    "emit_collection_result_ticket": true,
+    "write_public_data_pool": true
+  },
+  "test_mode": false,
+  "idempotency_key": "research_pool:demand_company_research_daily"
+}

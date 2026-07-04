@@ -1,7 +1,8 @@
 # Source packs help the search engine prefer high-quality sources (spec 8.4).
 # They are appended as additional high-priority queries.
+# Domain list follows the research-pool tracking plan section 5 (daily sources).
 source_packs:
-  version: source_packs_v0.3
+  version: source_packs_v0.4
 
   packs:
     china_exchange:
@@ -32,6 +33,15 @@ source_packs:
         - "site:ndrc.gov.cn {industry}"
         - "site:customs.gov.cn {industry} 出口"
 
+    # Macro / industry statistics (tracking plan section 5.2).
+    industry_stats:
+      base_priority: 82
+      templates:
+        - "site:stats.gov.cn {industry}"
+        - "site:nea.gov.cn {industry}"
+        - "{industry} 工信部 数据"
+        - "{industry} 行业协会 数据"
+
     tender:
       base_priority: 85
       templates:
@@ -45,10 +55,23 @@ source_type_by_domain:
   cninfo.com.cn: exchange
   sse.com.cn: exchange
   szse.cn: exchange
+  bse.cn: exchange
   hkexnews.hk: exchange
+  hkex.com.hk: exchange
   sec.gov: regulator
   gov.cn: regulator
   miit.gov.cn: regulator
   ndrc.gov.cn: regulator
   customs.gov.cn: regulator
   csrc.gov.cn: regulator
+  stats.gov.cn: regulator
+  nea.gov.cn: regulator
+  nhsa.gov.cn: regulator
+  cde.org.cn: regulator
+  nmpa.gov.cn: regulator
+  # Industry associations (tracking plan section 5.2) count as official sources.
+  caam.org.cn: official
+  cpcaauto.com: official
+  cncma.org: official
+  cansi.org.cn: official
+  sse.net.cn: official
