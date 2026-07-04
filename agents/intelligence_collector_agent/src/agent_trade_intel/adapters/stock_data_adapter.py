@@ -26,6 +26,26 @@ class StockDataCLIAdapter:
         self.working_dir = working_dir
         self.timeout_seconds = timeout_seconds
 
+    def cli_available(self) -> ToolResult:
+        """Cheap probe: can the stock_data CLI module be invoked at all?"""
+        result = ToolResult(tool_name=self.tool_name, operation="cli_available", request={"cmd": "--help"})
+        cmd = [self.python_executable, "-m", "stock_data_ingestion.cli", "--help"]
+        try:
+            proc = subprocess.run(cmd, cwd=self.working_dir, text=True, capture_output=True, timeout=min(self.timeout_seconds, 60), env=os.environ.copy())
+            result.result = {"returncode": proc.returncode}
+            if proc.returncode == 0:
+                result.status = "success"
+                result.quality = {"usable": True}
+            else:
+                result.status = "failed"
+                result.quality = {"usable": False}
+                result.errors.append({"error_code": "STOCK_DATA_CLI_FAILED", "error_message": proc.stderr[-1000:], "retryable": False})
+        except Exception as exc:
+            result.status = "failed"
+            result.quality = {"usable": False}
+            result.errors.append({"error_code": "STOCK_DATA_CLI_UNAVAILABLE", "error_message": str(exc), "retryable": False})
+        return result.finish()
+
     def verify_eastmoney_cookie(self) -> ToolResult:
         return self._run("verify_eastmoney_cookie", ["verify", "eastmoney-cookie"])
 

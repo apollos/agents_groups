@@ -1,10 +1,28 @@
-# 情报收集员 Agent 代码包 V0.5.1
+# 情报收集员 Agent 代码包 V0.6
 
 这是 Agent交易公司多 Agent A 股交易辅助系统中的 **情报收集员 Agent**。它面向 OpenClaw 多 Agent 运行环境设计，负责 Demand → Ticket → Message → 工具调用 → 质量闸门 → 事件/特征/日报的采集闭环。
 
 本 Agent **不输出买卖建议、仓位、目标价或交易指令**。它只做采集、结构化、质量检查、消息投递、Checkpoint、Memory 和日报。
 
-## 0. V0.5.1 关键变更
+## 0. V0.6 关键变更（按设计说明书补齐功能）
+
+1. **消息化查询服务（设计 §11）**：新增 `query.intelligence.request` / `query.intelligence.response` 消息和 `INTELLIGENCE_QUERY_REQUEST/RESPONSE_TICKET`。其他 Agent 通过队列发起查询（`recent_events`、`market_features`、`collection_status`、`data_quality`、`tool_capabilities`），本 Agent 消费后经内部 Reader 执行并把结果 Ticket + 消息投回请求方。CLI：`query request` / `query responses`。
+2. **Demand 消息流（设计 §6.2）**：`demand register` 落库后发布 `demand.registered`，`suspend/resume/cancel` 发布 `demand.changed`。新增 `RuntimeController`（`runtime.py`）：`runtime tick` 先消费 demand 消息，Demand 被暂停/取消时**取消其未完成的 Request/Task Ticket 并 ack 对应消息**，再编译活跃 Demand。
+3. **动态池目标解析（设计 §7.1）**：新增 `pool_members` 表和 `PoolRepository`；`target_scope.scope_type: dynamic_pool` 会按 `pool_layers` + `filters`（sellability / exclude_st / exclude_suspended）解析成具体标的。CLI：`pool set/remove/list`。
+4. **行情特征增强（设计 §7.4）**：新增 prev_close/涨跌停价与距离（按板块 10%/20%/30%、ST 5%）、`hit_limit_up/down`、日内区间位置、20 日同时间段成交额量比（经本地 `query bars` 富化，可配置开关）；异动改为**多条件阈值**（收益率、量比、涨跌停距离、异常分），触发跌停/大幅下跌时按 `risk_review` 规则升级为 urgent 并路由 `risk_control`。
+5. **能力验证扩展（设计 §9.4）**：除 5m/15m 频率外，新增 `cli_available`、`eastmoney_cookie`（默认关）、`trading_status`、`historical_bars_1d`、`query_meta_summary` 检查，并记录 `recommended_intraday_mode`。支持 `run_on_startup`（每交易日一次）与 `run_pre_market`（tick 在盘前自动调度能力验证任务）。CLI：`runtime capability-validate`。
+6. **交易日历（设计 §7.3）**：`market_calendar.holidays` / `extra_trading_days` 配置节假日与调休；`market_phase` 据此判定 `non_trading_day`。
+7. **下游消息补齐（设计 §5.2）**：任务完成发布 `collection.result`；MIC 覆盖缺口发布 `coverage_gap.created`；日报发布 `report.collection_daily`；`checkpoint.created` 由 `queue.publish_checkpoint_messages` 控制（默认关）。
+8. **日报补齐（设计 §15.2）**：新增 Demand 覆盖情况、Message 处理统计、成本与调用次数（含 MIC 预算使用汇总）、次日补采建议四个章节；`report daily --format json|html|both`。
+9. **消息 TTL**：`messages.expires_at` + `expired` 状态（含旧库自动迁移），过期消息不可租约。
+10. **cadence_profile 命名档案**：Demand 可引用 `cadence_profiles.<name>`（`market_snapshot.bucket_size`、`mic_black_swan_scan.interval/enabled`）覆盖池层默认节奏。
+11. **运维补齐**：`queue publish`、`config validate`、`db backup`（SQLite backup API 归档）、`init-db --reset`、`agent checkpoint`（手动 checkpoint）、session 超时自动轮转（`runtime.session_rotate_minutes`）。
+
+未改动的等价实现：`message_attempts`/`dead_letters`/`report_artifacts` 仍以 messages 字段、`status='dead'`、`daily_collection_reports` 列承载；实时行情 Python 层能力记录为 `unknown`（首版 CLI 未暴露该子命令）。
+
+本版验证：`PYTHONPATH=src pytest -q` 33 个离线测试全部通过；CLI 冒烟覆盖 `config validate`、`pool`、`query request → agent run-once → query responses` 全链路、`demand register → runtime tick` 消费 `demand.registered` 并按动态池编译、节假日 tick 判定 `non_trading_day`、盘前 tick 自动调度能力验证任务、`queue publish`、`agent checkpoint`、`db backup`、`report daily --format json` 新章节输出。
+
+## 0.1 V0.5.1 关键变更
 
 本版根据代码审核结果修复了以下问题：
 
@@ -319,10 +337,36 @@ open → in_progress → done
 运维命令：
 
 ```bash
-intel-agent --config config/intelligence_collector.yaml queue list --status open
+intel-agent --config config/intelligence_collector.yaml queue list --status open --topic intelligence.collection
 intel-agent --config config/intelligence_collector.yaml queue dead-letter
 intel-agent --config config/intelligence_collector.yaml queue inspect --message-id msg_xxx
 intel-agent --config config/intelligence_collector.yaml queue retry --message-id msg_xxx
+intel-agent --config config/intelligence_collector.yaml queue publish --topic intelligence.collection --ticket-id ticket_xxx
+```
+
+V0.6 新增运维命令：
+
+```bash
+# 配置校验（打印解析后的路径与工具开关）
+intel-agent --config config/intelligence_collector.yaml config validate
+
+# 股票池维护（dynamic_pool Demand 的目标来源）
+intel-agent --config config/intelligence_collector.yaml pool set --layer current_holding --ticker 300750.SZ --sellability sellable --company-name 宁德时代
+intel-agent --config config/intelligence_collector.yaml pool list --layer current_holding
+intel-agent --config config/intelligence_collector.yaml pool remove --layer current_holding --ticker 300750.SZ
+
+# 消息化查询（模拟其他 Agent 发起查询；由 agent run-once / run-until-idle 应答）
+intel-agent --config config/intelligence_collector.yaml query request --query-type recent_events --ticker 300750.SZ --source-agent analysis_agent_x
+intel-agent --config config/intelligence_collector.yaml query responses
+
+# 手动 checkpoint / SQLite 归档备份 / 重置数据库
+intel-agent --config config/intelligence_collector.yaml agent checkpoint
+intel-agent --config config/intelligence_collector.yaml db backup
+intel-agent --config config/intelligence_collector.yaml init-db --reset
+
+# 盘前能力验证（直接执行，或让 tick 调度）
+intel-agent --config config/intelligence_collector.yaml runtime capability-validate
+intel-agent --config config/intelligence_collector.yaml runtime tick --now "2026-06-11T08:30:00+08:00" --run-capability-validation
 ```
 
 过期 lease 恢复：如果 `attempts < max_attempts`，回到 open；否则进入 dead-letter。

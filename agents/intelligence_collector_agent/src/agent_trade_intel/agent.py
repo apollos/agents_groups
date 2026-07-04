@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import traceback
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from .adapters.mic_adapter import MICAdapter
@@ -15,12 +16,15 @@ from .errors import QueueEmpty
 from .heartbeat import HeartbeatRecorder
 from .ids import make_idempotency_key, new_id, stable_hash, utc_now_iso
 from .logging_setup import get_logger
-from .market_features import MarketFeatureBuilder
+from .market_features import MarketFeatureBuilder, should_emit_feature_ticket
 from .memory import AgentMemory
 from .persistence import ResultPersister
 from .planner import TaskGraphPlanner
+from .pools import PoolRepository, resolve_demand_targets
 from .quality import QualityGate
+from .query_service import QUERY_REQUEST_TICKET, QUERY_REQUEST_TOPIC, IntelligenceQueryService
 from .queue import QueueMessage, SQLiteMessageQueue
+from .reader import IntelligenceReader
 from .session import AgentSessionRepository
 from .stores import create_stores, init_unique_stores
 from .tickets import TicketRepository, priority_to_int
@@ -48,7 +52,14 @@ class IntelligenceCollectorAgent:
         self.store = self.data_store
         self.queue = SQLiteMessageQueue(self.bus_store)
         self.tickets = TicketRepository(self.bus_store)
-        self.registry = DemandRegistry(self.data_store)
+        self.registry = DemandRegistry(self.data_store, self.queue)
+        self.pool_repo = PoolRepository(self.data_store)
+        self.query_service = IntelligenceQueryService(
+            IntelligenceReader(data_store=self.data_store, bus_store=self.bus_store, state_store=self.state_store),
+            self.tickets,
+            self.queue,
+            config.runtime.agent_id,
+        )
         self.memory = AgentMemory(self.state_store, config.runtime.agent_id)
         self.checkpoints = CheckpointManager(self.state_store, config.runtime.agent_id)
         self.sessions = AgentSessionRepository(self.state_store, config.runtime.agent_id)
@@ -70,11 +81,14 @@ class IntelligenceCollectorAgent:
         self.retry_delay_seconds = int(config.get("queue.retry_delay_seconds", 60))
         self._current_lease: tuple[str, str] | None = None  # (message_id, worker_id)
         self._current_session_id: str | None = None
+        self._startup_capability_checked = False
 
     def run_once(self, *, worker_id: str | None = None, topics: list[str] | None = None) -> dict[str, Any]:
         worker_id = worker_id or f"{self.config.runtime.agent_id}:{new_id('worker')}"
-        topics = topics or self.config.get("queue.consume_topics", ["intelligence.collection"])
+        topics = topics or self.config.get("queue.consume_topics", ["intelligence.collection", QUERY_REQUEST_TOPIC])
+        self.queue.expire_messages()
         self.queue.requeue_expired_leases()
+        self._maybe_run_startup_capability_check()
         session_id = self._ensure_session()
         self._current_session_id = session_id
         try:
@@ -173,6 +187,8 @@ class IntelligenceCollectorAgent:
             return self._handle_collection_request(ticket)
         if ticket_type == "COLLECTION_TASK_TICKET":
             return self._handle_collection_task(ticket)
+        if ticket_type == QUERY_REQUEST_TICKET:
+            return self.query_service.handle_request_ticket(ticket)
         self.tickets.update_status(ticket_id, "done", "unsupported ticket type ignored")
         return {"status": "ignored", "ticket_type": ticket_type}
 
@@ -184,7 +200,11 @@ class IntelligenceCollectorAgent:
             raise ValueError(f"demand not found: {demand_id}")
         as_of = payload.get("as_of") or utc_now_iso()
         market_phase = payload.get("market_phase") or "unknown"
-        task_payloads = self.planner.plan(demand, request_ticket_id=ticket["ticket_id"], as_of=as_of, market_phase=market_phase)
+        # dynamic_pool scopes (e.g. current_holding) resolve against the pool_members table.
+        targets = resolve_demand_targets(demand, self.pool_repo)
+        task_payloads = self.planner.plan(
+            demand, request_ticket_id=ticket["ticket_id"], as_of=as_of, market_phase=market_phase, targets=targets
+        )
         created: list[str] = []
         for task in task_payloads:
             target = task.get("target") or {}
@@ -305,11 +325,20 @@ class IntelligenceCollectorAgent:
             )
         if saved.get("events"):
             self._emit_event_summary(ticket=ticket, target=target, count=saved["events"], run_id=run_id)
+        if saved.get("coverage_gaps"):
+            self.queue.publish(
+                "coverage_gap.created",
+                {"target": target, "count": saved["coverage_gaps"], "run_id": run_id, "ticket_id": ticket["ticket_id"]},
+                priority=priority_to_int("normal"),
+                correlation_id=ticket.get("correlation_id"),
+                idempotency_key=make_idempotency_key("message", "coverage_gap", ticket["ticket_id"], run_id),
+            )
         action, retry_error = _tool_message_action(q, result.errors)
         if action == "retry":
             self.tickets.update_status(ticket["ticket_id"], "open", "MIC task scheduled for retry", retry_error)
         else:
             self.tickets.update_status(ticket["ticket_id"], "done" if q["usable"] else "failed", "MIC task completed")
+            self._publish_collection_result(ticket, status=result.status, run_ids=[run_id], usable=bool(q["usable"]))
         out = {"status": result.status, "run_id": run_id, "quality": q, "saved": saved}
         if action == "retry":
             out["_message_action"] = "retry"
@@ -445,12 +474,20 @@ class IntelligenceCollectorAgent:
                     if qres.status == "success":
                         source_result = qres.result
                         source_quality = qq
-                feature = self.feature_builder.build_and_save(
-                    task=task, stock_result=source_result, quality=source_quality, source_frequency=intraday_frequency
+                daily_result, history_result = self._feature_enrichment_queries(
+                    ticker=ticker, task=task, intraday_frequency=intraday_frequency
                 )
-                threshold = float(self.config.get("market_features.abnormality_ticket_threshold", 0.75))
-                if feature["abnormality_score"] >= threshold:
-                    self._emit_market_feature(ticket=ticket, feature=feature)
+                feature = self.feature_builder.build_and_save(
+                    task=task,
+                    stock_result=source_result,
+                    quality=source_quality,
+                    source_frequency=intraday_frequency,
+                    daily_result=daily_result,
+                    history_result=history_result,
+                )
+                emit, risk_review, reasons = should_emit_feature_ticket(feature, self.config.raw)
+                if emit:
+                    self._emit_market_feature(ticket=ticket, feature=feature, risk_review=risk_review, reasons=reasons)
         usable = all(q["severity"] != "P0" and q.get("usable") for q in quality_decisions)
         retry_errors: list[dict[str, Any]] = []
         for q in quality_decisions:
@@ -468,7 +505,77 @@ class IntelligenceCollectorAgent:
                 "_retry_error": {"error_code": "RETRYABLE_STOCK_DATA_FAILURE", "error_message": "one or more stock_data calls are retryable", "retryable": True, "errors": retry_errors},
             }
         self.tickets.update_status(ticket["ticket_id"], "done" if usable else "failed", "stock data task completed")
+        self._publish_collection_result(ticket, status="success" if usable else "partial_or_failed", run_ids=run_ids, usable=usable)
         return {"status": "success" if usable else "partial_or_failed", "run_ids": run_ids, "quality": quality_decisions, "feature": feature}
+
+    def _feature_enrichment_queries(
+        self, *, ticker: str, task: dict[str, Any], intraday_frequency: str | None
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        """Local-store query_bars lookups that enrich market features (prev close, 20d history).
+
+        These read already-persisted rows from stock_data's store, so they are cheap and are not
+        recorded as collection runs. Failures degrade to un-enriched features instead of failing
+        the task.
+        """
+        enrich_cfg = self.config.get("market_features.enrichment", {}) or {}
+        if not bool(enrich_cfg.get("enabled", False)) or not intraday_frequency:
+            return None, None
+        bucket_date_str = (task.get("bucket_start") or task.get("as_of") or utc_now_iso())[:10]
+        try:
+            bucket_date = date.fromisoformat(bucket_date_str)
+        except ValueError:
+            return None, None
+        prev_day = (bucket_date - timedelta(days=1)).isoformat()
+        daily_result: dict[str, Any] | None = None
+        history_result: dict[str, Any] | None = None
+        try:
+            self._keepalive()
+            lookback = int(enrich_cfg.get("prev_close_lookback_days", 10))
+            daily = self.stock.query_bars(
+                ticker=ticker,
+                start_date=(bucket_date - timedelta(days=lookback)).isoformat(),
+                end_date=prev_day,
+                frequency="1d",
+                adjust="none",
+            )
+            if daily.status == "success":
+                daily_result = daily.result
+        except Exception:
+            logger.warning("prev-close enrichment query failed for %s", ticker, exc_info=True)
+        try:
+            history_days = int(enrich_cfg.get("same_bucket_history_days", 20))
+            if history_days > 0:
+                self._keepalive()
+                # Calendar window is padded so ~history_days trading days are covered.
+                hist = self.stock.query_bars(
+                    ticker=ticker,
+                    start_date=(bucket_date - timedelta(days=int(history_days * 1.6) + 3)).isoformat(),
+                    end_date=prev_day,
+                    frequency=intraday_frequency,
+                    adjust="none",
+                )
+                if hist.status == "success":
+                    history_result = hist.result
+        except Exception:
+            logger.warning("same-bucket history enrichment query failed for %s", ticker, exc_info=True)
+        return daily_result, history_result
+
+    def _publish_collection_result(self, ticket: dict[str, Any], *, status: str, run_ids: list[str], usable: bool) -> str:
+        """collection.result message for Runtime / report builder consumers (design §5.2)."""
+        return self.queue.publish(
+            "collection.result",
+            {
+                "ticket_id": ticket["ticket_id"],
+                "ticket_type": ticket["ticket_type"],
+                "task_type": (ticket.get("payload") or {}).get("task_type"),
+                "status": status,
+                "usable": usable,
+                "run_ids": run_ids,
+            },
+            priority=priority_to_int("normal"),
+            correlation_id=ticket.get("correlation_id"),
+            idempotency_key=make_idempotency_key("message", "collection_result", ticket["ticket_id"]),
+        )
 
     def _handle_circuit_open(self, ticket: dict[str, Any], *, tool_name: str, ticker: str | None, target_id: str | None) -> dict[str, Any]:
         """Tool circuit is open: do not call the tool, surface a quality issue, finish the ticket."""
@@ -616,17 +723,27 @@ class IntelligenceCollectorAgent:
         )
         return event_ticket_id
 
-    def _emit_market_feature(self, *, ticket: dict[str, Any], feature: dict[str, Any]) -> str:
+    def _emit_market_feature(
+        self,
+        *,
+        ticket: dict[str, Any],
+        feature: dict[str, Any],
+        risk_review: bool = False,
+        reasons: list[str] | None = None,
+    ) -> str:
+        payload = dict(feature)
+        payload["emit_reasons"] = reasons or []
+        payload["risk_review"] = risk_review
         ticket_id = self.tickets.create_ticket(
             ticket_type="MARKET_FEATURE_TICKET",
             source_agent=self.config.runtime.agent_id,
-            target_agent_group="G3_trading_behavior",
-            priority="normal",
+            target_agent_group="risk_control" if risk_review else "G3_trading_behavior",
+            priority="urgent" if risk_review else "normal",
             parent_ticket_id=ticket["ticket_id"],
             correlation_id=ticket.get("correlation_id"),
             related_tickers=[feature["ticker"]],
             summary_cn=feature["summary_cn"],
-            payload=feature,
+            payload=payload,
             payload_ref=f"db://market_features/{feature['feature_id']}",
             idempotency_key=make_idempotency_key("market_feature_ticket", feature["feature_id"]),
         )
@@ -639,10 +756,32 @@ class IntelligenceCollectorAgent:
         )
         return ticket_id
 
+    def _maybe_run_startup_capability_check(self) -> None:
+        """Design §9.2: verify tool capability on startup / once per trading day."""
+        if self._startup_capability_checked:
+            return
+        self._startup_capability_checked = True
+        cap_cfg = self.config.get("capability_verification", {}) or {}
+        if not bool(cap_cfg.get("run_on_startup", False)) or not self.config.tools.stock_enabled:
+            return
+        latest = self.capabilities.latest_stock_capabilities()
+        today = date.today().isoformat()
+        if latest and str(latest.get("checked_at", ""))[:10] == today:
+            return
+        try:
+            result = self.capabilities.verify_stock_intraday(keepalive=self._keepalive)
+            logger.info("startup capability verification: %s", result.status)
+        except Exception:
+            logger.exception("startup capability verification failed")
+
     def _ensure_session(self) -> str:
         latest = self.sessions.latest()
         if latest and latest.get("status") == "running":
-            return latest["session_id"]
+            if not self._session_expired(latest):
+                return latest["session_id"]
+            # Session rotation (design §14.1): close long-lived sessions and start a fresh one.
+            self.sessions.stop(latest["session_id"], status="rotated")
+            logger.info("rotated agent session %s", latest["session_id"])
         return self.sessions.start(
             model_ref=self.config.model.primary,
             metadata={
@@ -655,13 +794,34 @@ class IntelligenceCollectorAgent:
             },
         )
 
+    def _session_expired(self, session: dict[str, Any]) -> bool:
+        max_age_minutes = int(self.config.get("runtime.session_rotate_minutes", 720))
+        if max_age_minutes <= 0:
+            return False
+        started_at = session.get("started_at")
+        if not started_at:
+            return False
+        try:
+            started = datetime.strptime(str(started_at), "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        except ValueError:
+            return False
+        return datetime.now(timezone.utc) - started > timedelta(minutes=max_age_minutes)
+
     def _checkpoint(self, *, session_id: str, state: str, checkpoint: dict[str, Any], current_ticket_id: str | None = None) -> str:
-        return self.checkpoints.save(
+        checkpoint_id = self.checkpoints.save(
             session_id=session_id,
             state=state,
             checkpoint={"agent_id": self.config.runtime.agent_id, "created_at": utc_now_iso(), **checkpoint},
             current_ticket_id=current_ticket_id,
         )
+        if bool(self.config.get("queue.publish_checkpoint_messages", False)):
+            self.queue.publish(
+                "checkpoint.created",
+                {"checkpoint_id": checkpoint_id, "agent_id": self.config.runtime.agent_id, "state": state},
+                priority=0,
+                idempotency_key=make_idempotency_key("message", "checkpoint", checkpoint_id),
+            )
+        return checkpoint_id
 
 
 def _task_summary(task: dict[str, Any]) -> str:

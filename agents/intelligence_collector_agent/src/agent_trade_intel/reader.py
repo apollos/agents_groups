@@ -20,7 +20,17 @@ class IntelligenceReader:
         self.state_store = state_store or data_store
         self.tickets = TicketRepository(self.bus_store)
 
-    def read_recent_events(self, *, target_id: str | None = None, ticker: str | None = None, limit: int = 50) -> dict[str, Any]:
+    def read_recent_events(
+        self,
+        *,
+        target_id: str | None = None,
+        ticker: str | None = None,
+        event_types: list[str] | None = None,
+        min_confidence: float | None = None,
+        min_data_quality: float | None = None,
+        since: str | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
         sql = "SELECT * FROM structured_events WHERE 1=1"
         params: list[Any] = []
         if target_id:
@@ -29,6 +39,19 @@ class IntelligenceReader:
         if ticker:
             sql += " AND ticker=?"
             params.append(ticker)
+        if event_types:
+            sql += f" AND event_type IN ({','.join('?' for _ in event_types)})"
+            params.extend(event_types)
+        if min_confidence is not None:
+            sql += " AND COALESCE(confidence, 0) >= ?"
+            params.append(float(min_confidence))
+        if min_data_quality is not None:
+            sql += " AND COALESCE(data_quality, 0) >= ?"
+            params.append(float(min_data_quality))
+        since_date = _since_to_date(since)
+        if since_date:
+            sql += " AND COALESCE(event_date, date(created_at)) >= ?"
+            params.append(since_date)
         sql += " ORDER BY event_date DESC, created_at DESC LIMIT ?"
         params.append(limit)
         with self.data_store.session() as con:
@@ -96,6 +119,18 @@ class IntelligenceReader:
         with self.data_store.session() as con:
             rows = con.execute(sql, params).fetchall()
         return {"status": "success", "items": [dict(r) | {"payload": loads_json(r["payload_json"], {})} for r in rows]}
+
+
+def _since_to_date(since: str | None) -> str | None:
+    """Parse '30d' style relative windows or pass through YYYY-MM-DD dates."""
+    if not since:
+        return None
+    text = str(since).strip().lower()
+    if text.endswith("d") and text[:-1].isdigit():
+        from datetime import date, timedelta
+
+        return (date.today() - timedelta(days=int(text[:-1]))).isoformat()
+    return text[:10] if len(text) >= 10 else None
 
 
 def _event_row(r) -> dict[str, Any]:

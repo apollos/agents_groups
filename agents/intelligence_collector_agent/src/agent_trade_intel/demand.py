@@ -23,8 +23,9 @@ LIFECYCLE_TRANSITIONS = {
 
 
 class DemandRegistry:
-    def __init__(self, store: SQLiteStore):
+    def __init__(self, store: SQLiteStore, queue: SQLiteMessageQueue | None = None):
         self.store = store
+        self.queue = queue
 
     def validate(self, demand: dict[str, Any]) -> None:
         missing = [f for f in REQUIRED_DEMAND_FIELDS if not demand.get(f)]
@@ -117,7 +118,23 @@ class DemandRegistry:
                 """,
                 (demand_id, version, dumps_json(payload), payload.get("created_by")),
             )
-        return {"status": "registered", "demand_id": demand_id, "version": version, "validation_status": "passed"}
+        message_id = None
+        if self.queue is not None:
+            # demand.registered drives the Runtime Controller (design §6.2). Version is part of the
+            # idempotency key so re-registering (a new version) produces a new notification.
+            message_id = self.queue.publish(
+                "demand.registered",
+                {"demand_id": demand_id, "version": version, "status": payload.get("status")},
+                priority=10,
+                idempotency_key=make_idempotency_key("message", "demand_registered", demand_id, version),
+            )
+        return {
+            "status": "registered",
+            "demand_id": demand_id,
+            "version": version,
+            "validation_status": "passed",
+            "message_id": message_id,
+        }
 
     def get(self, demand_id: str) -> dict[str, Any] | None:
         with self.store.session() as con:
@@ -162,7 +179,22 @@ class DemandRegistry:
                 (demand_id, version, dumps_json(payload), f"cli:{action}"),
             )
         logger.info("demand %s %s: %s -> %s (v%s)", demand_id, action, current, new_status, version)
-        return {"status": "ok", "demand_id": demand_id, "old_status": current, "new_status": new_status, "version": version}
+        message_id = None
+        if self.queue is not None:
+            message_id = self.queue.publish(
+                "demand.changed",
+                {"demand_id": demand_id, "version": version, "action": action, "old_status": current, "new_status": new_status},
+                priority=10,
+                idempotency_key=make_idempotency_key("message", "demand_changed", demand_id, version),
+            )
+        return {
+            "status": "ok",
+            "demand_id": demand_id,
+            "old_status": current,
+            "new_status": new_status,
+            "version": version,
+            "message_id": message_id,
+        }
 
     def active(self, *, as_of: str | None = None) -> list[dict[str, Any]]:
         # as_of is ISO date/datetime. We compare date strings conservatively.

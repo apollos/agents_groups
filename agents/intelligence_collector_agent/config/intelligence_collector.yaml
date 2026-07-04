@@ -6,8 +6,8 @@ openclaw:
   # This agent must not silently inherit OpenClaw's default model.
   # Use a model ref already registered in OpenClaw, e.g. openai/gpt-5.5, deepseek/deepseek-reasoner, qwen/qwen3-max.
   model:
-    primary: "REPLACE_WITH_REGISTERED_OPENCLAW_MODEL"
-    fallbacks: []
+    primary: "deepseek/deepseek-v4-flash"
+    fallbacks: ["custom-api-siliconflow-cn/Pro/zai-org/GLM-5.1"]
     require_registered: true
     allow_openclaw_default: false
 
@@ -24,6 +24,8 @@ runtime:
   data_sqlite_path: "data/intelligence_collector_data.db"
   log_dir: "logs"
   timezone: "Asia/Shanghai"
+  # Rotate the agent session once it has been running longer than this (minutes; 0 disables).
+  session_rotate_minutes: 720
 
 logging:
   level: INFO
@@ -33,12 +35,21 @@ queue:
   backend: sqlite
   consume_topics:
     - intelligence.collection
+    - query.intelligence.request
   lease_seconds: 300
   retry_delay_seconds: 60
+  # Publish a checkpoint.created message after every checkpoint (noisy; off by default).
+  publish_checkpoint_messages: false
 
 circuit_breaker:
   failure_threshold: 5
   cooldown_seconds: 600
+
+# Trading calendar. Weekdays are trading days unless listed in holidays; weekend make-up
+# sessions go into extra_trading_days. Keep in sync with the exchange calendar each year.
+market_calendar:
+  holidays: []
+  extra_trading_days: []
 
 schedule:
   market_windows:
@@ -53,6 +64,31 @@ schedule:
   allow_non_trading_day_black_swan: false
   allow_lunch_break_black_swan: true
   allow_off_hours_black_swan: true
+
+# Named cadence profiles referenced by demand.cadence_profile. When a demand names a profile,
+# these override the pool-layer based defaults from the cadence section below.
+cadence_profiles:
+  held_sellable_default:
+    market_snapshot:
+      enabled: true
+      bucket_size: 10m
+    mic_black_swan_scan:
+      enabled: true
+      interval: 45m
+  held_t1_locked_default:
+    market_snapshot:
+      enabled: true
+      bucket_size: 30m
+    mic_black_swan_scan:
+      enabled: true
+      interval: 60m
+  watchlist_default:
+    market_snapshot:
+      enabled: true
+      bucket_size: 60m
+    mic_black_swan_scan:
+      enabled: true
+      interval: 4h
 
 cadence:
   intraday_bucket_minutes: 10
@@ -100,12 +136,41 @@ intraday:
   query_bars_trading_ready: false
 
 market_features:
+  # Legacy single threshold; kept as abnormality_score_gte default when thresholds absent.
   abnormality_ticket_threshold: 0.75
+  # Multi-condition emit rules (design §7.4): any satisfied condition emits MARKET_FEATURE_TICKET.
+  thresholds:
+    abnormality_score_gte: 0.75
+    return_abs_gte: 0.02
+    amount_ratio_vs_20d_same_bucket_gte: 3.0
+    distance_to_limit_up_lte: 0.015
+    distance_to_limit_down_lte: 0.015
+  # Conditions that additionally route the ticket to risk_control with urgent priority.
+  risk_review:
+    negative_return_lte: -0.025
+    hit_limit_down: true
+    trading_status_abnormal: true
+  # Extra local-store query_bars lookups for prev-close / 20d same-bucket enrichment.
+  enrichment:
+    enabled: true
+    prev_close_lookback_days: 10
+    same_bucket_history_days: 20
+  # Price-limit percentages used for limit up/down distance features.
+  limit_rules:
+    default_pct: 0.10
+    st_pct: 0.05
+    growth_board_pct: 0.20
+    bse_pct: 0.30
+    prefix_pct: {}
 
 reports:
   output_dir: "reports"
 
 capability_verification:
+  # Run a real capability verification on agent startup (once per trading day).
+  run_on_startup: false
+  # Let runtime tick schedule a capability-check task during pre_market.
+  run_pre_market: true
   stock_data_collector:
     # Set these to a recent trading day before running tools verify-capabilities.
     ticker: "600519.SH"
@@ -114,6 +179,13 @@ capability_verification:
     frequencies: ["5m", "15m"]
     fallback_order: ["5m", "15m", "none"]
     unverified_default_frequency: "15m"
+    # Individual non-frequency checks (design §9.4).
+    checks:
+      cli_available: true
+      eastmoney_cookie: false
+      trading_status: true
+      historical_bars_1d: true
+      query_meta_summary: true
 
 tools:
   python_executable: "python"

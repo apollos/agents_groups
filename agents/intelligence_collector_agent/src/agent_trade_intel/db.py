@@ -38,6 +38,15 @@ class SQLiteStore:
     def init_schema(self) -> None:
         with self.session() as con:
             con.executescript(SCHEMA_SQL)
+            _apply_migrations(con)
+
+
+def _apply_migrations(con: sqlite3.Connection) -> None:
+    """Idempotent in-place migrations for databases created by earlier versions."""
+    message_cols = {row["name"] for row in con.execute("PRAGMA table_info(messages)")}
+    if "expires_at" not in message_cols:
+        con.execute("ALTER TABLE messages ADD COLUMN expires_at TEXT")
+    con.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (2)")
 
 
 def dumps_json(value: Any) -> str:
@@ -71,6 +80,7 @@ CREATE TABLE IF NOT EXISTS messages (
   target_agent_id TEXT,
   target_agent_group TEXT,
   available_at TEXT NOT NULL DEFAULT (datetime('now')),
+  expires_at TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now')),
   lease_owner TEXT,
@@ -342,6 +352,21 @@ CREATE TABLE IF NOT EXISTS circuit_breakers (
   last_error_json TEXT,
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS pool_members (
+  pool_layer TEXT NOT NULL,
+  ticker TEXT NOT NULL,
+  target_id TEXT,
+  company_name TEXT,
+  sellability TEXT,
+  is_st INTEGER NOT NULL DEFAULT 0,
+  is_suspended INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'active',
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (pool_layer, ticker)
+);
+CREATE INDEX IF NOT EXISTS idx_pool_members_layer ON pool_members(pool_layer, status);
 
 CREATE TABLE IF NOT EXISTS tool_capabilities (
   capability_id TEXT PRIMARY KEY,

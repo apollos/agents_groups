@@ -20,8 +20,23 @@ def is_weekday_trading_day(dt: datetime) -> bool:
     return dt.weekday() < 5
 
 
+def is_trading_day(dt: datetime, config: dict[str, Any] | None = None) -> bool:
+    """Trading-day check driven by market_calendar config.
+
+    market_calendar.holidays lists non-trading weekdays (e.g. statutory holidays) as YYYY-MM-DD.
+    market_calendar.extra_trading_days lists weekend make-up trading days as YYYY-MM-DD.
+    """
+    calendar = (config or {}).get("market_calendar", {}) or {}
+    date_str = dt.date().isoformat()
+    if date_str in set(calendar.get("extra_trading_days") or []):
+        return True
+    if date_str in set(calendar.get("holidays") or []):
+        return False
+    return is_weekday_trading_day(dt)
+
+
 def market_phase(dt: datetime, config: dict[str, Any]) -> str:
-    if not is_weekday_trading_day(dt):
+    if not is_trading_day(dt, config):
         return "non_trading_day"
     t = dt.time()
     windows = config.get("schedule", {}).get("market_windows", {})

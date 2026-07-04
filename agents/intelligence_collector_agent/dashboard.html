@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>情报收集员 Agent · 运行看板</title>
+<style>
+  :root{
+    --bg:#f5f6f8; --card:#ffffff; --line:#e6e8ec; --ink:#1f2430; --muted:#6b7280;
+    --accent:#4f46e5; --green:#16a34a; --amber:#d97706; --red:#dc2626; --blue:#2563eb;
+    --shadow:0 1px 2px rgba(16,24,40,.04),0 4px 16px rgba(16,24,40,.06);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;}
+  .wrap{max-width:1120px;margin:0 auto;padding:28px 20px 60px}
+  header.top{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:22px}
+  .title{display:flex;flex-direction:column;gap:6px}
+  .title h1{font-size:20px;margin:0;letter-spacing:.2px}
+  .title .sub{color:var(--muted);font-size:13px}
+  .pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:600}
+  .pill .dot{width:7px;height:7px;border-radius:50%}
+  .pill.run{background:#ecfdf3;color:var(--green)} .pill.run .dot{background:var(--green)}
+  .pill.idle{background:#eff6ff;color:var(--blue)} .pill.idle .dot{background:var(--blue)}
+  .pill.warn{background:#fffbeb;color:var(--amber)} .pill.warn .dot{background:var(--amber)}
+  .pill.bad{background:#fef2f2;color:var(--red)} .pill.bad .dot{background:var(--red)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:18px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 16px 14px;box-shadow:var(--shadow)}
+  .card .k{font-size:12px;color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.6px}
+  .card .v{font-size:26px;font-weight:700;margin-top:8px;line-height:1.1}
+  .card .meta{font-size:12px;color:var(--muted);margin-top:8px}
+  .bar{display:flex;height:8px;border-radius:6px;overflow:hidden;margin-top:12px;background:#eef0f3}
+  .bar > span{display:block;height:100%}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+  .chip{font-size:11px;background:#f3f4f6;border:1px solid var(--line);border-radius:8px;padding:3px 8px;color:#374151}
+  .chip b{color:var(--ink)}
+  section.panel{background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);margin-bottom:16px;overflow:hidden}
+  section.panel > .head{display:flex;align-items:center;justify-content:space-between;padding:14px 16px;cursor:pointer;user-select:none}
+  section.panel > .head h2{font-size:15px;margin:0}
+  section.panel > .head .hint{font-size:12px;color:var(--muted)}
+  section.panel > .body{padding:0 16px 16px;display:none}
+  section.panel.open > .body{display:block}
+  .caret{transition:transform .15s;color:var(--muted)}
+  section.panel.open .caret{transform:rotate(90deg)}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:600;font-size:12px}
+  td .ok{color:var(--green);font-weight:600} td .no{color:var(--red);font-weight:600}
+  pre{background:#0f1117;color:#d6deeb;padding:14px;border-radius:10px;overflow:auto;font-size:12px;line-height:1.5}
+  .twocol{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  @media(max-width:760px){.twocol{grid-template-columns:1fr}}
+  .small{font-size:12px;color:var(--muted)}
+  .note{background:#fffbeb;border:1px solid #fde68a;color:#92400e;font-size:12px;border-radius:10px;padding:10px 12px;margin-top:10px}
+  textarea{width:100%;min-height:120px;border:1px solid var(--line);border-radius:10px;padding:10px;font-family:ui-monospace,Menlo,monospace;font-size:12px}
+  button{background:var(--accent);color:#fff;border:0;border-radius:10px;padding:9px 16px;font-weight:600;cursor:pointer}
+  button:hover{filter:brightness(1.05)}
+  label.fld{font-size:12px;font-weight:600;color:var(--muted);display:block;margin:10px 0 6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <div class="title">
+      <h1>情报收集员 Agent · 运行看板</h1>
+      <div class="sub" id="subline"></div>
+    </div>
+    <div id="sessionPill"></div>
+  </header>
+
+  <div class="grid" id="kpis"></div>
+
+  <section class="panel" id="micPanel">
+    <div class="head"><h2>情报采集（MIC）· 搜索与模型落库</h2><span class="caret">▶</span></div>
+    <div class="body" id="micBody"></div>
+  </section>
+
+  <section class="panel" id="stockPanel">
+    <div class="head"><h2>行情数据采集（stock_data_collector）</h2><span class="caret">▶</span></div>
+    <div class="body" id="stockBody"></div>
+  </section>
+
+  <section class="panel" id="workPanel">
+    <div class="head"><h2>队列 / 票据 / 任务 明细</h2><span class="caret">▶</span></div>
+    <div class="body" id="workBody"></div>
+  </section>
+
+  <section class="panel" id="hbPanel">
+    <div class="head"><h2>心跳与会话明细</h2><span class="caret">▶</span></div>
+    <div class="body" id="hbBody"></div>
+  </section>
+
+  <section class="panel" id="dataPanel">
+    <div class="head"><h2>更新数据（粘贴最新 JSON 后刷新）</h2><span class="caret">▶</span></div>
+    <div class="body">
+      <div class="small">把 <code>agent status</code> 和 <code>report daily</code> 的 JSON 分别粘进来，点刷新即可更新看板，无需改文件。</div>
+      <label class="fld">agent status JSON</label>
+      <textarea id="statusInput"></textarea>
+      <label class="fld">report daily JSON</label>
+      <textarea id="reportInput"></textarea>
+      <div style="margin-top:12px"><button onclick="refreshFromInputs()">刷新看板</button></div>
+    </div>
+  </section>
+</div>
+
+<script>
+// ====== 初始数据（来自你贴的真实输出，可在底部面板替换）======
+const DATA = {
+  status: {"agent_id":"intelligence_collector_a_share","state_sqlite_path":"/mnt/e/workspace/agents_groups/agents/intelligence_collector_agent/data/intelligence_collector_state.db","bus_sqlite_path":"/mnt/e/workspace/agents_groups/agents/intelligence_collector_agent/data/ticket_bus.db","data_sqlite_path":"/mnt/e/workspace/agents_groups/agents/intelligence_collector_agent/data/intelligence_collector_data.db","workspace_root":"/mnt/e/workspace/agents_groups/agents/intelligence_collector_agent","log_dir":"/mnt/e/workspace/agents_groups/agents/intelligence_collector_agent/logs","latest_session":{"session_id":"session_5c06b09c0f6543469236","agent_id":"intelligence_collector_a_share","model_ref":"deepseek/deepseek-v4-flash","status":"running","started_at":"2026-06-17 11:46:26","stopped_at":null},"latest_checkpoint":{"checkpoint_id":"ckpt_26c2c2b9cb0e48aab5e4","state":"idle","created_at":"2026-06-17 11:47:05","open_ticket_ids":[],"next_due_tasks":[],"checkpoint":{"reason":"queue_empty"}},"latest_heartbeats":[{"worker_id":"intelligence_collector_a_share:worker_75cb14a498674fd5884b","state":"idle","message_id":null,"ticket_id":null,"created_at":"2026-06-17 11:47:05"},{"worker_id":"intelligence_collector_a_share:worker_a69d0317d4d94193a339","state":"processing","message_id":"msg_c8d1c43de3e046b38028","ticket_id":"ticket_566651454da84f3eb208","created_at":"2026-06-17 11:46:32"},{"worker_id":"intelligence_collector_a_share:worker_3e5af4a512d64d11887a","state":"processing","message_id":"msg_6dfd5667bd7d43a5842e","ticket_id":null,"created_at":"2026-06-17 11:46:28"}],"queue_depth_by_status":{"done":3,"open":2},"open_tickets_by_type":[{"ticket_type":"DATA_QUALITY_TICKET","c":1},{"ticket_type":"EVENT_TICKET","c":1}],"open_tasks_by_type":[{"task_type":"black_swan_scan","c":1},{"task_type":"intraday_snapshot_10m","c":1}],"latest_capability_check":{"tool_name":"stock_data_collector","status":"available","checked_at":"2026-06-17 11:59:06"},"circuit_breakers":[]},
+  report: {"summary":{"trade_date":"2026-06-11","tasks_total":0,"runs_by_tool_status":[],"tickets_created":[],"events_created":0,"market_features_created":0,"data_quality_issues":[],"coverage_gaps_created":0,"tool_capability_checks":[{"tool_name":"stock_data_collector","status":"available","checked_at":"2026-06-17 11:59:06","capabilities":{"ticker":"600519.SH","frequencies":{"5m":{"data_quality":0.825,"fetch_status":"success","query_status":"success","query_rows":48,"fetch_rows_fetched":48,"inline_bars_count":48,"has_minute_rows":true,"minimum_quality":0.8,"usable":true,"raw_result_ref":"raw://local/provider%3Dtushare/request_type%3Dhistorical_bars/date%3D2026-06-17/raw_tushare_historical_bars_20260617_req_a2bd751f375e4d29.jsonl.gz"},"15m":{"data_quality":0.825,"fetch_status":"success","query_status":"success","query_rows":16,"fetch_rows_fetched":16,"inline_bars_count":16,"has_minute_rows":true,"minimum_quality":0.8,"usable":true,"raw_result_ref":"raw://local/provider%3Dakshare/request_type%3Dhistorical_bars/date%3D2026-06-17/raw_akshare_historical_bars_20260617_req_6a7a9009b56349d4.jsonl.gz"}}}}],"circuit_breakers":[]}}
+};
+
+const $ = (id)=>document.getElementById(id);
+const esc=(s)=>String(s==null?"":s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const sum=(arr,k)=>arr.reduce((a,b)=>a+(b[k]||0),0);
+const provOf=(ref)=>{const m=/provider%3D([^/]+)/.exec(ref||"");return m?decodeURIComponent(m[1]):"-";};
+
+function render(status, report){
+  const s=status||{}, r=(report&&report.summary)||{};
+  const ses=s.latest_session||{}, ck=s.latest_checkpoint||{};
+  const q=s.queue_depth_by_status||{}, done=q.done||0, open=q.open||0, qTotal=done+open||1;
+  const openTickets=s.open_tickets_by_type||[], openTasks=s.open_tasks_by_type||[];
+  const cb=s.circuit_breakers||[];
+  const cap=s.latest_capability_check||{};
+
+  // subline + session pill
+  $("subline").innerHTML = `Agent <b>${esc(s.agent_id)}</b> · 模型 <b>${esc(ses.model_ref)}</b> · 会话起于 ${esc(ses.started_at)}`;
+  const running = ses.status==="running";
+  $("sessionPill").innerHTML = `<span class="pill ${running?'run':'idle'}"><span class="dot"></span>会话 ${esc(ses.status||'-')}</span>`;
+
+  // KPIs
+  const ckState = ck.state||'-', ckReason=(ck.checkpoint&&ck.checkpoint.reason)||'';
+  const tkSum=sum(openTickets,'c'), tsSum=sum(openTasks,'c');
+  const cbHealthy = cb.length===0;
+  const kpis=[
+    {k:'当前状态', v:ckState, meta:ckReason?('原因：'+esc(ckReason)):'', pill: running?'run':'idle'},
+    {k:'消息队列', v:`${done} / ${open}`, meta:`已完成 ${done} · 待处理 ${open}`,
+      bar:`<div class="bar"><span style="width:${done/qTotal*100}%;background:var(--green)"></span><span style="width:${open/qTotal*100}%;background:var(--amber)"></span></div>`},
+    {k:'未关闭票据', v:tkSum, chips:openTickets.map(t=>`<span class="chip">${esc(t.ticket_type)} <b>${t.c}</b></span>`).join('')},
+    {k:'未完成任务', v:tsSum, chips:openTasks.map(t=>`<span class="chip">${esc(t.task_type)} <b>${t.c}</b></span>`).join('')},
+    {k:'工具能力', v:cap.status||'-', meta:`${esc(cap.tool_name||'')} · ${esc(cap.checked_at||'')}`, pill: cap.status==='available'?'run':'warn'},
+    {k:'熔断器', v:cbHealthy?'正常':(cb.length+' 个'), meta:cbHealthy?'无熔断':'存在熔断', pill: cbHealthy?'run':'bad'},
+  ];
+  $("kpis").innerHTML = kpis.map(c=>`
+    <div class="card">
+      <div class="k">${c.k}</div>
+      <div class="v">${esc(c.v)} ${c.pill?`<span class="pill ${c.pill}" style="font-size:11px;vertical-align:middle"><span class="dot"></span></span>`:''}</div>
+      ${c.meta?`<div class="meta">${c.meta}</div>`:''}
+      ${c.bar||''}
+      ${c.chips?`<div class="chips">${c.chips}</div>`:''}
+    </div>`).join('');
+
+  // MIC panel
+  const micEmpty = (r.events_created||0)===0 && (r.tasks_total||0)===0;
+  $("micBody").innerHTML = `
+    <div class="grid" style="margin-top:14px">
+      <div class="card"><div class="k">本日任务数</div><div class="v">${r.tasks_total||0}</div></div>
+      <div class="card"><div class="k">模型落库事件</div><div class="v">${r.events_created||0}</div><div class="meta">经模型判断后写入 structured_events</div></div>
+      <div class="card"><div class="k">数据质量问题</div><div class="v">${(r.data_quality_issues||[]).length}</div></div>
+      <div class="card"><div class="k">覆盖缺口</div><div class="v">${r.coverage_gaps_created||0}</div></div>
+    </div>
+    ${micEmpty?`<div class="note">当前日报口径是 <b>${esc(r.trade_date)}</b>，MIC 搜索/落库计数为 0。你的真实采集发生在 <b>2026-06-17</b>，请用 <code>report daily --trade-date 2026-06-17</code> 重新生成日报后，把 JSON 粘到底部“更新数据”面板刷新，即可看到搜索量与模型落库量。</div>`:''}
+    <div class="small" style="margin-top:10px">说明：MIC 的“搜索条数 / 读取链接 / 模型调用”来自 collection_runs，落库事实数 = structured_events。日报 summary 汇总后即可在此展示。</div>`;
+
+  // Stock panel
+  const caps=(r.tool_capability_checks||[]);
+  let freqRows='';
+  let totalRows=0;
+  caps.forEach(c=>{
+    const f=(c.capabilities&&c.capabilities.frequencies)||{};
+    Object.keys(f).forEach(freq=>{
+      const x=f[freq]; totalRows+=(x.query_rows||0);
+      freqRows+=`<tr>
+        <td><b>${esc(freq)}</b></td>
+        <td>${esc((c.capabilities&&c.capabilities.ticker)||'-')}</td>
+        <td>${esc(provOf(x.raw_result_ref))}</td>
+        <td>${x.query_rows||0}</td>
+        <td>${x.data_quality!=null?x.data_quality.toFixed(3):'-'}</td>
+        <td>${x.usable?'<span class="ok">usable</span>':'<span class="no">not usable</span>'}</td>
+      </tr>`;
+    });
+  });
+  $("stockBody").innerHTML = `
+    <div class="grid" style="margin-top:14px">
+      <div class="card"><div class="k">已采集行情行数</div><div class="v">${totalRows}</div><div class="meta">能力验证已落库 bars</div></div>
+      <div class="card"><div class="k">行情特征生成</div><div class="v">${r.market_features_created||0}</div></div>
+      <div class="card"><div class="k">能力状态</div><div class="v">${esc(cap.status||'-')}</div></div>
+    </div>
+    <table style="margin-top:14px"><thead><tr><th>频率</th><th>标的</th><th>来源</th><th>行数</th><th>质量分</th><th>可用</th></tr></thead>
+    <tbody>${freqRows||'<tr><td colspan="6" class="small">暂无能力验证数据</td></tr>'}</tbody></table>`;
+
+  // Work detail
+  $("workBody").innerHTML = `
+    <div class="twocol" style="margin-top:14px">
+      <div><h3 style="font-size:13px;color:var(--muted)">未关闭票据</h3>
+        <table><tbody>${openTickets.map(t=>`<tr><td>${esc(t.ticket_type)}</td><td style="text-align:right"><b>${t.c}</b></td></tr>`).join('')||'<tr><td class="small">无</td></tr>'}</tbody></table></div>
+      <div><h3 style="font-size:13px;color:var(--muted)">未完成任务</h3>
+        <table><tbody>${openTasks.map(t=>`<tr><td>${esc(t.task_type)}</td><td style="text-align:right"><b>${t.c}</b></td></tr>`).join('')||'<tr><td class="small">无</td></tr>'}</tbody></table></div>
+    </div>`;
+
+  // Heartbeats
+  const hbs=s.latest_heartbeats||[];
+  $("hbBody").innerHTML = `
+    <table style="margin-top:14px"><thead><tr><th>时间</th><th>状态</th><th>worker</th><th>message</th><th>ticket</th></tr></thead>
+    <tbody>${hbs.map(h=>`<tr>
+      <td>${esc(h.created_at)}</td>
+      <td>${h.state==='processing'?'<span class="ok">processing</span>':esc(h.state)}</td>
+      <td class="small">${esc((h.worker_id||'').split(':').pop())}</td>
+      <td class="small">${esc(h.message_id||'-')}</td>
+      <td class="small">${esc(h.ticket_id||'-')}</td></tr>`).join('')}</tbody></table>
+    <div style="margin-top:14px"><div class="small">会话 / Checkpoint 原始信息</div>
+    <pre>${esc(JSON.stringify({session:ses,checkpoint:ck},null,2))}</pre></div>`;
+
+  // fill inputs
+  $("statusInput").value = JSON.stringify(status,null,2);
+  $("reportInput").value = JSON.stringify(report,null,2);
+}
+
+function refreshFromInputs(){
+  try{
+    const st=JSON.parse($("statusInput").value);
+    const rp=JSON.parse($("reportInput").value);
+    render(st,rp);
+    alert("已刷新");
+  }catch(e){ alert("JSON 解析失败："+e.message); }
+}
+
+// panel toggles
+document.querySelectorAll('section.panel > .head').forEach(h=>{
+  h.addEventListener('click',()=>h.parentElement.classList.toggle('open'));
+});
+
+render(DATA.status, DATA.report);
+</script>
+</body>
+</html>

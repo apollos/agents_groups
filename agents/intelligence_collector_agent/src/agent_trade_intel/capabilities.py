@@ -42,8 +42,11 @@ class ToolCapabilityVerifier:
         end_date = cap_cfg.get("end_date") or start_date
         frequencies = cap_cfg.get("frequencies", ["5m", "15m"])
         minimum_quality = float(self.config.get("quality", {}).get("minimum_quality_for_public_pool", 0.8))
-        capabilities: dict[str, Any] = {"checked_at": utc_now_iso(), "ticker": ticker, "frequencies": {}}
+        capabilities: dict[str, Any] = {"checked_at": utc_now_iso(), "ticker": ticker, "frequencies": {}, "checks": {}}
         errors: list[dict[str, Any]] = []
+        capabilities["checks"] = self._run_checks(
+            cap_cfg, ticker=ticker, start_date=start_date, end_date=end_date, errors=errors, keepalive=keepalive
+        )
         for freq in frequencies:
             if keepalive:
                 keepalive()
@@ -101,6 +104,7 @@ class ToolCapabilityVerifier:
                     errors.append({"error_code": "NO_MINUTE_ROWS", "error_message": f"no {freq} rows returned by query bars", "retryable": False})
         any_usable = any(v.get("usable") for v in capabilities["frequencies"].values())
         status = "available" if any_usable else "unavailable"
+        capabilities["recommended_intraday_mode"] = _recommended_intraday_mode(capabilities)
         capability_id = new_id("cap")
         logger.info("stock_data capability verification: status=%s frequencies=%s", status, {k: v.get("usable") for k, v in capabilities["frequencies"].items()})
         with self.store.session() as con:
@@ -119,6 +123,66 @@ class ToolCapabilityVerifier:
             )
         return CapabilityCheckResult(capability_id=capability_id, status=status, capabilities=capabilities, errors=errors)
 
+    def _run_checks(
+        self,
+        cap_cfg: dict[str, Any],
+        *,
+        ticker: str,
+        start_date: str | None,
+        end_date: str | None,
+        errors: list[dict[str, Any]],
+        keepalive: Callable[[], None] | None,
+    ) -> dict[str, Any]:
+        """Non-frequency capability checks per design §9.4.
+
+        Each check is individually switchable in YAML. realtime_quote is not exposed as a CLI
+        fetch subcommand in the first stock_data edition, so it is recorded as unknown.
+        """
+        checks_cfg = cap_cfg.get("checks", {}) or {}
+        results: dict[str, Any] = {}
+
+        def record(name: str, res) -> None:
+            usable = res.status == "success" and bool((res.quality or {}).get("usable", True))
+            results[name] = {
+                "status": "available" if usable else "unavailable",
+                "tool_status": res.status,
+                "errors": res.errors,
+            }
+            if not usable:
+                errors.extend(res.errors)
+
+        if checks_cfg.get("cli_available", True):
+            if keepalive:
+                keepalive()
+            record("cli_available", self.stock.cli_available())
+            if results["cli_available"]["status"] != "available":
+                # No point running further real subcommands when the CLI itself cannot start.
+                return results
+        if checks_cfg.get("eastmoney_cookie", False):
+            if keepalive:
+                keepalive()
+            record("eastmoney_cookie", self.stock.verify_eastmoney_cookie())
+        if checks_cfg.get("trading_status", True):
+            if keepalive:
+                keepalive()
+            record("trading_status", self.stock.fetch_trading_status(tickers=[ticker], start_date=start_date, end_date=end_date))
+        if checks_cfg.get("historical_bars_1d", True):
+            if keepalive:
+                keepalive()
+            fetch = self.stock.fetch_historical_bars(
+                tickers=[ticker], start_date=start_date, end_date=end_date, frequency="1d", adjust="none", cross_validate=False
+            )
+            record("historical_bars_1d", fetch)
+        if checks_cfg.get("query_meta_summary", True):
+            if keepalive:
+                keepalive()
+            record("query_meta_summary", self.stock.query_meta_summary(ticker=ticker))
+        results["realtime_quote_python_layer"] = {
+            "status": "unknown",
+            "note": "realtime_quote is not exposed as a first-stage CLI fetch subcommand",
+        }
+        return results
+
     def latest_stock_capabilities(self) -> dict[str, Any] | None:
         with self.store.session() as con:
             row = con.execute(
@@ -133,3 +197,15 @@ class ToolCapabilityVerifier:
             "capabilities": json.loads(row["capabilities_json"]),
             "errors": json.loads(row["errors_json"]),
         }
+
+
+def _recommended_intraday_mode(capabilities: dict[str, Any]) -> str:
+    frequencies = capabilities.get("frequencies", {}) or {}
+    if (frequencies.get("5m") or {}).get("usable"):
+        return "aggregate_5m_to_10m"
+    if (frequencies.get("15m") or {}).get("usable"):
+        return "fallback_15m_feature"
+    checks = capabilities.get("checks", {}) or {}
+    if (checks.get("trading_status") or {}).get("status") == "available":
+        return "trading_status_only"
+    return "skip_and_emit_capability_gap"

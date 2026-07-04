@@ -43,6 +43,7 @@ class MessageQueue(ABC):
         *,
         priority: int = 0,
         available_at: str | None = None,
+        expires_at: str | None = None,
         correlation_id: str | None = None,
         idempotency_key: str | None = None,
         target_agent_id: str | None = None,
@@ -96,6 +97,7 @@ class SQLiteMessageQueue(MessageQueue):
         *,
         priority: int = 0,
         available_at: str | None = None,
+        expires_at: str | None = None,
         correlation_id: str | None = None,
         idempotency_key: str | None = None,
         target_agent_id: str | None = None,
@@ -115,8 +117,9 @@ class SQLiteMessageQueue(MessageQueue):
                 """
                 INSERT INTO messages(
                   message_id, topic, status, priority, payload_json, correlation_id,
-                  idempotency_key, target_agent_id, target_agent_group, available_at, max_attempts
-                ) VALUES (?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?)
+                  idempotency_key, target_agent_id, target_agent_group, available_at,
+                  expires_at, max_attempts
+                ) VALUES (?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     message_id,
@@ -128,6 +131,7 @@ class SQLiteMessageQueue(MessageQueue):
                     target_agent_id,
                     target_agent_group,
                     available_at or utc_now_iso(),
+                    expires_at,
                     max_attempts,
                 ),
             )
@@ -172,6 +176,7 @@ class SQLiteMessageQueue(MessageQueue):
                     WHERE topic IN ({placeholders})
                       AND status='open'
                       AND datetime(available_at) <= datetime('now')
+                      AND (expires_at IS NULL OR datetime(expires_at) > datetime('now'))
                       {target_clause}
                     ORDER BY priority DESC, datetime(created_at) ASC
                     LIMIT 1
@@ -300,6 +305,23 @@ class SQLiteMessageQueue(MessageQueue):
             logger.info("operator retried message %s", message_id)
         return retried
 
+    def expire_messages(self) -> int:
+        """Mark open messages whose expires_at has passed as expired (design §5.4)."""
+        with self.store.session() as con:
+            cur = con.execute(
+                """
+                UPDATE messages
+                SET status='expired', updated_at=datetime('now')
+                WHERE status='open'
+                  AND expires_at IS NOT NULL
+                  AND datetime(expires_at) < datetime('now')
+                """
+            )
+            count = int(cur.rowcount or 0)
+        if count:
+            logger.info("expired %s stale open messages", count)
+        return count
+
     def requeue_expired_leases(self) -> int:
         with self.store.session() as con:
             dead_cur = con.execute(
@@ -336,18 +358,19 @@ class SQLiteMessageQueue(MessageQueue):
             return None
         return dict(row) | {"payload": loads_json(row["payload_json"], {}), "error": loads_json(row["error_json"], None)}
 
-    def list_messages(self, status: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+    def list_messages(self, status: str | None = None, limit: int = 100, topic: str | None = None) -> list[dict[str, Any]]:
+        query = "SELECT * FROM messages WHERE 1=1"
+        params: list[Any] = []
+        if status:
+            query += " AND status=?"
+            params.append(status)
+        if topic:
+            query += " AND topic=?"
+            params.append(topic)
+        query += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
         with self.store.session() as con:
-            if status:
-                rows = con.execute(
-                    "SELECT * FROM messages WHERE status=? ORDER BY created_at DESC LIMIT ?",
-                    (status, limit),
-                ).fetchall()
-            else:
-                rows = con.execute(
-                    "SELECT * FROM messages ORDER BY created_at DESC LIMIT ?",
-                    (limit,),
-                ).fetchall()
+            rows = con.execute(query, params).fetchall()
         return [dict(row) | {"payload": loads_json(row["payload_json"], {})} for row in rows]
 
     def depth_by_status(self) -> dict[str, int]:

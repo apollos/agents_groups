@@ -16,10 +16,13 @@ from .demand import DemandCompiler, DemandRegistry
 from .heartbeat import HeartbeatRecorder
 from .logging_setup import get_logger, setup_logging
 from .openclaw import OpenClawArtifactRenderer, OpenClawModelValidator
+from .pools import PoolRepository
+from .query_service import IntelligenceQueryService
 from .queue import SQLiteMessageQueue
 from .reader import IntelligenceReader
 from .recovery import RecoveryManager
 from .reports import DailyReportBuilder
+from .runtime import RuntimeController
 from .session import AgentSessionRepository
 from .stores import create_stores, init_unique_stores
 from .tickets import TicketRepository
@@ -33,7 +36,17 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--config", required=True, help="Path to intelligence collector YAML config")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("init-db")
+    init_db = sub.add_parser("init-db")
+    init_db.add_argument("--reset", action="store_true", help="Delete existing SQLite files before re-initialising")
+
+    config_cmd = sub.add_parser("config")
+    config_sub = config_cmd.add_subparsers(dest="config_command", required=True)
+    config_sub.add_parser("validate")
+
+    db_cmd = sub.add_parser("db")
+    db_sub = db_cmd.add_subparsers(dest="db_command", required=True)
+    backup = db_sub.add_parser("backup")
+    backup.add_argument("--output-dir", help="Backup directory; defaults to <workspace>/data/backups/<timestamp>")
 
     demand = sub.add_parser("demand")
     demand_sub = demand.add_subparsers(dest="demand_command", required=True)
@@ -58,9 +71,11 @@ def main(argv: list[str] | None = None) -> None:
     tick = rt_sub.add_parser("tick")
     tick.add_argument("--now", required=True)
     tick.add_argument("--market-phase")
+    tick.add_argument("--run-capability-validation", action="store_true")
     rt_sub.add_parser("recover")
     hb = rt_sub.add_parser("heartbeat")
     hb.add_argument("--limit", type=int, default=10)
+    rt_sub.add_parser("capability-validate")
 
     agent = sub.add_parser("agent")
     ag_sub = agent.add_subparsers(dest="agent_command", required=True)
@@ -68,13 +83,22 @@ def main(argv: list[str] | None = None) -> None:
     idle = ag_sub.add_parser("run-until-idle")
     idle.add_argument("--max-messages", type=int, default=100)
     ag_sub.add_parser("status")
+    ag_sub.add_parser("checkpoint")
     resume = ag_sub.add_parser("resume")
     resume.add_argument("--max-messages", type=int, default=100)
 
     queue = sub.add_parser("queue")
     q_sub = queue.add_subparsers(dest="queue_command", required=True)
+    q_pub = q_sub.add_parser("publish")
+    q_pub.add_argument("--topic", required=True)
+    q_pub.add_argument("--ticket-id")
+    q_pub.add_argument("--payload-json", help="Inline JSON payload; merged with --ticket-id when both given")
+    q_pub.add_argument("--priority", type=int, default=10)
+    q_pub.add_argument("--correlation-id")
+    q_pub.add_argument("--expires-at")
     q_list = q_sub.add_parser("list")
     q_list.add_argument("--status")
+    q_list.add_argument("--topic")
     q_list.add_argument("--limit", type=int, default=50)
     q_inspect = q_sub.add_parser("inspect")
     q_inspect.add_argument("--message-id", required=True)
@@ -82,6 +106,34 @@ def main(argv: list[str] | None = None) -> None:
     q_retry.add_argument("--message-id", required=True)
     q_dead = q_sub.add_parser("dead-letter")
     q_dead.add_argument("--limit", type=int, default=50)
+
+    pool = sub.add_parser("pool")
+    pool_sub = pool.add_subparsers(dest="pool_command", required=True)
+    pool_set = pool_sub.add_parser("set")
+    pool_set.add_argument("--layer", required=True)
+    pool_set.add_argument("--ticker", required=True)
+    pool_set.add_argument("--target-id")
+    pool_set.add_argument("--company-name")
+    pool_set.add_argument("--sellability", choices=["sellable", "t1_locked", "frozen"])
+    pool_set.add_argument("--st", action="store_true")
+    pool_set.add_argument("--suspended", action="store_true")
+    pool_remove = pool_sub.add_parser("remove")
+    pool_remove.add_argument("--layer", required=True)
+    pool_remove.add_argument("--ticker", required=True)
+    pool_list = pool_sub.add_parser("list")
+    pool_list.add_argument("--layer")
+
+    query = sub.add_parser("query")
+    query_sub = query.add_subparsers(dest="query_command", required=True)
+    q_req = query_sub.add_parser("request")
+    q_req.add_argument("--query-type", required=True)
+    q_req.add_argument("--ticker")
+    q_req.add_argument("--target-id")
+    q_req.add_argument("--source-agent", default="cli_operator")
+    q_req.add_argument("--filters-json")
+    q_req.add_argument("--limit", type=int, default=50)
+    q_resp = query_sub.add_parser("responses")
+    q_resp.add_argument("--limit", type=int, default=20)
 
     ticket = sub.add_parser("ticket")
     t_sub = ticket.add_subparsers(dest="ticket_command", required=True)
@@ -123,6 +175,7 @@ def main(argv: list[str] | None = None) -> None:
     daily = rep_sub.add_parser("daily")
     daily.add_argument("--trade-date", required=True)
     daily.add_argument("--output-dir")
+    daily.add_argument("--format", choices=["json", "html", "both"], default="both")
 
     args = parser.parse_args(argv)
     cfg = load_config(args.config)
@@ -132,6 +185,8 @@ def main(argv: list[str] | None = None) -> None:
         retention_days=int(cfg.get("logging.retention_days", 14)),
     )
     logger.info("cli invoked: command=%s", args.command)
+    if args.command == "init-db" and getattr(args, "reset", False):
+        _reset_sqlite_files(cfg)
     stores = create_stores(cfg)
     init_unique_stores(stores)
     state_store = stores["state"]
@@ -141,6 +196,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "init-db":
         _print({
             "status": "ok",
+            "reset": bool(getattr(args, "reset", False)),
             "state_sqlite_path": str(cfg.runtime.state_sqlite_path),
             "bus_sqlite_path": str(cfg.runtime.bus_sqlite_path),
             "data_sqlite_path": str(cfg.runtime.data_sqlite_path),
@@ -149,9 +205,34 @@ def main(argv: list[str] | None = None) -> None:
         })
         return
 
+    if args.command == "config":
+        if args.config_command == "validate":
+            _print({
+                "status": "valid",
+                "config_path": str(cfg.path),
+                "agent_id": cfg.runtime.agent_id,
+                "agent_group": cfg.runtime.agent_group,
+                "model_primary": cfg.model.primary,
+                "workspace_root": str(cfg.runtime.workspace_root),
+                "state_sqlite_path": str(cfg.runtime.state_sqlite_path),
+                "bus_sqlite_path": str(cfg.runtime.bus_sqlite_path),
+                "data_sqlite_path": str(cfg.runtime.data_sqlite_path),
+                "reports_dir": str(cfg.runtime.reports_dir),
+                "tools": {
+                    "mic_enabled": cfg.tools.mic_enabled,
+                    "stock_enabled": cfg.tools.stock_enabled,
+                },
+            })
+        return
+
+    if args.command == "db":
+        if args.db_command == "backup":
+            _print(_backup_databases(cfg, args.output_dir))
+        return
+
     if args.command == "demand":
-        registry = DemandRegistry(data_store)
         queue = SQLiteMessageQueue(bus_store)
+        registry = DemandRegistry(data_store, queue)
         tickets = TicketRepository(bus_store)
         compiler = DemandCompiler(data_store, queue, tickets, cfg.runtime.agent_id, cfg.runtime.agent_group)
         if args.demand_command == "validate":
@@ -183,17 +264,24 @@ def main(argv: list[str] | None = None) -> None:
         queue = SQLiteMessageQueue(bus_store)
         tickets = TicketRepository(bus_store)
         if args.runtime_command == "tick":
-            registry = DemandRegistry(data_store)
-            compiler = DemandCompiler(data_store, queue, tickets, cfg.runtime.agent_id, cfg.runtime.agent_group)
-            phase = args.market_phase or market_phase(parse_dt(args.now, cfg.runtime.timezone), cfg.raw)
-            created = compiler.compile_active_demands(registry, as_of=args.now, market_phase=phase)
-            _print({"status": "ok", "market_phase": phase, "created": created})
+            controller = RuntimeController(cfg, state_store=state_store, bus_store=bus_store, data_store=data_store)
+            _print(
+                controller.tick(
+                    now=args.now,
+                    phase=args.market_phase,
+                    run_capability_validation=args.run_capability_validation,
+                )
+            )
         elif args.runtime_command == "recover":
             recovery = RecoveryManager(bus_store, queue, tickets, cfg.runtime.agent_id, cfg.runtime.agent_group)
             _print(recovery.recover())
         elif args.runtime_command == "heartbeat":
             hb = HeartbeatRecorder(state_store, cfg.runtime.agent_id)
             _print({"items": hb.latest(limit=args.limit)})
+        elif args.runtime_command == "capability-validate":
+            worker = IntelligenceCollectorAgent(cfg)
+            res = worker.capabilities.verify_stock_intraday()
+            _print({"capability_id": res.capability_id, "status": res.status, "capabilities": res.capabilities, "errors": res.errors})
         return
 
     if args.command == "agent":
@@ -204,6 +292,14 @@ def main(argv: list[str] | None = None) -> None:
             _print(worker.run_until_idle(max_messages=args.max_messages))
         elif args.agent_command == "status":
             _print(_agent_status(cfg, state_store, bus_store, data_store))
+        elif args.agent_command == "checkpoint":
+            checkpoints = CheckpointManager(state_store, cfg.runtime.agent_id)
+            checkpoint_id = checkpoints.save(
+                session_id=None,
+                state="manual",
+                checkpoint={"reason": "cli manual checkpoint", "queue_depth": worker.queue.depth_by_status()},
+            )
+            _print({"status": "ok", "checkpoint_id": checkpoint_id})
         elif args.agent_command == "resume":
             recovery = RecoveryManager(worker.bus_store, worker.queue, worker.tickets, cfg.runtime.agent_id, cfg.runtime.agent_group)
             recovered = recovery.recover()
@@ -213,8 +309,24 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command == "queue":
         q = SQLiteMessageQueue(bus_store)
-        if args.queue_command == "list":
-            _print({"items": q.list_messages(status=args.status, limit=args.limit)})
+        if args.queue_command == "publish":
+            payload: dict[str, Any] = {}
+            if args.payload_json:
+                payload.update(json.loads(args.payload_json))
+            if args.ticket_id:
+                payload["ticket_id"] = args.ticket_id
+            if not payload:
+                raise SystemExit("queue publish requires --ticket-id and/or --payload-json")
+            msg_id = q.publish(
+                args.topic,
+                payload,
+                priority=args.priority,
+                correlation_id=args.correlation_id,
+                expires_at=args.expires_at,
+            )
+            _print({"status": "published", "message_id": msg_id, "topic": args.topic})
+        elif args.queue_command == "list":
+            _print({"items": q.list_messages(status=args.status, topic=args.topic, limit=args.limit)})
         elif args.queue_command == "inspect":
             _print(q.inspect(args.message_id) or {"status": "not_found", "message_id": args.message_id})
         elif args.queue_command == "retry":
@@ -222,6 +334,57 @@ def main(argv: list[str] | None = None) -> None:
             _print({"status": "requeued" if ok else "not_found", "message_id": args.message_id})
         elif args.queue_command == "dead-letter":
             _print({"items": q.list_messages(status="dead", limit=args.limit)})
+        return
+
+    if args.command == "pool":
+        pool_repo = PoolRepository(data_store)
+        if args.pool_command == "set":
+            _print(
+                pool_repo.upsert_member(
+                    pool_layer=args.layer,
+                    ticker=args.ticker,
+                    target_id=args.target_id,
+                    company_name=args.company_name,
+                    sellability=args.sellability,
+                    is_st=args.st,
+                    is_suspended=args.suspended,
+                )
+            )
+        elif args.pool_command == "remove":
+            removed = pool_repo.remove_member(pool_layer=args.layer, ticker=args.ticker)
+            _print({"status": "removed" if removed else "not_found", "layer": args.layer, "ticker": args.ticker})
+        elif args.pool_command == "list":
+            _print({"items": pool_repo.list_members(pool_layer=args.layer)})
+        return
+
+    if args.command == "query":
+        queue = SQLiteMessageQueue(bus_store)
+        tickets = TicketRepository(bus_store)
+        service = IntelligenceQueryService(
+            IntelligenceReader(data_store=data_store, bus_store=bus_store, state_store=state_store),
+            tickets,
+            queue,
+            cfg.runtime.agent_id,
+        )
+        if args.query_command == "request":
+            target = {}
+            if args.ticker:
+                target["ticker"] = args.ticker
+            if args.target_id:
+                target["target_id"] = args.target_id
+            filters = json.loads(args.filters_json) if args.filters_json else {}
+            _print(
+                service.publish_request(
+                    query_type=args.query_type,
+                    target=target,
+                    filters=filters,
+                    limit=args.limit,
+                    source_agent=args.source_agent,
+                    target_agent_group=cfg.runtime.agent_group,
+                )
+            )
+        elif args.query_command == "responses":
+            _print({"items": tickets.list(ticket_type="INTELLIGENCE_QUERY_RESPONSE_TICKET", limit=args.limit)})
         return
 
     if args.command == "ticket":
@@ -263,8 +426,15 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "report":
         if args.report_command == "daily":
             out = args.output_dir or cfg.runtime.reports_dir
-            builder = DailyReportBuilder(data_store=data_store, bus_store=bus_store, state_store=state_store, output_dir=out, agent_id=cfg.runtime.agent_id)
-            _print(builder.build(trade_date=args.trade_date))
+            builder = DailyReportBuilder(
+                data_store=data_store,
+                bus_store=bus_store,
+                state_store=state_store,
+                output_dir=out,
+                agent_id=cfg.runtime.agent_id,
+                queue=SQLiteMessageQueue(bus_store),
+            )
+            _print(builder.build(trade_date=args.trade_date, output_format=args.format))
         return
 
 
@@ -303,6 +473,47 @@ def _agent_status(cfg, state_store: SQLiteStore, bus_store: SQLiteStore, data_st
         "latest_capability_check": dict(latest_capability) if latest_capability else None,
         "circuit_breakers": breaker.states(),
     }
+
+
+def _unique_sqlite_paths(cfg) -> list[Path]:
+    paths = []
+    for p in (cfg.runtime.state_sqlite_path, cfg.runtime.bus_sqlite_path, cfg.runtime.data_sqlite_path):
+        if Path(p) not in paths:
+            paths.append(Path(p))
+    return paths
+
+
+def _reset_sqlite_files(cfg) -> None:
+    for path in _unique_sqlite_paths(cfg):
+        for suffix in ("", "-wal", "-shm"):
+            candidate = Path(str(path) + suffix)
+            if candidate.exists():
+                candidate.unlink()
+                logger.info("reset removed %s", candidate)
+
+
+def _backup_databases(cfg, output_dir: str | None) -> dict[str, Any]:
+    """Daily archive backup (design §14.1): consistent SQLite copies via the backup API."""
+    import sqlite3
+    from datetime import datetime, timezone
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    target_dir = Path(output_dir) if output_dir else (cfg.runtime.workspace_root / "data" / "backups" / stamp)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    copied = []
+    for path in _unique_sqlite_paths(cfg):
+        if not path.exists():
+            continue
+        dest = target_dir / path.name
+        src = sqlite3.connect(str(path))
+        dst = sqlite3.connect(str(dest))
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+            src.close()
+        copied.append(str(dest))
+    return {"status": "ok", "backup_dir": str(target_dir), "files": copied}
 
 
 def _load_structured_file(path: str) -> dict[str, Any]:
