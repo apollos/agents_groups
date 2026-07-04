@@ -11,6 +11,7 @@ from .agent import IntelligenceCollectorAgent
 from .checkpoint import CheckpointManager
 from .circuit_breaker import CircuitBreaker
 from .config import load_config
+from .dashboard import run_dashboard
 from .db import SQLiteStore
 from .demand import DemandCompiler, DemandRegistry
 from .heartbeat import HeartbeatRecorder
@@ -176,6 +177,11 @@ def main(argv: list[str] | None = None) -> None:
     daily.add_argument("--trade-date", required=True)
     daily.add_argument("--output-dir")
     daily.add_argument("--format", choices=["json", "html", "both"], default="both")
+
+    dashboard = sub.add_parser("dashboard", help="Serve the live monitoring dashboard (polls the SQLite stores)")
+    dashboard.add_argument("--host", default="127.0.0.1")
+    dashboard.add_argument("--port", type=int, default=8700)
+    dashboard.add_argument("--refresh-seconds", type=int, default=5)
 
     args = parser.parse_args(argv)
     cfg = load_config(args.config)
@@ -421,6 +427,18 @@ def main(argv: list[str] | None = None) -> None:
             _print(OpenClawModelValidator(cfg).validate())
         elif args.openclaw_command == "render-artifacts":
             _print(OpenClawArtifactRenderer(cfg).render(args.output_dir))
+        return
+
+    if args.command == "dashboard":
+        run_dashboard(
+            cfg,
+            state_store=state_store,
+            bus_store=bus_store,
+            data_store=data_store,
+            host=args.host,
+            port=args.port,
+            refresh_seconds=args.refresh_seconds,
+        )
         return
 
     if args.command == "report":

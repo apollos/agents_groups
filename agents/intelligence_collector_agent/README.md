@@ -369,6 +369,23 @@ intel-agent --config config/intelligence_collector.yaml runtime capability-valid
 intel-agent --config config/intelligence_collector.yaml runtime tick --now "2026-06-11T08:30:00+08:00" --run-capability-validation
 ```
 
+### 实时监控看板
+
+内置一个动态看板（前后端一体，标准库实现，无额外依赖）。后端每次请求都直接读三个 SQLite store 的当前状态，前端定时轮询 `/api/overview` 自动刷新，Agent / runtime 在其它进程持续写入时看板同步变化（WAL 允许并发读）：
+
+```bash
+# 已 pip install -e . 安装时：
+intel-agent --config config/intelligence_collector.yaml dashboard --port 8700 --refresh-seconds 5
+
+# 未安装、直接跑源码时：
+PYTHONPATH=src python3 -m agent_trade_intel.cli --config config/intelligence_collector.yaml dashboard --port 8700 --refresh-seconds 5
+
+# 然后浏览器打开 http://127.0.0.1:8700 （常驻进程，Ctrl+C 退出）
+# 如需局域网其它机器访问，加 --host 0.0.0.0
+```
+
+看板内容：会话/心跳存活状态（active / recent / stale）、当前市场阶段、队列深度与死信、未关闭 Ticket、今日任务与工具调用流水、最新结构化事件与行情特征（异常分高亮）、open 状态的数据质量问题与覆盖缺口、Demand 列表、能力验证结果与推荐盘中模式、熔断器状态、最新 checkpoint 与日报。页面支持暂停/调整刷新间隔（2/5/10/30s），拉取失败会显示错误条并自动重试。接口：`GET /api/overview`（聚合 JSON）、`GET /healthz`。
+
 过期 lease 恢复：如果 `attempts < max_attempts`，回到 open；否则进入 dead-letter。
 
 ## 11. 长期运行、Checkpoint、Memory、恢复
@@ -571,6 +588,9 @@ intel-agent --config config/intelligence_collector.yaml agent status
 
 # 10. 生成日报
 intel-agent --config config/intelligence_collector.yaml report daily --trade-date 2026-06-11
+
+# 11. 启动实时监控看板（常驻进程，浏览器打开 http://127.0.0.1:8700，Ctrl+C 退出）
+intel-agent --config config/intelligence_collector.yaml dashboard --port 8700 --refresh-seconds 5
 ```
 
 ## 19. 测试
