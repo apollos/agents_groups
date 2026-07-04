@@ -127,6 +127,14 @@ quality:
   minimum_quality_for_public_pool: 0.80
   critical_conflict_action: quarantine_and_alert
   high_conflict_action: accept_with_review
+  # Research-quality checks for MIC results (degrade to P2 accept_degraded, never reject).
+  mic:
+    # High/urgent priority target returning zero top_events is a coverage signal, not a pass.
+    flag_high_priority_zero_events: true
+    # Events whose sources cannot be traced to a URL are unverifiable evidence.
+    require_source_url: true
+    # All-media/social/unknown sourcing without official corroboration gets flagged.
+    flag_low_authority_sources: true
 
 intraday:
   # Agent bucket remains configurable. When the source supports 5m, Agent fetches then queries
@@ -193,6 +201,9 @@ tools:
     enabled: true
     # Optional; MIC itself usually reads its own config/env.
     config_dir: null
+    # Hard wall-clock timeout for one MIC deep collect. On timeout the task fails with a
+    # retryable MIC_TIMEOUT error instead of blocking the worker indefinitely.
+    timeout_seconds: 900
   stock_data_collector:
     enabled: true
     # Use an absolute path, or leave null to let stock_data_collector resolve its own config/env.

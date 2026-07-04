@@ -28,7 +28,7 @@ from .runtime import RuntimeController
 from .session import AgentSessionRepository
 from .stores import create_stores, init_unique_stores
 from .tickets import TicketRepository
-from .time_utils import market_phase, parse_dt
+from .time_utils import market_phase, parse_dt, validate_market_calendar
 
 logger = get_logger("cli")
 
@@ -44,6 +44,11 @@ def main(argv: list[str] | None = None) -> None:
     config_cmd = sub.add_parser("config")
     config_sub = config_cmd.add_subparsers(dest="config_command", required=True)
     config_sub.add_parser("validate")
+
+    calendar_cmd = sub.add_parser("calendar", help="Trading-calendar helpers")
+    cal_sub = calendar_cmd.add_subparsers(dest="calendar_command", required=True)
+    cal_val = cal_sub.add_parser("validate", help="Check market_calendar holiday coverage for a year")
+    cal_val.add_argument("--year", type=int, default=None, help="Defaults to the current local year")
 
     db_cmd = sub.add_parser("db")
     db_sub = db_cmd.add_subparsers(dest="db_command", required=True)
@@ -215,6 +220,11 @@ def main(argv: list[str] | None = None) -> None:
     )
     req_batch.add_argument("--file", required=True, help="Spec file with defaults / demands / industries / companies / stocks")
     req_batch.add_argument("--test-mode", action="store_true", help="Force test_mode on all entries (budget clamped)")
+    req_batch.add_argument(
+        "--update-demand-config",
+        action="store_true",
+        help="Also apply demands: overrides (budget/priority/task_profile) to demands that already exist",
+    )
     request_sub.add_parser("status", help="Show MIC-registered targets, managed demands and pool members")
 
     oc = sub.add_parser("openclaw")
@@ -265,6 +275,9 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command == "config":
         if args.config_command == "validate":
+            calendar_check = validate_market_calendar(
+                cfg.raw, parse_dt(None, cfg.runtime.timezone).year
+            )
             _print({
                 "status": "valid",
                 "config_path": str(cfg.path),
@@ -280,7 +293,14 @@ def main(argv: list[str] | None = None) -> None:
                     "mic_enabled": cfg.tools.mic_enabled,
                     "stock_enabled": cfg.tools.stock_enabled,
                 },
+                "market_calendar": calendar_check,
             })
+        return
+
+    if args.command == "calendar":
+        if args.calendar_command == "validate":
+            year = args.year or parse_dt(None, cfg.runtime.timezone).year
+            _print(validate_market_calendar(cfg.raw, year))
         return
 
     if args.command == "db":
@@ -540,7 +560,7 @@ def main(argv: list[str] | None = None) -> None:
             spec = _load_structured_file(args.file)
             if args.test_mode:
                 spec.setdefault("defaults", {})["test_mode"] = True
-            _print(center.request_batch(spec))
+            _print(center.request_batch(spec, update_demand_config=args.update_demand_config))
         elif args.request_command == "remove":
             _print(center.remove_target(demand_id=args.demand_id, target_id=args.target_id, ticker=args.ticker))
         elif args.request_command == "status":
@@ -576,6 +596,7 @@ def main(argv: list[str] | None = None) -> None:
                 output_dir=out,
                 agent_id=cfg.runtime.agent_id,
                 queue=SQLiteMessageQueue(bus_store),
+                timezone=cfg.runtime.timezone,
             )
             _print(builder.build(trade_date=args.trade_date, output_format=args.format))
         return

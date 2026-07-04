@@ -12,12 +12,13 @@ class QualityGate:
         self.minimum_quality_for_trading = float(
             config.get("quality", {}).get("minimum_quality_for_trading_ready", self.minimum_quality)
         )
+        self.mic_rules = dict(config.get("quality", {}).get("mic", {}) or {})
 
-    def evaluate(self, result: ToolResult) -> dict[str, Any]:
+    def evaluate(self, result: ToolResult, *, context: dict[str, Any] | None = None) -> dict[str, Any]:
         if result.tool_name == "stock_data_collector":
             return self._stock_quality(result)
         if result.tool_name == "market_intelligence_collector":
-            return self._mic_quality(result)
+            return self._mic_quality(result, context or {})
         if result.status == "success":
             return {"decision": "accept", "severity": "P3", "usable": True, "issues": []}
         return {"decision": "reject", "severity": "P1", "usable": False, "issues": result.errors}
@@ -73,24 +74,59 @@ class QualityGate:
             return {"decision": "accept", "severity": "P3", "usable": True, "issues": [], "data_quality": quality_score}
         return {"decision": "reject", "severity": "P1", "usable": False, "issues": issues or errors, "data_quality": quality_score}
 
-    def _mic_quality(self, result: ToolResult) -> dict[str, Any]:
+    def _mic_quality(self, result: ToolResult, context: dict[str, Any]) -> dict[str, Any]:
         if result.status != "success":
             return {"decision": "reject", "severity": "P1", "usable": False, "issues": result.errors}
-        summary = result.result.get("summary", {}) if isinstance(result.result, dict) else {}
+        report = result.result if isinstance(result.result, dict) else {}
+        summary = report.get("summary", {}) or {}
         links_read = int(summary.get("links_read") or 0)
         model_calls = int(summary.get("model_calls") or 0)
+        issues: list[dict[str, Any]] = []
         if links_read == 0 and model_calls == 0:
-            return {
-                "decision": "accept_degraded",
-                "severity": "P2",
-                "usable": True,
-                "issues": [{"issue_type": "no_links_or_model_calls", "severity": "medium"}],
-            }
+            issues.append({"issue_type": "no_links_or_model_calls", "severity": "medium"})
         if summary.get("queries_skipped_by_hit_budget", 0):
-            return {
-                "decision": "accept_degraded",
-                "severity": "P2",
-                "usable": True,
-                "issues": [{"issue_type": "budget_tight", "severity": "medium"}],
-            }
+            issues.append({"issue_type": "budget_tight", "severity": "medium"})
+        issues.extend(self._mic_research_issues(report, context))
+        if issues:
+            return {"decision": "accept_degraded", "severity": "P2", "usable": True, "issues": issues}
         return {"decision": "accept", "severity": "P3", "usable": True, "issues": []}
+
+    def _mic_research_issues(self, report: dict[str, Any], context: dict[str, Any]) -> list[dict[str, Any]]:
+        """Research-quality checks beyond "did the tool run": event coverage and evidence.
+
+        These never fail the run (data is still persisted); they degrade the decision so the
+        gaps show up as P2 data-quality issues instead of being silently accepted.
+        """
+        issues: list[dict[str, Any]] = []
+        events = report.get("top_events") or []
+        priority = str(context.get("priority") or "normal")
+        if not events and priority in {"high", "urgent"} and bool(self.mic_rules.get("flag_high_priority_zero_events", True)):
+            issues.append(
+                {
+                    "issue_type": "high_priority_zero_events",
+                    "severity": "medium",
+                    "detail": f"high-priority target produced no top_events (priority={priority})",
+                }
+            )
+        if events and bool(self.mic_rules.get("require_source_url", True)):
+            missing = sum(1 for ev in events if not ((ev.get("source") or {}).get("url") or ev.get("source_url")))
+            if missing == len(events):
+                issues.append(
+                    {
+                        "issue_type": "events_missing_source_url",
+                        "severity": "medium",
+                        "detail": f"all {len(events)} events lack a source URL; evidence cannot be verified",
+                    }
+                )
+        if events and bool(self.mic_rules.get("flag_low_authority_sources", True)):
+            weak = {"media", "social", "unknown", None, ""}
+            all_weak = all(((ev.get("source") or {}).get("source_type") or ev.get("source_type")) in weak for ev in events)
+            if all_weak:
+                issues.append(
+                    {
+                        "issue_type": "low_authority_sources_only",
+                        "severity": "medium",
+                        "detail": "no exchange/regulator/official corroboration among event sources",
+                    }
+                )
+        return issues

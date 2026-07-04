@@ -47,6 +47,12 @@ def _apply_migrations(con: sqlite3.Connection) -> None:
     if "expires_at" not in message_cols:
         con.execute("ALTER TABLE messages ADD COLUMN expires_at TEXT")
     con.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (2)")
+    # v3: per-event evidence fields so research quality (source authority, freshness) is queryable.
+    event_cols = {row["name"] for row in con.execute("PRAGMA table_info(structured_events)")}
+    for column in ("source_url", "source_domain", "source_type", "published_at", "retrieved_at"):
+        if column not in event_cols:
+            con.execute(f"ALTER TABLE structured_events ADD COLUMN {column} TEXT")
+    con.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (3)")
 
 
 def dumps_json(value: Any) -> str:
@@ -216,6 +222,11 @@ CREATE TABLE IF NOT EXISTS structured_events (
   impact_json TEXT NOT NULL DEFAULT '{}',
   source_refs_json TEXT NOT NULL DEFAULT '[]',
   source_level TEXT,
+  source_url TEXT,
+  source_domain TEXT,
+  source_type TEXT,
+  published_at TEXT,
+  retrieved_at TEXT,
   confidence REAL,
   data_quality REAL,
   source_corroboration_status TEXT,

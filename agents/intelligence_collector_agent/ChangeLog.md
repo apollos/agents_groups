@@ -4,6 +4,45 @@
 
 ---
 
+## V0.7.1 — 2026-07-04：真实运行前加固（外部代码审阅采纳）
+
+本次改动来自一份针对 full pool 真实启动风险的外部代码审阅。审阅共列 11 项建议，采纳情况：P0 两项全部落地（其一在审阅前已修复，本次补齐验收测试）；P1 六项落地（其中两项按现状裁剪范围）；P2 两项（港股结构化数据源、golden set 评估）与 dashboard 效果面板全量版**暂缓**，待第一轮真实小样本跑通后再排期。
+
+### P0：MIC 长任务防重复执行
+
+1. **lease 心跳**（`agent.py` 新增 `lease_heartbeat` 上下文管理器）：MIC 深采是单次长阻塞调用，此前执行期间不续租，超过 `queue.lease_seconds`（默认 300s）消息会被重新投递、由第二个 worker 重复采集。现在采集期间后台线程按 `lease_seconds/3` 间隔自动续租 + 心跳。
+2. **MIC 硬超时**（`adapters/mic_adapter.py`）：新增配置 `tools.market_intelligence_collector.timeout_seconds`（默认 900s）。超时返回 retryable 的 `MIC_TIMEOUT` 失败结果，worker 不再被无限期挂住。
+3. **执行前成功去重**：同一任务幂等键已有 success run 时（消息重投/重复投递场景），直接复用 run_id 关单，不再花第二次 MIC 预算。
+4. **Planner 重复规划 MIC**：审阅指出的 `daily_collection` 双重规划分支在 V0.7 中已修复；本次按审阅要求补齐 3 个验收单测（盘前 1 MIC/目标、盘后 1 MIC + 1 stock 仅限 A 股、on_demand/coverage_gap 不重复）。
+
+### P1：统计口径、并发安全与运营可见性
+
+5. **本地交易日统计**（`dashboard.py` / `reports.py` / `time_utils.local_day_utc_range`）：SQLite `created_at` 存 UTC，此前按 `date(created_at)` 过滤，Asia/Shanghai 凌晨 00:00–08:00 的数据会被算到前一天。现在 dashboard 的"今日"与日报的 `trade_date` 统一换算为本地日的 UTC 起止区间查询；dashboard 同时显示 `today_local` 与 `today_utc`。
+6. **MIC 档案写入原子化 + 文件锁**（`request_center.py`）：`target_profiles.yaml` 改为临时文件 + fsync + `os.replace` 原子替换，写入中断不再留半截 YAML；`load -> merge -> save` 全程持有 `flock` 文件锁，并发 batch 不会互相覆盖目标。
+7. **batch 重跑 demand 配置显式化**：`request batch` 新增 `--update-demand-config`。不加该参数重跑时，`demands:` 覆盖（预算/优先级/task_profile）对已存在的 Demand 跳过并输出 warning（结果含 `demand_config_updated` 字段），消除"改了 YAML 但没生效"的误判；加参数则深合并生效并升 Demand 版本。
+8. **交易日历年度校验**：新增 `intel-agent calendar validate [--year]`；`config validate` 输出 `market_calendar` 段。日历当年无节假日条目时给出明确 warning（否则系统按"工作日=交易日"运行，春节/国庆/调休全错）。审阅建议的独立 calendar_provider 模块与 A股/港股分市场日历暂缓，当前配置结构（holidays + extra_trading_days）先满足单市场需要。
+9. **事件证据字段**（schema v3 迁移，老库自动加列）：`structured_events` 新增 `source_url / source_domain / source_type / published_at / retrieved_at`；MIC `top_events` 输出补充 `event_type / event_date / source{url,domain,source_type,published_at}`（`mic/pipeline.py`）；日报 Top 事件与 dashboard 最新事件带来源类型（dashboard 可点击源链接）。审阅建议的 `tracking_variable` / `query_family` / `relevance_score` 等字段依赖 MIC 输出合同更大改造，暂缓。
+10. **MIC 质量闸门强化**（`quality.py`，配置 `quality.mic.*` 可开关）：高优先级目标零事件 → P2 降级；全部事件无 source URL（证据不可核验）→ P2；全部事件仅 media/social/unknown 来源、无官方交叉印证 → P2。均为 accept_degraded（数据仍落库），在 run 质量与数据质量记录中可见。
+
+### 暂缓项（记录在案）
+
+- P2 港股通结构化数据适配器（南向持股/回购/AH 溢价）：需要新外部数据源，待研究池文本采集稳定后排期。
+- P2 golden set 评估命令与 dashboard 效果面板（变量覆盖/来源覆盖/预算效率矩阵）：依赖第 9 项证据字段先积累真实数据。
+- MIC 手工/生成配置分离（manual/generated 双文件）：当前合并式 upsert 已保护手工字段，加文件锁后风险可控。
+
+### 验证
+
+- Agent 测试 66 个全部通过（新增 18 个加固测试 `tests/test_review_hardening.py`）。
+- MIC 测试 73 个全部通过（`top_events` 证据字段为新增可选字段，旧消费方不受影响）。
+- CLI 冒烟：`calendar validate` 空日历正确告警；`request batch` 重跑无 flag 输出 skip warning、加 `--update-demand-config` 后预算生效且版本 +1。
+
+### 升级说明
+
+- 老库自动迁移（v3：structured_events 加 5 个证据列），无需手工操作。
+- 建议在真实启动前：① 向 `market_calendar.holidays` 填入 2026 年 A 股节假日并跑 `calendar validate --year 2026`；② 确认 `tools.market_intelligence_collector.timeout_seconds` 与 `queue.lease_seconds` 符合预期（超时应显著大于单次深采常规耗时）。
+
+---
+
 ## V0.7 — 2026-07-04：研究池启动 + 一键/批量申请采集
 
 本次为一次较大改动，目标是按《A股_港股通_可迭代股票研究池_跟踪建议.md》启动"行业信息 + 目标公司信息"的日常采集，为后续分析员 Agent 准备输入数据。

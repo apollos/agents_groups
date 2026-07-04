@@ -361,7 +361,7 @@ class Pipeline:
                         "model_outputs": merge_result.model_outputs,
                         "field_conflicts": merge_result.field_conflicts,
                     }, search_run_id=run_id)
-                self._tally(stats, bundle)
+                self._tally(stats, bundle, source_metadata=source_metadata)
 
         # Persist run-level coverage gaps that weren't tied to a saved link.
         self.repo.save_coverage_gaps(run_id, profile.target_id, self._run_gaps(stats))
@@ -463,7 +463,8 @@ class Pipeline:
             ))
         return contributions
 
-    def _tally(self, stats: RunStats, bundle) -> None:
+    def _tally(self, stats: RunStats, bundle,
+               source_metadata: dict | None = None) -> None:
         s = stats.structured
         s["briefs"] += 1
         s["facts"] += len(bundle.facts)
@@ -478,9 +479,20 @@ class Pipeline:
         s["analyst_questions"] += len(bundle.analyst_questions)
         s["coverage_gaps"] += len(bundle.coverage_gaps)
         for e in bundle.events:
-            stats.top_events.append({
-                "summary": e.summary, "impact_channels": e.impact.channels,
-                "confidence": e.confidence, "source_link_id": bundle.source_link_id})
+            entry = {
+                "summary": e.summary, "event_type": e.event_type,
+                "event_date": e.event_date, "impact_channels": e.impact.channels,
+                "confidence": e.confidence, "source_link_id": bundle.source_link_id}
+            # Evidence fields for downstream consumers (agent structured_events).
+            if source_metadata:
+                entry["source"] = {
+                    "url": source_metadata.get("url"),
+                    "domain": source_metadata.get("source_name"),
+                    "source_type": source_metadata.get("source_type"),
+                    "published_at": source_metadata.get("publish_time"),
+                    "title": source_metadata.get("title"),
+                }
+            stats.top_events.append(entry)
         for r in bundle.relations:
             stats.top_relations.append({
                 "relation_type": r.relation_type, "subject": r.subject_entity.name,

@@ -21,9 +21,12 @@ re-registered once (one version bump) regardless of how many targets it gains.
 
 from __future__ import annotations
 
+import os
 import re
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import yaml
 
@@ -88,6 +91,7 @@ def load_mic_profiles(config_dir: Path) -> dict[str, Any]:
 
 
 def save_mic_profiles(config_dir: Path, profiles: dict[str, Any]) -> Path:
+    """Atomically replace target_profiles.yaml so an interrupted write never leaves half a file."""
     path = Path(config_dir) / "target_profiles.yaml"
     body = yaml.safe_dump(
         {"target_profiles": profiles},
@@ -96,8 +100,36 @@ def save_mic_profiles(config_dir: Path, profiles: dict[str, Any]) -> Path:
         default_flow_style=False,
         width=100,
     )
-    path.write_text(_MIC_PROFILES_HEADER + body, encoding="utf-8")
+    with tempfile.NamedTemporaryFile(
+        "w", encoding="utf-8", dir=path.parent, prefix=".target_profiles.", suffix=".tmp", delete=False
+    ) as f:
+        tmp = Path(f.name)
+        f.write(_MIC_PROFILES_HEADER + body)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
     return path
+
+
+@contextmanager
+def mic_profiles_lock(config_dir: Path) -> Iterator[None]:
+    """Advisory file lock covering the load -> merge -> save cycle.
+
+    Prevents two concurrent `request batch` invocations (or a batch racing a single request)
+    from silently dropping each other's targets in the read-modify-write of the profiles file.
+    """
+    lock_path = Path(config_dir) / ".target_profiles.lock"
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR)
+    try:
+        try:
+            import fcntl
+
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        except ImportError:  # pragma: no cover - non-POSIX fallback keeps behaviour unlocked
+            pass
+        yield
+    finally:
+        os.close(fd)
 
 
 def list_mic_targets(config_dir: Path) -> list[dict[str, Any]]:
@@ -224,7 +256,7 @@ class RequestCenter:
             "pool": pool_result,
         }
 
-    def request_batch(self, spec: dict[str, Any]) -> dict[str, Any]:
+    def request_batch(self, spec: dict[str, Any], *, update_demand_config: bool = False) -> dict[str, Any]:
         """Register a whole research pool from one spec (YAML/JSON).
 
         Spec layout::
@@ -238,6 +270,11 @@ class RequestCenter:
             industries: [{name: ..., target_id: ..., products: [...], ...}]
             companies:  [{name: ..., ticker: ..., demand_id: ..., ...}]
             stocks:     [{ticker: ..., company_name: ...}]
+
+        On re-runs, ``demands:`` overrides only apply to *existing* demands when
+        ``update_demand_config`` is true; otherwise the run keeps the stored demand-level config
+        (budget/priority/task_profile) and reports a warning, so "I edited the YAML but nothing
+        changed" is always visible in the output.
         """
         defaults = spec.get("defaults") or {}
         overrides = spec.get("demands") or {}
@@ -291,9 +328,11 @@ class RequestCenter:
                     priority=group["priority"],
                     test_mode=group["test_mode"],
                     scaffold_overrides=overrides.get(demand_id),
+                    update_demand_config=update_demand_config,
                 )
             )
         pool_count = sum(1 for op in pool_ops if self._apply_pool_op(op))
+        warnings = [w for entry in demand_results for w in entry.get("warnings", [])]
         return {
             "status": "requested",
             "kind": "batch",
@@ -302,6 +341,7 @@ class RequestCenter:
             "mic_profiles_written": len(profiles),
             "demands": demand_results,
             "pool_members_upserted": pool_count,
+            "warnings": warnings,
         }
 
     def remove_target(self, *, demand_id: str, target_id: str | None = None, ticker: str | None = None) -> dict[str, Any]:
@@ -484,16 +524,17 @@ class RequestCenter:
 
     def _upsert_mic_profiles(self, new_profiles: dict[str, dict[str, Any]]) -> Path:
         config_dir = resolve_mic_config_dir(self.cfg)
-        profiles = load_mic_profiles(config_dir)
-        for target_id, profile in new_profiles.items():
-            existing = profiles.get(target_id) or {}
-            # Merge so a lightweight re-request never wipes hand-curated fields.
-            merged = dict(existing)
-            for key, value in profile.items():
-                if value not in (None, [], ""):
-                    merged[key] = value
-            profiles[target_id] = merged
-        path = save_mic_profiles(config_dir, profiles)
+        with mic_profiles_lock(config_dir):
+            profiles = load_mic_profiles(config_dir)
+            for target_id, profile in new_profiles.items():
+                existing = profiles.get(target_id) or {}
+                # Merge so a lightweight re-request never wipes hand-curated fields.
+                merged = dict(existing)
+                for key, value in profile.items():
+                    if value not in (None, [], ""):
+                        merged[key] = value
+                profiles[target_id] = merged
+            path = save_mic_profiles(config_dir, profiles)
         logger.info("MIC profiles upserted: %s (%s)", ", ".join(new_profiles), path)
         return path
 
@@ -506,12 +547,26 @@ class RequestCenter:
         priority: str,
         test_mode: bool,
         scaffold_overrides: dict[str, Any] | None = None,
+        update_demand_config: bool = False,
     ) -> dict[str, Any]:
+        warnings: list[str] = []
+        config_updated = False
+        override_payload = {k: v for k, v in (scaffold_overrides or {}).items() if k != "kind"}
         demand = self.registry.get(demand_id)
         if not demand:
             demand = self._demand_scaffold(demand_id, demand_kind, priority, test_mode)
-            if scaffold_overrides:
-                demand = _deep_merge(demand, {k: v for k, v in scaffold_overrides.items() if k != "kind"})
+            if override_payload:
+                demand = _deep_merge(demand, override_payload)
+                config_updated = True
+        elif override_payload:
+            if update_demand_config:
+                demand = _deep_merge(demand, override_payload)
+                config_updated = True
+            else:
+                warnings.append(
+                    f"demand {demand_id} already exists; demand-level overrides (budget/priority/task_profile) "
+                    "were skipped. Re-run with --update-demand-config to apply them."
+                )
         existing = list(demand.get("targets") or [])
         added = updated = 0
         for target in targets:
@@ -533,6 +588,8 @@ class RequestCenter:
             "target_count": len(existing),
             "demand_version": result["version"],
             "message_id": result["message_id"],
+            "demand_config_updated": config_updated,
+            "warnings": warnings,
         }
 
     def _register(self, demand: dict[str, Any]) -> dict[str, Any]:

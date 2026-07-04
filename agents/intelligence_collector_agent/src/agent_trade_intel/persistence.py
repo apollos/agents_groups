@@ -4,7 +4,7 @@ from typing import Any
 
 from .adapters.common import ToolResult
 from .db import SQLiteStore, dumps_json
-from .ids import make_idempotency_key, new_id, stable_hash
+from .ids import make_idempotency_key, new_id, stable_hash, utc_now_iso
 
 
 class ResultPersister:
@@ -56,10 +56,17 @@ class ResultPersister:
         company_name = target.get("company_name")
         top_events = report.get("top_events") or []
         with self.store.session() as con:
+            retrieved_at = utc_now_iso()
             for ev in top_events:
                 summary = ev.get("summary") or ev.get("summary_cn") or str(ev)[:200]
                 event_type = ev.get("event_type") or "other"
                 event_date = ev.get("event_date") or ev.get("date")
+                # Evidence fields from MIC's per-event source block (nested or flat legacy shape).
+                source = ev.get("source") or {}
+                source_url = source.get("url") or ev.get("source_url")
+                source_domain = source.get("domain") or ev.get("source_domain")
+                source_type = source.get("source_type") or ev.get("source_type")
+                published_at = source.get("published_at") or ev.get("published_at")
                 idem = make_idempotency_key("event", target_id or ticker, event_type, event_date or "unknown", stable_hash(summary, 12))
                 existing = con.execute("SELECT event_id FROM structured_events WHERE idempotency_key=?", (idem,)).fetchone()
                 if existing:
@@ -68,9 +75,10 @@ class ResultPersister:
                     """
                     INSERT INTO structured_events(
                       event_id, target_id, ticker, company_name, event_type, event_date,
-                      summary_cn, impact_json, source_refs_json, confidence, data_quality,
-                      source_run_id, payload_json, idempotency_key
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                      summary_cn, impact_json, source_refs_json,
+                      source_url, source_domain, source_type, published_at, retrieved_at,
+                      confidence, data_quality, source_run_id, payload_json, idempotency_key
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         new_id("event"),
@@ -82,6 +90,11 @@ class ResultPersister:
                         summary,
                         dumps_json(ev.get("impact", {})),
                         dumps_json([ev.get("source_link_id")] if ev.get("source_link_id") else []),
+                        source_url,
+                        source_domain,
+                        source_type,
+                        published_at,
+                        retrieved_at,
                         ev.get("confidence"),
                         ev.get("data_quality"),
                         report.get("search_run_id"),

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import traceback
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
-from typing import Any
+from threading import Event, Thread
+from typing import Any, Callable, Iterator
 
 from .adapters.mic_adapter import MICAdapter
 from .adapters.stock_data_adapter import StockDataCLIAdapter
@@ -30,6 +32,32 @@ from .stores import create_stores, init_unique_stores
 from .tickets import TicketRepository, priority_to_int
 
 logger = get_logger("agent")
+
+
+@contextmanager
+def lease_heartbeat(keepalive: Callable[[], None], interval_seconds: int) -> Iterator[None]:
+    """Keep extending the message lease while a single long blocking tool call runs.
+
+    MIC deep collects regularly outlive queue.lease_seconds. Without a background heartbeat the
+    message would be requeued mid-run and a second worker would execute the same collection.
+    """
+    stop = Event()
+
+    def loop() -> None:
+        while not stop.wait(interval_seconds):
+            try:
+                keepalive()
+            except Exception:  # pragma: no cover - keepalive must never kill the tool call
+                logger.warning("lease heartbeat failed", exc_info=True)
+
+    thread = Thread(target=loop, daemon=True, name="lease-heartbeat")
+    thread.start()
+    try:
+        keepalive()
+        yield
+    finally:
+        stop.set()
+        thread.join(timeout=1)
 
 
 class IntelligenceCollectorAgent:
@@ -67,7 +95,10 @@ class IntelligenceCollectorAgent:
         self.quality = QualityGate(config.raw)
         self.persister = ResultPersister(self.data_store)
         self.feature_builder = MarketFeatureBuilder(self.data_store, config.raw)
-        self.mic = MICAdapter(config.tools.mic_config_dir)
+        self.mic = MICAdapter(
+            config.tools.mic_config_dir,
+            timeout_seconds=int(config.get("tools.market_intelligence_collector.timeout_seconds", 900)),
+        )
         self.stock = StockDataCLIAdapter(
             config_dir=config.tools.stock_config_dir,
             python_executable=config.tools.python_executable,
@@ -308,11 +339,22 @@ class IntelligenceCollectorAgent:
             return {"status": "skipped", "reason": "market_intelligence_collector disabled"}
         if not self.breaker.allow(self.mic.tool_name):
             return self._handle_circuit_open(ticket, tool_name=self.mic.tool_name, ticker=target.get("ticker"), target_id=target_id)
+        # A requeued/duplicated message must not re-run an already-successful collection: reuse
+        # the persisted run instead of spending MIC budget twice.
+        existing_run = self._successful_mic_run(task)
+        if existing_run:
+            self.tickets.update_status(ticket["ticket_id"], "done", "MIC task already completed by earlier run")
+            self._publish_collection_result(ticket, status="success", run_ids=[existing_run], usable=True)
+            return {"status": "success", "run_id": existing_run, "reused": True}
         task_profile = _mic_task_profile(task, self.config.raw, default_focus=target.get("focus"))
-        result = self.mic.collect(target_id=target_id, task_profile=task_profile)
+        # MIC deep collect is one long blocking call; renew the lease on a background thread so
+        # the message is not requeued (and double-executed) while MIC is still running.
+        heartbeat_interval = max(30, self.lease_seconds // 3)
+        with lease_heartbeat(self._keepalive, heartbeat_interval):
+            result = self.mic.collect(target_id=target_id, task_profile=task_profile)
         self._record_breaker(self.mic.tool_name, result.status)
         run_id = self.persister.save_run(task=task, ticket_id=ticket["ticket_id"], result=result, demand_id=task.get("demand_id"))
-        q = self.quality.evaluate(result)
+        q = self.quality.evaluate(result, context={"priority": ticket.get("priority")})
         saved = self.persister.save_mic_structures(task=task, result=result) if result.status == "success" else {"events": 0, "coverage_gaps": 0}
         if q["severity"] in {"P0", "P1"}:
             self._emit_data_quality(
@@ -344,6 +386,18 @@ class IntelligenceCollectorAgent:
             out["_message_action"] = "retry"
             out["_retry_error"] = retry_error
         return out
+
+    def _successful_mic_run(self, task: dict[str, Any]) -> str | None:
+        """run_id of an earlier successful MIC run for the same task idempotency key, if any."""
+        if not task.get("idempotency_key"):
+            return None
+        idem = make_idempotency_key("run", task.get("idempotency_key"), self.mic.tool_name, "collect_intelligence")
+        with self.data_store.session() as con:
+            row = con.execute(
+                "SELECT run_id FROM collection_runs WHERE idempotency_key=? AND status='success'",
+                (idem,),
+            ).fetchone()
+        return str(row["run_id"]) if row else None
 
     def _execute_stock_task(self, ticket: dict[str, Any], task: dict[str, Any]) -> dict[str, Any]:
         task_type = task.get("task_type")

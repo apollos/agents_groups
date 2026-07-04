@@ -1,4 +1,4 @@
-# 情报收集员 Agent 代码包 V0.7
+# 情报收集员 Agent 代码包 V0.7.1
 
 这是 Agent交易公司多 Agent A 股交易辅助系统中的 **情报收集员 Agent**。它面向 OpenClaw 多 Agent 运行环境设计，负责 Demand → Ticket → Message → 工具调用 → 质量闸门 → 事件/特征/日报的采集闭环。
 
@@ -6,7 +6,19 @@
 
 完整版本历史见 [ChangeLog.md](ChangeLog.md)。
 
-## 0. V0.7 关键变更（研究池启动 + 一键申请采集）
+## 0. V0.7.1 关键变更（真实运行前加固）
+
+采纳外部代码审阅意见，消除 full pool 真实启动的工程风险（详情与采纳/暂缓清单见 ChangeLog）：
+
+1. **MIC 长任务防重复执行**：采集期间后台线程自动续租（`lease_heartbeat`）；新增 `tools.market_intelligence_collector.timeout_seconds`（默认 900s）硬超时，超时返回 retryable 的 `MIC_TIMEOUT`；消息重投时同一任务幂等键已有 success run 直接复用，不再花第二次预算。
+2. **本地交易日统计**：dashboard 与日报的"今日/trade_date"统一按本地交易日换算 UTC 区间过滤（此前 Asia/Shanghai 凌晨数据会被算进前一天）；dashboard 显示 `today_local` / `today_utc`。
+3. **MIC 档案写入原子化 + 文件锁**：`target_profiles.yaml` 临时文件 + `os.replace` 原子替换，`load->merge->save` 全程持 flock，并发 batch 不互相覆盖。
+4. **batch 重跑配置显式化**：`request batch --update-demand-config` 才会把 `demands:` 覆盖应用到已存在的 Demand；不加参数时输出 skip warning（结果含 `demand_config_updated`），杜绝"改了 YAML 没生效"误判。
+5. **交易日历校验**：新增 `intel-agent calendar validate [--year]`；`config validate` 输出日历检查，当年无节假日条目会明确告警。
+6. **事件证据字段（schema v3，老库自动迁移）**：`structured_events` 新增 `source_url / source_domain / source_type / published_at / retrieved_at`；MIC `top_events` 输出带 `event_type / event_date / source{...}`；日报与 dashboard 展示来源类型。
+7. **MIC 质量闸门强化**（`quality.mic.*` 可配置）：高优先级目标零事件、全部事件无来源 URL、全部事件仅弱权威来源（media/social/unknown）→ P2 降级并留痕。
+
+## 0.0.1 V0.7 关键变更（研究池启动 + 一键申请采集）
 
 按《A股_港股通_可迭代股票研究池_跟踪建议.md》落地"行业信息 + 目标公司信息"采集：
 
@@ -391,6 +403,9 @@ intel-agent --config config/intelligence_collector.yaml init-db --reset
 # 盘前能力验证（直接执行，或让 tick 调度）
 intel-agent --config config/intelligence_collector.yaml runtime capability-validate
 intel-agent --config config/intelligence_collector.yaml runtime tick --now "2026-06-11T08:30:00+08:00" --run-capability-validation
+
+# 交易日历年度校验（V0.7.1）：当年无节假日条目会告警（config validate 也会输出该检查）
+intel-agent --config config/intelligence_collector.yaml calendar validate --year 2026
 ```
 
 ### 一键申请采集（V0.7）
@@ -420,6 +435,10 @@ intel-agent --config $CFG request stock --ticker 600519.SH --company-name 贵州
 # 第一次建议加 --test-mode 小预算试跑，确认链路后不带 --test-mode 重跑一次即恢复正式预算（幂等）。
 intel-agent --config $CFG request batch --file examples/research_pool_full.yaml --test-mode
 intel-agent --config $CFG request batch --file examples/research_pool_full.yaml
+
+# 重跑时如果修改了 YAML 中 demands: 段的预算/优先级/task_profile，默认不会应用到已存在的
+# Demand（输出 warning 提示）；需要生效时显式加 --update-demand-config：
+intel-agent --config $CFG request batch --file examples/research_pool_full.yaml --update-demand-config
 
 # 观察层（上下游扩展名单）想暂停/恢复：
 intel-agent --config $CFG demand suspend --demand-id demand_company_watch_daily

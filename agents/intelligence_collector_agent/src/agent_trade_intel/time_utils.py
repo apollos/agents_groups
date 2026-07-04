@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, time
+from datetime import datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 from typing import Any
 
@@ -33,6 +33,64 @@ def is_trading_day(dt: datetime, config: dict[str, Any] | None = None) -> bool:
     if date_str in set(calendar.get("holidays") or []):
         return False
     return is_weekday_trading_day(dt)
+
+
+def validate_market_calendar(config: dict[str, Any] | None, year: int) -> dict[str, Any]:
+    """Sanity-check the configured market_calendar for a given year.
+
+    Without holiday entries the system falls back to "weekday == trading day", which mis-fires
+    on statutory holidays and weekend make-up sessions. This surfaces that gap before a real run.
+    """
+    calendar = (config or {}).get("market_calendar", {}) or {}
+    holidays = [str(d) for d in (calendar.get("holidays") or [])]
+    extra_days = [str(d) for d in (calendar.get("extra_trading_days") or [])]
+
+    def _invalid(dates: list[str]) -> list[str]:
+        bad = []
+        for d in dates:
+            try:
+                datetime.fromisoformat(d)
+            except ValueError:
+                bad.append(d)
+        return bad
+
+    invalid_entries = _invalid(holidays) + _invalid(extra_days)
+    prefix = f"{year}-"
+    holidays_in_year = [d for d in holidays if d.startswith(prefix)]
+    extra_in_year = [d for d in extra_days if d.startswith(prefix)]
+    warnings: list[str] = []
+    if invalid_entries:
+        warnings.append(f"invalid calendar dates (expect YYYY-MM-DD): {invalid_entries}")
+    if not holidays_in_year:
+        warnings.append(
+            f"market_calendar.holidays has no entries for {year}; the agent will treat every weekday "
+            "as a trading day (Spring Festival / National Day / make-up days will be wrong)"
+        )
+    return {
+        "status": "warning" if warnings else "ok",
+        "year": year,
+        "holidays_in_year": len(holidays_in_year),
+        "extra_trading_days_in_year": len(extra_in_year),
+        "holidays_total": len(holidays),
+        "extra_trading_days_total": len(extra_days),
+        "warnings": warnings,
+    }
+
+
+def local_day_utc_range(day: str, tz: str = "Asia/Shanghai") -> tuple[str, str]:
+    """UTC [start, end) bounds of one local calendar day, in SQLite datetime format.
+
+    SQLite `datetime('now')` timestamps are naive UTC strings ("YYYY-MM-DD HH:MM:SS"), so date
+    filters must convert the local trading day to a UTC range instead of comparing
+    `date(created_at)` directly (which would shift 00:00-08:00 CST data onto the prior UTC day).
+    """
+    start_local = datetime.fromisoformat(day).replace(tzinfo=ZoneInfo(tz))
+    end_local = start_local + timedelta(days=1)
+    fmt = "%Y-%m-%d %H:%M:%S"
+    return (
+        start_local.astimezone(timezone.utc).strftime(fmt),
+        end_local.astimezone(timezone.utc).strftime(fmt),
+    )
 
 
 def market_phase(dt: datetime, config: dict[str, Any]) -> str:

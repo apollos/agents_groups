@@ -8,6 +8,7 @@ from .db import SQLiteStore, dumps_json, loads_json
 from .ids import make_idempotency_key, new_id
 from .queue import SQLiteMessageQueue
 from .tickets import TicketRepository
+from .time_utils import local_day_utc_range
 
 
 class DailyReportBuilder:
@@ -19,12 +20,14 @@ class DailyReportBuilder:
         bus_store: SQLiteStore | None = None,
         state_store: SQLiteStore | None = None,
         queue: SQLiteMessageQueue | None = None,
+        timezone: str = "Asia/Shanghai",
     ):
         self.data_store = data_store
         self.bus_store = bus_store or data_store
         self.state_store = state_store or data_store
         self.output_dir = Path(output_dir)
         self.agent_id = agent_id
+        self.timezone = timezone
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.tickets = TicketRepository(self.bus_store)
         self.queue = queue
@@ -77,47 +80,64 @@ class DailyReportBuilder:
         }
 
     def _summary(self, trade_date: str, *, top_n: int = 10) -> dict[str, Any]:
+        # trade_date is a local trading day; created_at columns store naive UTC strings, so all
+        # date filters use the local day's UTC range instead of date(created_at) comparison.
+        day = local_day_utc_range(trade_date, self.timezone)
         with self.data_store.session() as con:
-            tasks_total = con.execute("SELECT COUNT(*) c FROM collection_tasks WHERE date(created_at)=date(?)", (trade_date,)).fetchone()["c"]
+            tasks_total = con.execute(
+                "SELECT COUNT(*) c FROM collection_tasks WHERE created_at >= ? AND created_at < ?", day
+            ).fetchone()["c"]
             runs = con.execute(
-                "SELECT tool_name, status, COUNT(*) c FROM collection_runs WHERE date(created_at)=date(?) GROUP BY tool_name, status",
-                (trade_date,),
+                "SELECT tool_name, status, COUNT(*) c FROM collection_runs "
+                "WHERE created_at >= ? AND created_at < ? GROUP BY tool_name, status",
+                day,
             ).fetchall()
-            events_count = con.execute("SELECT COUNT(*) c FROM structured_events WHERE date(created_at)=date(?)", (trade_date,)).fetchone()["c"]
-            features_count = con.execute("SELECT COUNT(*) c FROM market_features WHERE date(created_at)=date(?)", (trade_date,)).fetchone()["c"]
-            issues = con.execute("SELECT severity, COUNT(*) c FROM data_quality_issues WHERE date(created_at)=date(?) GROUP BY severity", (trade_date,)).fetchall()
-            gaps_count = con.execute("SELECT COUNT(*) c FROM coverage_gaps WHERE date(created_at)=date(?)", (trade_date,)).fetchone()["c"]
+            events_count = con.execute(
+                "SELECT COUNT(*) c FROM structured_events WHERE created_at >= ? AND created_at < ?", day
+            ).fetchone()["c"]
+            features_count = con.execute(
+                "SELECT COUNT(*) c FROM market_features WHERE created_at >= ? AND created_at < ?", day
+            ).fetchone()["c"]
+            issues = con.execute(
+                "SELECT severity, COUNT(*) c FROM data_quality_issues "
+                "WHERE created_at >= ? AND created_at < ? GROUP BY severity",
+                day,
+            ).fetchall()
+            gaps_count = con.execute(
+                "SELECT COUNT(*) c FROM coverage_gaps WHERE created_at >= ? AND created_at < ?", day
+            ).fetchone()["c"]
             top_events = con.execute(
                 """
-                SELECT target_id, ticker, event_type, event_date, summary_cn, confidence, data_quality
-                FROM structured_events WHERE date(created_at)=date(?)
+                SELECT target_id, ticker, event_type, event_date, summary_cn, confidence, data_quality,
+                       source_type, published_at
+                FROM structured_events WHERE created_at >= ? AND created_at < ?
                 ORDER BY COALESCE(confidence, 0) DESC, created_at DESC LIMIT ?
                 """,
-                (trade_date, top_n),
+                (*day, top_n),
             ).fetchall()
             top_features = con.execute(
                 """
                 SELECT ticker, feature_window, bucket_start, abnormality_score, summary_cn
-                FROM market_features WHERE date(created_at)=date(?)
+                FROM market_features WHERE created_at >= ? AND created_at < ?
                 ORDER BY COALESCE(abnormality_score, 0) DESC LIMIT ?
                 """,
-                (trade_date, top_n),
+                (*day, top_n),
             ).fetchall()
             issue_details = con.execute(
                 """
                 SELECT severity, issue_type, ticker, summary_cn, status
-                FROM data_quality_issues WHERE date(created_at)=date(?)
+                FROM data_quality_issues WHERE created_at >= ? AND created_at < ?
                 ORDER BY severity ASC, created_at DESC LIMIT ?
                 """,
-                (trade_date, top_n * 2),
+                (*day, top_n * 2),
             ).fetchall()
             gap_details = con.execute(
                 """
                 SELECT target_id, ticker, priority, status, description
-                FROM coverage_gaps WHERE date(created_at)=date(?)
+                FROM coverage_gaps WHERE created_at >= ? AND created_at < ?
                 ORDER BY created_at DESC LIMIT ?
                 """,
-                (trade_date, top_n),
+                (*day, top_n),
             ).fetchall()
             demand_rows = con.execute(
                 "SELECT demand_id, demand_type, status, priority FROM collection_demands ORDER BY created_at ASC"
@@ -125,31 +145,31 @@ class DailyReportBuilder:
             demand_task_rows = con.execute(
                 """
                 SELECT demand_id, status, COUNT(*) c FROM collection_tasks
-                WHERE date(created_at)=date(?) GROUP BY demand_id, status
+                WHERE created_at >= ? AND created_at < ? GROUP BY demand_id, status
                 """,
-                (trade_date,),
+                day,
             ).fetchall()
             run_cost_rows = con.execute(
                 """
                 SELECT tool_name, operation, status, COUNT(*) c FROM collection_runs
-                WHERE date(created_at)=date(?) GROUP BY tool_name, operation, status
+                WHERE created_at >= ? AND created_at < ? GROUP BY tool_name, operation, status
                 """,
-                (trade_date,),
+                day,
             ).fetchall()
             mic_quality_rows = con.execute(
                 """
                 SELECT quality_json FROM collection_runs
-                WHERE date(created_at)=date(?) AND tool_name='market_intelligence_collector'
+                WHERE created_at >= ? AND created_at < ? AND tool_name='market_intelligence_collector'
                 """,
-                (trade_date,),
+                day,
             ).fetchall()
             failed_tasks = con.execute(
                 """
                 SELECT task_type, ticker, status FROM collection_tasks
-                WHERE date(created_at)=date(?) AND status='failed'
+                WHERE created_at >= ? AND created_at < ? AND status='failed'
                 ORDER BY created_at DESC LIMIT ?
                 """,
-                (trade_date, top_n),
+                (*day, top_n),
             ).fetchall()
             open_gaps = con.execute(
                 "SELECT target_id, ticker, description FROM coverage_gaps WHERE status='open' ORDER BY created_at DESC LIMIT ?",
@@ -157,24 +177,24 @@ class DailyReportBuilder:
             ).fetchall()
         with self.bus_store.session() as con:
             tickets = con.execute(
-                "SELECT ticket_type, COUNT(*) c FROM tickets WHERE date(created_at)=date(?) GROUP BY ticket_type",
-                (trade_date,),
+                "SELECT ticket_type, COUNT(*) c FROM tickets WHERE created_at >= ? AND created_at < ? GROUP BY ticket_type",
+                day,
             ).fetchall()
             faults = con.execute(
                 """
                 SELECT ticket_id, status, summary_cn FROM tickets
-                WHERE ticket_type='FAULT_TICKET' AND date(created_at)=date(?)
+                WHERE ticket_type='FAULT_TICKET' AND created_at >= ? AND created_at < ?
                 ORDER BY created_at DESC LIMIT ?
                 """,
-                (trade_date, top_n),
+                (*day, top_n),
             ).fetchall()
             message_stats = con.execute(
-                "SELECT topic, status, COUNT(*) c FROM messages WHERE date(created_at)=date(?) GROUP BY topic, status",
-                (trade_date,),
+                "SELECT topic, status, COUNT(*) c FROM messages WHERE created_at >= ? AND created_at < ? GROUP BY topic, status",
+                day,
             ).fetchall()
             dead_messages = con.execute(
-                "SELECT message_id, topic, error_json FROM messages WHERE status='dead' AND date(created_at)=date(?) LIMIT ?",
-                (trade_date, top_n),
+                "SELECT message_id, topic, error_json FROM messages WHERE status='dead' AND created_at >= ? AND created_at < ? LIMIT ?",
+                (*day, top_n),
             ).fetchall()
         with self.state_store.session() as con:
             capability = con.execute(

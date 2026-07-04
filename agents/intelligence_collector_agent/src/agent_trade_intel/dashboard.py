@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 from .config import CollectorConfig
 from .db import SQLiteStore, loads_json
 from .logging_setup import get_logger
-from .time_utils import market_phase, parse_dt
+from .time_utils import local_day_utc_range, market_phase, parse_dt
 
 logger = get_logger("dashboard")
 
@@ -41,8 +41,11 @@ class DashboardService:
     def overview(self) -> dict[str, Any]:
         now_utc = datetime.now(timezone.utc)
         now_iso = now_utc.isoformat(timespec="seconds")
-        today = now_utc.date().isoformat()
         local_now = parse_dt(now_iso, self.config.runtime.timezone)
+        # "Today" statistics follow the local trading day, not the UTC date: in Asia/Shanghai the
+        # 00:00-08:00 window belongs to the previous UTC date and would otherwise be misattributed.
+        today_local = local_now.date().isoformat()
+        day_range = local_day_utc_range(today_local, self.config.runtime.timezone)
         overview: dict[str, Any] = {
             "generated_at": now_iso,
             "local_time": local_now.isoformat(timespec="seconds"),
@@ -50,11 +53,12 @@ class DashboardService:
             "agent_group": self.config.runtime.agent_group,
             "model": self.config.model.primary,
             "market_phase": market_phase(local_now, self.config.raw),
-            "today_utc": today,
+            "today_utc": now_utc.date().isoformat(),
+            "today_local": today_local,
         }
         overview.update(self._state_section(now_utc))
-        overview.update(self._bus_section(today))
-        overview.update(self._data_section(today))
+        overview.update(self._bus_section(day_range))
+        overview.update(self._data_section(day_range))
         return overview
 
     # ------------------------------------------------------------------ state
@@ -116,7 +120,7 @@ class DashboardService:
 
     # -------------------------------------------------------------------- bus
 
-    def _bus_section(self, today: str) -> dict[str, Any]:
+    def _bus_section(self, day_range: tuple[str, str]) -> dict[str, Any]:
         with self.bus_store.session() as con:
             depth = con.execute("SELECT status, COUNT(*) c FROM messages GROUP BY status").fetchall()
             by_topic = con.execute(
@@ -140,7 +144,7 @@ class DashboardService:
                 "FROM tickets ORDER BY updated_at DESC LIMIT 15"
             ).fetchall()
             tickets_today = con.execute(
-                "SELECT COUNT(*) c FROM tickets WHERE date(created_at)=?", (today,)
+                "SELECT COUNT(*) c FROM tickets WHERE created_at >= ? AND created_at < ?", day_range
             ).fetchone()
         return {
             "queue_depth": {str(r["status"]): int(r["c"]) for r in depth},
@@ -156,39 +160,40 @@ class DashboardService:
 
     # ------------------------------------------------------------------- data
 
-    def _data_section(self, today: str) -> dict[str, Any]:
+    def _data_section(self, day_range: tuple[str, str]) -> dict[str, Any]:
         with self.data_store.session() as con:
             demands = con.execute(
                 "SELECT demand_id, demand_type, status, priority, active_from, active_to, test_mode, updated_at "
                 "FROM collection_demands ORDER BY updated_at DESC LIMIT 20"
             ).fetchall()
             tasks_today = con.execute(
-                "SELECT task_type, status, COUNT(*) c FROM collection_tasks WHERE date(created_at)=? "
-                "GROUP BY task_type, status",
-                (today,),
+                "SELECT task_type, status, COUNT(*) c FROM collection_tasks "
+                "WHERE created_at >= ? AND created_at < ? GROUP BY task_type, status",
+                day_range,
             ).fetchall()
             recent_tasks = con.execute(
                 "SELECT task_id, task_type, tool_name, ticker, status, bucket_start, updated_at "
                 "FROM collection_tasks ORDER BY updated_at DESC LIMIT 15"
             ).fetchall()
             runs_today = con.execute(
-                "SELECT tool_name, status, COUNT(*) c FROM collection_runs WHERE date(created_at)=? "
-                "GROUP BY tool_name, status",
-                (today,),
+                "SELECT tool_name, status, COUNT(*) c FROM collection_runs "
+                "WHERE created_at >= ? AND created_at < ? GROUP BY tool_name, status",
+                day_range,
             ).fetchall()
             recent_runs = con.execute(
                 "SELECT run_id, tool_name, operation, status, started_at, completed_at, created_at "
                 "FROM collection_runs ORDER BY created_at DESC LIMIT 15"
             ).fetchall()
             events_today = con.execute(
-                "SELECT COUNT(*) c FROM structured_events WHERE date(created_at)=?", (today,)
+                "SELECT COUNT(*) c FROM structured_events WHERE created_at >= ? AND created_at < ?", day_range
             ).fetchone()
             recent_events = con.execute(
-                "SELECT event_id, ticker, event_type, event_date, summary_cn, confidence, data_quality, created_at "
+                "SELECT event_id, ticker, event_type, event_date, summary_cn, confidence, data_quality, "
+                "source_type, source_url, published_at, created_at "
                 "FROM structured_events ORDER BY created_at DESC LIMIT 10"
             ).fetchall()
             features_today = con.execute(
-                "SELECT COUNT(*) c FROM market_features WHERE date(created_at)=?", (today,)
+                "SELECT COUNT(*) c FROM market_features WHERE created_at >= ? AND created_at < ?", day_range
             ).fetchone()
             recent_features = con.execute(
                 "SELECT feature_id, ticker, feature_window, bucket_start, abnormality_score, data_quality, summary_cn, created_at "
@@ -418,7 +423,7 @@ function render(d){
   const hbAge = d.heartbeat_age_seconds;
   const ses = d.session||{};
 
-  $("subline").innerHTML = `Agent <b>${esc(d.agent_id)}</b> · 模型 <b>${esc(d.model)}</b> · 服务器时间 ${utcLocal(d.generated_at)}（本地时区 ${esc(d.local_time)}）`;
+  $("subline").innerHTML = `Agent <b>${esc(d.agent_id)}</b> · 模型 <b>${esc(d.model)}</b> · 本地交易日 <b>${esc(d.today_local||'-')}</b>（UTC ${esc(d.today_utc||'-')}）· 服务器时间 ${utcLocal(d.generated_at)}（本地时区 ${esc(d.local_time)}）`;
   $("phasePill").innerHTML = `<span class="pill ${d.market_phase==='intraday'?'run':(d.market_phase==='non_trading_day'?'idle':'warn')}"><span class="dot"></span>${esc(d.market_phase)}</span>`;
   $("sessionPill").innerHTML = `<span class="pill ${ses.status==='running'?'run':'idle'}"><span class="dot"></span>会话 ${esc(ses.status||'无')}</span>`;
   const liveMap = {active:["run","工作中"],recent:["warn","近期活跃"],stale:["bad","心跳超时"],no_heartbeat:["idle","无心跳"]};
@@ -476,8 +481,8 @@ function render(d){
   // outputs
   $("outputHint").textContent = `今日事件 ${d.events_created_today||0} · 特征 ${d.features_created_today||0}`;
   $("outputBody").innerHTML = `<div class="twocol" style="margin-top:12px">
-    <div><h3 class="small">最新结构化事件</h3>${table(["时间","标的","类型","置信度","摘要"],(d.recent_events||[]).map(e=>
-      `<tr><td class="mut">${utcLocal(e.created_at)}</td><td>${esc(e.ticker||'-')}</td><td class="mono">${esc(e.event_type)}</td><td class="num">${e.confidence!=null?Number(e.confidence).toFixed(2):'-'}</td><td>${esc(short(e.summary_cn,40))}</td></tr>`))}</div>
+    <div><h3 class="small">最新结构化事件</h3>${table(["时间","标的","类型","来源","置信度","摘要"],(d.recent_events||[]).map(e=>
+      `<tr><td class="mut">${utcLocal(e.created_at)}</td><td>${esc(e.ticker||'-')}</td><td class="mono">${esc(e.event_type)}</td><td class="mut">${e.source_url?`<a href="${esc(e.source_url)}" target="_blank" rel="noopener">${esc(e.source_type||'link')}</a>`:esc(e.source_type||'-')}</td><td class="num">${e.confidence!=null?Number(e.confidence).toFixed(2):'-'}</td><td>${esc(short(e.summary_cn,40))}</td></tr>`))}</div>
     <div><h3 class="small">最新行情特征</h3>${table(["时间桶","标的","窗口","异常分","摘要"],(d.recent_features||[]).map(f=>
       `<tr><td class="mut">${esc(short(f.bucket_start,16))}</td><td>${esc(f.ticker)}</td><td>${esc(f.feature_window)}</td><td class="num ${f.abnormality_score>=0.75?'no':''}">${f.abnormality_score!=null?Number(f.abnormality_score).toFixed(2):'-'}</td><td>${esc(short(f.summary_cn,36))}</td></tr>`))}</div>
   </div>`;
