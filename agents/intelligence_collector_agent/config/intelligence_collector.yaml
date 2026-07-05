@@ -254,3 +254,8 @@ tools:
   hk_connect_collector:
     enabled: true
     provider: akshare
+  # Structured market-context snapshots (indices / FX / commodities / rates) for
+  # market_context_daily demands. Same optional `akshare` dependency as hk_connect_collector.
+  market_context_collector:
+    enabled: true
+    provider: akshare

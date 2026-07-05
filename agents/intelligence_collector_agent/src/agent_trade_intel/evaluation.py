@@ -89,13 +89,19 @@ class CoverageEvaluator:
         }
 
     def hk_connect_coverage(self, *, trade_date: str) -> dict[str, Any]:
-        """Structured HK-connect coverage: which .HK targets have a snapshot for the day."""
+        """Structured HK-connect coverage: which .HK targets have a snapshot for the day.
+
+        Beyond row existence, field_completeness (V0.8.1) separates "has a snapshot" from
+        "has a high-quality snapshot": low_completeness lists tickers whose required-field
+        fill ratio is below 1.0.
+        """
         with self.store.session() as con:
             rows = con.execute(
                 """
                 SELECT ticker, target_id, hk_connect_eligible, southbound_holding_pct,
                        southbound_holding_market_value_hkd, ah_premium_pct,
-                       buyback_amount_hkd, turnover_hkd
+                       buyback_amount_hkd, turnover_hkd,
+                       field_completeness_json, missing_fields_json
                 FROM hk_connect_snapshots
                 WHERE as_of = ?
                 ORDER BY ticker
@@ -110,12 +116,63 @@ class CoverageEvaluator:
                 }
             )
         snapshot_tickers = {r["ticker"] for r in rows}
+        out_rows = []
+        ratios = []
+        low_completeness = []
+        for r in rows:
+            completeness = loads_json(r["field_completeness_json"], {}) or {}
+            ratio = completeness.get("ratio")
+            if ratio is not None:
+                ratios.append(float(ratio))
+                if float(ratio) < 1.0:
+                    low_completeness.append(
+                        {
+                            "ticker": r["ticker"],
+                            "ratio": ratio,
+                            "missing_fields": loads_json(r["missing_fields_json"], []) or [],
+                        }
+                    )
+            row = {k: r[k] for k in r.keys() if not k.endswith("_json")}
+            row["field_completeness"] = completeness
+            out_rows.append(row)
         return {
             "trade_date": trade_date,
             "expected_hk_targets": len(expected),
             "hk_targets_with_snapshot": len(rows),
             "missing_snapshot": [t for t in expected if t not in snapshot_tickers],
             "missing_southbound": [r["ticker"] for r in rows if r["southbound_holding_pct"] is None],
+            "avg_field_completeness": round(sum(ratios) / len(ratios), 4) if ratios else None,
+            "low_completeness": low_completeness,
+            "rows": out_rows,
+        }
+
+    def market_context_coverage(self, *, trade_date: str) -> dict[str, Any]:
+        """Structured market-context coverage: which contexts have a snapshot for the day."""
+        with self.store.session() as con:
+            expected = sorted(
+                {
+                    str(t.get("context_id") or t.get("target_id"))
+                    for t in self._load_targets(con, demand_id=None)
+                    if t.get("target_type") == "market_context"
+                }
+            )
+            rows = con.execute(
+                """
+                SELECT context_id, context_type, name, symbol, value, unit,
+                       change_1d, change_5d, change_20d, source_url
+                FROM market_context_snapshots
+                WHERE as_of = ?
+                ORDER BY context_id
+                """,
+                (trade_date,),
+            ).fetchall()
+        observed = {r["context_id"] for r in rows}
+        return {
+            "trade_date": trade_date,
+            "expected_contexts": len(expected),
+            "contexts_with_snapshot": len(rows),
+            "missing_snapshot": [c for c in expected if c not in observed],
+            "missing_value": [r["context_id"] for r in rows if r["value"] is None],
             "rows": [dict(r) for r in rows],
         }
 

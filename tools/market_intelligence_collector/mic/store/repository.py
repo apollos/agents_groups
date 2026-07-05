@@ -336,6 +336,7 @@ class Repository:
                     event_type=event.event_type, event_date=_to_dt(event.event_date),
                     summary=event.summary, entities=event.entities, metrics=event.metrics,
                     impact=event.impact.model_dump(),
+                    tracking_variables=[tv.model_dump() for tv in event.tracking_variables],
                     source_corroboration_status=event.source_corroboration_status,
                     confidence=event.confidence, created_at=now(),
                 ))
@@ -522,6 +523,7 @@ class Repository:
                     event_type=event.event_type, event_date=event.event_date,
                     summary=event.summary, entities=event.entities, metrics=event.metrics,
                     impact=event.impact,
+                    tracking_variables=event.tracking_variables,
                     source_corroboration_status=event.source_corroboration_status,
                     confidence=event.confidence, created_at=now(),
                 ))
@@ -533,6 +535,9 @@ class Repository:
                     "impact_channels": (event.impact or {}).get("channels", []),
                     "confidence": event.confidence,
                     "source_link_id": new_source_link_id,
+                    # Keep confirmed variable coverage on cache/reuse (V0.8.1): without this
+                    # the agent can only re-derive keyword candidates for cloned events.
+                    "tracking_variables": event.tracking_variables or [],
                 })
 
             for rel in s.scalars(select(m.RelationRecordRow).where(
@@ -962,6 +967,7 @@ class Repository:
             "event_date": r.event_date.isoformat() if r.event_date else None,
             "summary": r.summary, "entities": r.entities, "metrics": r.metrics,
             "impact": r.impact,
+            "tracking_variables": r.tracking_variables or [],
             "source_corroboration_status": r.source_corroboration_status,
             "confidence": r.confidence, "source_link_id": r.source_link_id,
         }

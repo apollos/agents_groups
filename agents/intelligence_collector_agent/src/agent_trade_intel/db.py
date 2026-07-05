@@ -61,6 +61,19 @@ def _apply_migrations(con: sqlite3.Connection) -> None:
     # loop). Both tables are created via CREATE TABLE IF NOT EXISTS in SCHEMA_SQL, which runs
     # before migrations, so old databases pick them up automatically; only stamp the version.
     con.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (5)")
+    # v6 (V0.8.1): HK snapshot completeness columns for databases created before the columns
+    # existed; market_context_snapshots and research_cards are CREATE TABLE IF NOT EXISTS.
+    hk_cols = {row["name"] for row in con.execute("PRAGMA table_info(hk_connect_snapshots)")}
+    for column, default in (
+        ("field_completeness_json", "'{}'"),
+        ("missing_fields_json", "'[]'"),
+        ("provider_status_json", "'{}'"),
+    ):
+        if column not in hk_cols:
+            con.execute(
+                f"ALTER TABLE hk_connect_snapshots ADD COLUMN {column} TEXT NOT NULL DEFAULT {default}"
+            )
+    con.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (6)")
 
 
 def dumps_json(value: Any) -> str:
@@ -423,12 +436,45 @@ CREATE TABLE IF NOT EXISTS hk_connect_snapshots (
   buyback_amount_hkd REAL,
   ah_premium_pct REAL,
   hk_liquidity_score REAL,
+  field_completeness_json TEXT NOT NULL DEFAULT '{}',
+  missing_fields_json TEXT NOT NULL DEFAULT '[]',
+  provider_status_json TEXT NOT NULL DEFAULT '{}',
   source_url TEXT,
   payload_json TEXT NOT NULL DEFAULT '{}',
   idempotency_key TEXT UNIQUE,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_hk_connect_snapshots_ticker ON hk_connect_snapshots(ticker, as_of);
+
+CREATE TABLE IF NOT EXISTS market_context_snapshots (
+  snapshot_id TEXT PRIMARY KEY,
+  context_id TEXT NOT NULL,
+  context_type TEXT NOT NULL,
+  name TEXT,
+  symbol TEXT,
+  as_of TEXT NOT NULL,
+  value REAL,
+  unit TEXT,
+  change_1d REAL,
+  change_5d REAL,
+  change_20d REAL,
+  source_url TEXT,
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  idempotency_key TEXT UNIQUE,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_market_context_snapshots ON market_context_snapshots(context_id, as_of);
+
+CREATE TABLE IF NOT EXISTS research_cards (
+  target_id TEXT PRIMARY KEY,
+  ticker TEXT,
+  company_name TEXT,
+  industry_id TEXT,
+  theme_ids_json TEXT NOT NULL DEFAULT '[]',
+  as_of TEXT,
+  card_json TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 
 CREATE TABLE IF NOT EXISTS tool_capabilities (
   capability_id TEXT PRIMARY KEY,

@@ -26,6 +26,7 @@ from .reader import IntelligenceReader
 from .recovery import RecoveryManager
 from .reports import DailyReportBuilder
 from .request_center import RequestCenter, list_mic_targets, resolve_mic_config_dir
+from .research_cards import ResearchCardBuilder
 from .runtime import RuntimeController
 from .session import AgentSessionRepository
 from .stores import create_stores, init_unique_stores
@@ -246,8 +247,20 @@ def main(argv: list[str] | None = None) -> None:
     ev_cov.add_argument("--include-candidates", action="store_true", help="Count pending keyword-candidate links too")
     ev_hk = eval_sub.add_parser("hk-connect", help="Structured HK-connect snapshot coverage for one day")
     ev_hk.add_argument("--date", required=True)
+    ev_mctx = eval_sub.add_parser("market-context", help="Structured market-context snapshot coverage for one day")
+    ev_mctx.add_argument("--date", required=True)
     ev_gold = eval_sub.add_parser("golden", help="Recall against a hand-curated golden event set")
     ev_gold.add_argument("--file", required=True, help="Golden events YAML, see examples/golden_events.yaml")
+
+    research_card = sub.add_parser("research-card", help="Build/export deterministic company research cards")
+    rc_sub = research_card.add_subparsers(dest="research_card_command", required=True)
+    rc_refresh = rc_sub.add_parser("refresh", help="Roll up structured data into one target's research card")
+    rc_refresh.add_argument("--target-id", required=True)
+    rc_refresh.add_argument("--date", help="Card as-of date (default: today UTC)")
+    rc_refresh.add_argument("--lookback-days", type=int, default=30)
+    rc_export = rc_sub.add_parser("export", help="Export stored research cards as JSON")
+    rc_export.add_argument("--target-id")
+    rc_export.add_argument("--demand-id", help="Limit to targets of one demand")
 
     report = sub.add_parser("report")
     rep_sub = report.add_subparsers(dest="report_command", required=True)
@@ -617,8 +630,18 @@ def main(argv: list[str] | None = None) -> None:
             )
         elif args.eval_command == "hk-connect":
             _print(evaluator.hk_connect_coverage(trade_date=args.date))
+        elif args.eval_command == "market-context":
+            _print(evaluator.market_context_coverage(trade_date=args.date))
         elif args.eval_command == "golden":
             _print(GoldenSetEvaluator(data_store).evaluate(args.file))
+        return
+
+    if args.command == "research-card":
+        builder = ResearchCardBuilder(data_store)
+        if args.research_card_command == "refresh":
+            _print(builder.refresh(target_id=args.target_id, as_of=args.date, lookback_days=args.lookback_days))
+        elif args.research_card_command == "export":
+            _print({"cards": builder.export(target_id=args.target_id, demand_id=args.demand_id)})
         return
 
     if args.command == "report":

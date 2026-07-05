@@ -226,6 +226,7 @@ class ResultPersister:
         ticker = data.get("ticker") or target.get("ticker")
         as_of = data.get("as_of") or str(task.get("as_of") or "")[:10]
         idem = make_idempotency_key("hk_connect_snapshot", ticker, as_of)
+        quality = result.quality if isinstance(result.quality, dict) else {}
         with self.store.session() as con:
             con.execute(
                 """
@@ -235,8 +236,9 @@ class ResultPersister:
                   southbound_holding_shares, southbound_holding_market_value_hkd,
                   southbound_holding_pct, southbound_mv_change_1d, southbound_mv_change_5d,
                   southbound_mv_change_10d, buyback_amount_hkd, ah_premium_pct,
-                  hk_liquidity_score, source_url, payload_json, idempotency_key
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  hk_liquidity_score, field_completeness_json, missing_fields_json,
+                  provider_status_json, source_url, payload_json, idempotency_key
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     new_id("hkc"),
@@ -256,6 +258,50 @@ class ResultPersister:
                     data.get("buyback_amount_hkd"),
                     data.get("ah_premium_pct"),
                     data.get("hk_liquidity_score"),
+                    dumps_json(quality.get("field_completeness") or {}),
+                    dumps_json(quality.get("missing_fields") or []),
+                    dumps_json(
+                        {
+                            "provider": quality.get("source"),
+                            "unsourced_fields": quality.get("unsourced_fields") or [],
+                            "errors": result.errors,
+                        }
+                    ),
+                    data.get("source_url"),
+                    dumps_json({**data, "run_id": run_id}),
+                    idem,
+                ),
+            )
+        return 1
+
+    def save_market_context_snapshot(self, *, task: dict[str, Any], result: ToolResult, run_id: str | None = None) -> int:
+        """Upsert one market-context snapshot per (context_id, as_of)."""
+        data = result.result if isinstance(result.result, dict) else {}
+        target = task.get("target") or {}
+        context_id = data.get("context_id") or target.get("context_id") or target.get("target_id")
+        as_of = data.get("as_of") or str(task.get("as_of") or "")[:10]
+        idem = make_idempotency_key("market_context_snapshot", context_id, as_of)
+        with self.store.session() as con:
+            con.execute(
+                """
+                INSERT OR REPLACE INTO market_context_snapshots(
+                  snapshot_id, context_id, context_type, name, symbol, as_of,
+                  value, unit, change_1d, change_5d, change_20d,
+                  source_url, payload_json, idempotency_key
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    new_id("mctx"),
+                    context_id,
+                    data.get("context_type") or target.get("context_type") or "market_context",
+                    data.get("name") or target.get("name"),
+                    data.get("symbol") or target.get("symbol"),
+                    as_of,
+                    data.get("value"),
+                    data.get("unit"),
+                    data.get("change_1d"),
+                    data.get("change_5d"),
+                    data.get("change_20d"),
                     data.get("source_url"),
                     dumps_json({**data, "run_id": run_id}),
                     idem,

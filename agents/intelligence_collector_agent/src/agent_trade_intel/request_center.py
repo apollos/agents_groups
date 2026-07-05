@@ -42,6 +42,7 @@ logger = get_logger("request_center")
 INDUSTRY_DEMAND_ID = "demand_industry_research_daily"
 COMPANY_DEMAND_ID = "demand_company_research_daily"
 STOCK_DEMAND_ID = "demand_stock_eod_daily"
+MARKET_CONTEXT_DEMAND_ID = "demand_market_context_daily"
 
 _MIC_PROFILES_HEADER = (
     "# Target profiles for MIC collection.\n"
@@ -306,7 +307,7 @@ class RequestCenter:
         profiles: dict[str, dict[str, Any]] = {}
         groups: dict[str, dict[str, Any]] = {}
         pool_ops: list[dict[str, Any] | None] = []
-        summary = {"industries": 0, "companies": 0, "stocks": 0}
+        summary = {"industries": 0, "companies": 0, "stocks": 0, "market_contexts": 0}
 
         def add(demand_id: str, kind: str, target: dict[str, Any], item: dict[str, Any]) -> None:
             group = groups.setdefault(
@@ -355,6 +356,13 @@ class RequestCenter:
             add(item.get("demand_id") or STOCK_DEMAND_ID, "stock", target, item)
             pool_ops.append(pool_op)
             summary["stocks"] += 1
+        # Structured market-context targets (index / FX / commodity / rate, V0.8.1). They go
+        # to a dedicated market_context_daily demand and never touch MIC or the stock pool.
+        for item in spec.get("market_contexts") or []:
+            item = dict(item)
+            target = self._market_context_entry(item)
+            add(item.get("demand_id") or MARKET_CONTEXT_DEMAND_ID, "market_context", target, item)
+            summary["market_contexts"] += 1
 
         profile_path = self._upsert_mic_profiles(profiles) if profiles else None
         demand_results = []
@@ -464,7 +472,7 @@ class RequestCenter:
         except FileNotFoundError as exc:
             mic_targets, mic_error = [], str(exc)
         demands = []
-        managed_ids = [INDUSTRY_DEMAND_ID, COMPANY_DEMAND_ID, STOCK_DEMAND_ID]
+        managed_ids = [INDUSTRY_DEMAND_ID, COMPANY_DEMAND_ID, STOCK_DEMAND_ID, MARKET_CONTEXT_DEMAND_ID]
         # Include any extra demands created via batch demand_id overrides.
         for row in self.registry.list():
             demand_id = row.get("demand_id")
@@ -489,6 +497,8 @@ class RequestCenter:
                                 "company_name",
                                 "industry_name",
                                 "industry_id",
+                                "context_id",
+                                "context_type",
                                 "theme_ids",
                                 "tracking_variables",
                             )
@@ -615,6 +625,31 @@ class RequestCenter:
             pool_op = {"pool_layer": pool_layer, "ticker": str(ticker), "target_id": tid, "company_name": name}
         return tid, profile, target, pool_op
 
+    def _market_context_entry(self, item: dict[str, Any]) -> dict[str, Any]:
+        if not item.get("context_id"):
+            raise ValueError("market_context entry missing context_id")
+        return _clean(
+            {
+                "target_type": "market_context",
+                "target_id": item.get("target_id") or item["context_id"],
+                "context_id": item["context_id"],
+                "context_type": item.get("context_type") or "market_context",
+                "name": item.get("name") or item["context_id"],
+                "symbol": item.get("symbol"),
+                # AKShare call spec stays in config so endpoint drift is a YAML edit, not code.
+                "akshare_func": item.get("akshare_func"),
+                "akshare_args": item.get("akshare_args"),
+                "date_column": item.get("date_column"),
+                "value_column": item.get("value_column"),
+                "unit": item.get("unit"),
+                "source_url": item.get("source_url"),
+                # No MIC profile / stock data for a context row.
+                "collect_mic": False,
+                "collect_stock": False,
+            },
+            keep_false=True,
+        )
+
     def _stock_entry(self, item: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
         ticker = normalize_ticker(item.get("ticker"))
         if not _is_a_share(ticker):
@@ -727,16 +762,18 @@ class RequestCenter:
             "industry": ["industry_supply_demand", "policy", "price_cost_margin", "operating_update", "risk"],
             "company": ["operating_update", "financial_leading_indicator", "risk", "capital_markets"],
             "stock": [],
+            "market_context": [],
         }[kind]
         summaries = {
             "industry": "研究池行业信息每日采集",
             "company": "研究池核心公司每日深采",
             "stock": "股票池日线数据盘后刷新",
+            "market_context": "指数/汇率/商品等市场背景每日快照",
         }
         demand: dict[str, Any] = {
             "schema_version": "demand.v1",
             "demand_id": demand_id,
-            "demand_type": "daily_collection",
+            "demand_type": "market_context_daily" if kind == "market_context" else "daily_collection",
             "source_type": "research_pool_request",
             "status": "active",
             "created_by": "request_center",
@@ -758,7 +795,9 @@ class RequestCenter:
             "test_mode": test_mode,
             "idempotency_key": f"research_pool:{demand_id}",
         }
-        if focus:
+        if kind == "market_context":
+            demand["task_profile"] = {"mic": {"enabled": False}, "market_context": {"enabled": True}}
+        elif focus:
             demand["task_profile"] = {"mic": {"enabled": True, "focus": focus}}
         else:
             demand["task_profile"] = {"mic": {"enabled": False}, "stock_data": {"enabled": True}}

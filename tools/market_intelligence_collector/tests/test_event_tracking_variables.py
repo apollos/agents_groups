@@ -56,6 +56,15 @@ def test_prompt_includes_target_tracking_variables():
     assert "tracking_variables" in hint_events
 
 
+def test_prompt_includes_theme_ids():
+    """V0.8.1: cross-theme attribution reaches the model, with anti-fabrication instruction."""
+    messages = build_bundle_messages(_profile(), {"source_link_id": "l1"}, [], {})
+    user_payload = messages[1]["content"]
+    assert '"theme_ids"' in user_payload
+    assert "industry_export_manufacturing" in user_payload
+    assert "theme_ids" in messages[0]["content"]
+
+
 def test_clone_latest_analysis_returns_cloned_event_details(config):
     repo = Repository(get_database(config.database_url))
     bundle = BundleExtraction(
@@ -75,3 +84,32 @@ def test_clone_latest_analysis_returns_cloned_event_details(config):
     assert str(details[0]["event_date"]).startswith("2026-07-03")
     assert details[0]["source_link_id"] == "link_b"
     assert details[0]["confidence"] == 0.9
+
+
+def test_clone_latest_analysis_preserves_tracking_variables(config):
+    """V0.8.1: cache/reuse must not degrade confirmed variable evidence to keyword candidates."""
+    repo = Repository(get_database(config.database_url))
+    bundle = BundleExtraction(
+        source_link_id="link_tv_a",
+        decision="save_structured",
+        events=[
+            EventCard(
+                event_type="major_order",
+                event_date="2026-07-03",
+                summary="签订重大AI服务器订单",
+                confidence=0.9,
+                tracking_variables=[
+                    {"variable": "orders", "direction": "positive", "strength": 0.8, "confidence": 0.9, "reasoning": "中标公告"}
+                ],
+            )
+        ],
+    )
+    repo.save_merged_analysis("company_002371", "link_tv_a", bundle, {})
+    cloned = repo.clone_latest_analysis("link_tv_a", "link_tv_b", "company_002371")
+    tvs = cloned["cloned_events"][0]["tracking_variables"]
+    assert tvs and tvs[0]["variable"] == "orders"
+    assert tvs[0]["confidence"] == 0.9
+    # The cloned event row itself also carries tracking_variables (analyst queries see it).
+    stored = repo.get_recent_events("company_002371")
+    by_link = {e["source_link_id"]: e for e in stored}
+    assert by_link["link_tv_b"]["tracking_variables"][0]["variable"] == "orders"

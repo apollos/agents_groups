@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from mic.store.models import Base
@@ -20,6 +20,20 @@ class Database:
 
     def create_all(self) -> None:
         Base.metadata.create_all(self.engine)
+        self._apply_column_migrations()
+
+    def _apply_column_migrations(self) -> None:
+        """Idempotent ALTERs for columns added after a table already exists.
+
+        create_all only creates missing tables; databases created by earlier versions
+        need the new columns added in place (no data backfill required).
+        """
+        inspector = inspect(self.engine)
+        if "event_card" in inspector.get_table_names():
+            columns = {c["name"] for c in inspector.get_columns("event_card")}
+            if "tracking_variables" not in columns:
+                with self.engine.begin() as con:
+                    con.execute(text("ALTER TABLE event_card ADD COLUMN tracking_variables JSON"))
 
     def drop_all(self) -> None:
         Base.metadata.drop_all(self.engine)

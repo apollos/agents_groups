@@ -47,6 +47,9 @@ class TaskGraphPlanner:
         if demand_type == "tool_capability_check":
             return [self._task(demand, request_ticket_id, None, "tool_capability_check", "internal", as_of)]
 
+        if demand_type == "market_context_daily":
+            return self._market_context_tasks(demand, request_ticket_id, as_of, resolved_targets)
+
         if demand_type in TEXT_RESEARCH_DEMAND_TYPES:
             # One MIC deep-collect per collect_mic target -- never planned twice. Only
             # daily_collection additionally schedules the post-close structured refreshes.
@@ -219,6 +222,19 @@ class TaskGraphPlanner:
                 continue
             tasks.append(self._task(demand, request_ticket_id, target, "hk_connect_daily_snapshot", "hk_connect_collector", as_of))
         return tasks
+
+    def _market_context_tasks(
+        self, demand: dict[str, Any], request_ticket_id: str, as_of: str, targets: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """One structured context snapshot per market_context target (V0.8.1)."""
+        mc_cfg = (self.config.get("tools", {}) or {}).get("market_context_collector", {}) or {}
+        if not mc_cfg.get("enabled", True):
+            return []
+        return [
+            self._task(demand, request_ticket_id, target, "market_context_snapshot", "market_context_collector", as_of)
+            for target in targets
+            if target
+        ]
 
     def _task(
         self,

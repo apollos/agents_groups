@@ -27,6 +27,9 @@ SYSTEM_PROMPT = """你是一名服务于股票/行业研究分析师的信息抽
 6. 关系方向必须标准化：A 向 B 供货 => A supplier_of B，B customer_of A。
 7. 如果 target_profile.tracking_variables 非空，每个 events[] 项应尽量判断它覆盖了哪些
    tracking_variables。只能从给定变量清单中选择；没有明确证据时输出空列表，不要猜测。
+8. target_profile.theme_ids 表示该目标除主行业外的跨主题研究归因（例如出海制造、品牌全球化、
+   港股通资金偏好）。判断事件相关性与 tracking_variables 时应同时参考 theme_ids，
+   但不能因为主题存在而编造证据。
 """
 
 SCHEMA_HINT = {
@@ -132,6 +135,7 @@ def _profile_block(profile: TargetProfile) -> dict[str, Any]:
         "customers": profile.customers,
         "suppliers": profile.suppliers,
         "tracking_variables": profile.tracking_variables,
+        "theme_ids": profile.theme_ids,
     }
 
 

@@ -7,6 +7,7 @@ from threading import Event, Thread
 from typing import Any, Callable, Iterator
 
 from .adapters.hk_connect_adapter import HKConnectAdapter
+from .adapters.market_context_adapter import MarketContextAdapter
 from .adapters.mic_adapter import MICAdapter
 from .adapters.stock_data_adapter import StockDataCLIAdapter
 from .capabilities import ToolCapabilityVerifier
@@ -107,6 +108,7 @@ class IntelligenceCollectorAgent:
             timeout_seconds=int(config.get("tools.stock_data_collector.timeout_seconds", 180)),
         )
         self.hk_connect = HKConnectAdapter(provider=str(config.get("tools.hk_connect_collector.provider", "akshare")))
+        self.market_context = MarketContextAdapter(provider=str(config.get("tools.market_context_collector.provider", "akshare")))
         self.capabilities = ToolCapabilityVerifier(self.state_store, self.stock, config.raw)
         self.heartbeats = HeartbeatRecorder(self.state_store, config.runtime.agent_id)
         self.breaker = CircuitBreaker(self.state_store, config.raw)
@@ -282,6 +284,8 @@ class IntelligenceCollectorAgent:
             return self._execute_stock_task(ticket, task)
         if task_type == "hk_connect_daily_snapshot":
             return self._execute_hk_connect_task(ticket, task)
+        if task_type == "market_context_snapshot":
+            return self._execute_market_context_task(ticket, task)
         self.tickets.update_status(ticket["ticket_id"], "done", "unknown task type ignored")
         return {"status": "ignored", "task_type": task_type}
 
@@ -614,6 +618,50 @@ class IntelligenceCollectorAgent:
                 "_retry_error": (result.errors or [{}])[0],
             }
         self.tickets.update_status(ticket["ticket_id"], "failed", "hk_connect snapshot failed")
+        self._publish_collection_result(ticket, status="failed", run_ids=[run_id], usable=False)
+        return {"status": "failed", "run_id": run_id}
+
+    def _execute_market_context_task(self, ticket: dict[str, Any], task: dict[str, Any]) -> dict[str, Any]:
+        """Structured market-context snapshot (index / FX / commodity / rate, V0.8.1)."""
+        target = task.get("target") or {}
+        context_id = target.get("context_id") or target.get("target_id")
+        if not context_id:
+            raise ValueError("market_context task missing target.context_id")
+        if not bool(self.config.get("tools.market_context_collector.enabled", True)):
+            self.tickets.update_status(ticket["ticket_id"], "done", "market_context_collector disabled")
+            return {"status": "skipped", "reason": "market_context_collector disabled"}
+        if not self.breaker.allow(self.market_context.tool_name):
+            return self._handle_circuit_open(
+                ticket, tool_name=self.market_context.tool_name, ticker=None, target_id=context_id
+            )
+        self._keepalive()
+        result = self.market_context.collect_snapshot(context=target, as_of=task.get("as_of"))
+        self._record_breaker(self.market_context.tool_name, result.status)
+        run_id = self.persister.save_run(task=task, ticket_id=ticket["ticket_id"], result=result, demand_id=task.get("demand_id"))
+        if result.status == "success":
+            self.persister.save_market_context_snapshot(task=task, result=result, run_id=run_id)
+            self.tickets.update_status(ticket["ticket_id"], "done", "market context snapshot saved")
+            self._publish_collection_result(ticket, status="success", run_ids=[run_id], usable=True)
+            return {"status": "success", "run_id": run_id}
+        self._emit_data_quality(
+            severity="P2",
+            issue_type="market_context_collect_failed",
+            summary_cn=f"{context_id} 的市场背景快照采集失败。",
+            payload={"errors": result.errors, "run_id": run_id},
+            target_id=context_id,
+            parent_ticket_id=ticket["ticket_id"],
+            correlation_id=ticket.get("correlation_id"),
+        )
+        retryable = any(err.get("retryable") for err in result.errors)
+        if retryable:
+            self.tickets.update_status(ticket["ticket_id"], "open", "market context snapshot scheduled for retry", result.errors)
+            return {
+                "status": "failed",
+                "run_id": run_id,
+                "_message_action": "retry",
+                "_retry_error": (result.errors or [{}])[0],
+            }
+        self.tickets.update_status(ticket["ticket_id"], "failed", "market context snapshot failed")
         self._publish_collection_result(ticket, status="failed", run_ids=[run_id], usable=False)
         return {"status": "failed", "run_id": run_id}
 

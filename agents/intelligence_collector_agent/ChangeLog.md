@@ -4,6 +4,66 @@
 
 ---
 
+## V0.8.1 — 2026-07-05：研究闭环补全（第五轮外部审阅甄别采纳）
+
+第五轮审阅（《Agent Trade Intel V0.8.1 Reviewer 建议与代码修改方案》）列出 5 个剩余缺口并附代码包。逐条核对后：**第 1 条（full YAML 与 ChangeLog 不一致）为误判**，其余 4 条全部采纳落地；代码包中的新文件按本仓库约定改写后合入（含一处 export bug 修正），overlay YAML 未直接采用，理由见文末。
+
+### 驳回：§1 "research_pool_full.yaml 缺少 V0.8 配置块"（不成立）
+
+审阅声称仓库中的 `examples/research_pool_full.yaml` 检索不到 `tracking_variables_by_industry`、`defaults.hk_company`、`derived_from_demands`、`demand_company_monthly_review`、`theme_ids`。在本地仓库对该文件逐一执行审阅给出的 5 条 grep 验收命令，**全部命中**（分别位于第 47/33/107 等行起的对应段落），V0.8 的验收测试 `test_research_pool_full_yaml_v08_sections` 也持续在守护这些键。审阅自述"GitHub raw 预览把部分源码压缩成少数长行"，判断是基于被截断/渲染异常的网页视图得出的结论，而非本地文件。文件本身无需修复；请 Reviewer 以仓库 checkout 为准复核。
+
+### §2 MIC cache/reuse 保留 tracking_variables（采纳，P0）
+
+审阅指出的问题成立：`EventCardRow` 没有 `tracking_variables` 列，cache/reuse 命中时 `clone_latest_analysis` 克隆出的事件不带变量证据，Agent 侧只能退化为 keyword candidate，`eval coverage`（默认只算 accepted）会低估已确认覆盖。修复：
+
+- `mic/store/models.py`：`EventCardRow` 新增 `tracking_variables`（JSON）列；`mic/store/database.py` 的 `create_all` 增加幂等 `ALTER TABLE` 迁移，老库自动补列。
+- `mic/store/repository.py`：`save_merged_analysis` 落库模型归因的变量证据；`clone_latest_analysis` 克隆行保留该列，且 `cloned_events` 明细带出 `tracking_variables`，pipeline 的 `_tally_cloned` 路径由此把确认覆盖带回 `all_events`；`_event_to_dict`（analyst 查询）同步输出。
+
+### §3 theme_ids 进 MIC prompt（采纳，P0）
+
+V0.8 把 `theme_ids` 存进了 profile 但没有传给模型。现 `_profile_block` 输出 `theme_ids`，SYSTEM_PROMPT 新增第 8 条：判断事件相关性与变量归因时参考跨主题归因，但"不能因为主题存在而编造证据"（与变量清单的防幻觉约束同款）。
+
+### §4 港股通快照 completeness（采纳，P1）
+
+"有字段 ≠ 有数据"的批评成立。落地为三层：
+
+- **adapter**：`HK_REQUIRED_FIELDS`（价格/成交额/南向持股 6 字段，共 8 个可达字段）与 `HK_UNSOURCED_FIELDS`（buyback/AH溢价/流动性——schema 有列但尚无数据源，单独上报为 unsourced 而非采集失败）；`quality` 输出 `missing_fields` / `unsourced_fields` / `field_completeness{required_count, filled_count, ratio}`。
+- **表**（schema v6，老库幂等加列）：`hk_connect_snapshots` 新增 `field_completeness_json` / `missing_fields_json` / `provider_status_json`（含 provider、unsourced_fields、errors）。
+- **eval**：`eval hk-connect` 新增 `avg_field_completeness` 与 `low_completeness`（ratio < 1.0 的标的及缺失字段清单），把"有快照"和"快照质量高"区分开。
+
+### §5 market_context_collector（采纳，P1；V0.8 暂缓项兑现）
+
+V0.8 暂缓时承诺"adapter 模式建立后作为下一版增量成本很低"，本轮兑现。md §5.4/§7.1 要求的指数/汇率/商品/利率背景变量靠文本检索答不稳，全链路落地：
+
+- 新增 `adapters/market_context_adapter.py`：采纳审阅"函数名可配置"的设计——每个 context 在 YAML 里声明 `akshare_func` + `akshare_args` + 日期/取值列名，AKShare 接口漂移时改配置即可，不改代码。时序接口输出 1/5/20 期涨跌幅；单行实时接口 change 置空。akshare 惰性导入，未安装仅此链路失败（不可重试的 `AKSHARE_NOT_INSTALLED`）。
+- 新增 `market_context_snapshots` 表（schema v6，`(context_id, as_of)` 幂等）、`market_context_daily` demand type、`market_context_snapshot` task type；planner/agent 新增对应分支（熔断、质量工单、重试语义与 hk_connect 一致）。
+- `request batch` 支持 `market_contexts:` 段（专属 `demand_market_context_daily`，不写 MIC 档案、不进股票池）；`eval market-context --date` 输出覆盖与缺失清单。
+- `research_pool_full.yaml` 新增 5 个 context：沪深300、恒生科技、CNY/HKD、铜、碳酸锂。
+
+### §6 research_cards 实体化（采纳，P1；修正一处 bug）
+
+按审阅方案落地确定性研究卡（不引入 LLM 调用）：新增 `research_cards` 表（schema v6）与 `research_cards.py`（`ResearchCardBuilder`），聚合近 30 天结构化事件、accepted 变量链接（覆盖率/缺失变量）、正负面证据、open coverage gaps、最新港股通快照（含 completeness），并给出启发式 `pool_layer_suggestion`（HK 无资格→核实、覆盖率过低→观察、负面≥3→复核降级、高优先缺口≥3→跟进；仅提示，升降级由人决定）。CLI 新增 `research-card refresh --target-id [--date --lookback-days]` 与 `research-card export [--target-id --demand-id]`。
+
+**代码包 bug 修正**：审阅版 `export --demand-id` 直接对 `research_cards.demand_id` 列过滤，但其自己的建表语句没有这个列，执行必报 SQL 错误。本实现不加冗余列（一个 target 可属多个 demand），而是先解析该 demand 当前的 target 清单再按 `target_id` 过滤。另外代码包测试里手工 `CREATE TABLE research_cards` 的步骤不再需要——表已并入 `SCHEMA_SQL` + v6 迁移。
+
+### 未采用：overlay YAML 与 P2 项
+
+- **`research_pool_full_v081_overlay.yaml` 未直接合入**：其价值部分（`market_contexts` 段、`demand_market_context_daily`）已改写进主 YAML；其余内容基于"主 YAML 缺 V0.8 配置"的误判（见驳回条），且其中变量重命名（如 `ai_server_orders` → 新名）会切断已落库 `event_variable_links` 的连续性，`company_theme_overrides` 段与主 YAML 已有的 `theme_ids` 直写方式重复。
+- **P2（dashboard 接入 market context / research card 摘要、golden set 变量级 precision）**：同意方向，待结构化快照与研究卡积累真实数据后排期。
+
+### 验证
+
+- Agent 测试 114 个全部通过（新增 14 个 `tests/test_v081_reviewer_closure.py`：v6 新表/老库补列迁移、HK completeness 三层（adapter quality / persistence / eval low_completeness）、market context adapter 时序与单行实时两种形态、缺 akshare 报错、planner market_context 任务与禁用开关、快照幂等、market-context 覆盖评估、batch 注册 market_contexts、full YAML 段校验、研究卡聚合/幂等 upsert/export 三种过滤）。
+- MIC 测试 79 个全部通过（新增 2 个：prompt 含 theme_ids 与防编造指令、clone 保留 tracking_variables 且 analyst 查询可见）。
+- 审阅 §7 验收清单全量跑通：3 条 grep 全部命中（外加 `market_contexts:`）；空库上 `eval coverage`（931 期望格）/`eval hk-connect`（40 港股目标）/`eval market-context`（5 context）正确输出 0 覆盖而非报错；`research-card refresh/export`（含 `--demand-id` 过滤）在真实 full YAML 注册的库上正常产出。
+
+### 升级说明
+
+- 老库自动迁移（v6：`hk_connect_snapshots` 补 3 个 completeness 列，新增 `market_context_snapshots` 与 `research_cards` 表；MIC 库自动补 `event_card.tracking_variables` 列），无需手工操作。
+- 重跑 `request batch --file examples/research_pool_full.yaml` 即可注册 5 个市场背景 context（幂等）；market_context_collector 与 hk_connect_collector 共用可选依赖 `akshare`。
+
+---
+
 ## V0.8 — 2026-07-05：A股 + 港股通可迭代研究池闭环版（第四轮外部审阅采纳）
 
 第四轮审阅（《A股 + 港股通可迭代股票研究池 V0.8 完整方案》）提出"不考虑工程排期，只要能做就做"。本轮采纳其中绝大多数建议——事件→变量归因、港股通结构化采集、多主题归因、运行时目标引用、评估 CLI 全部落地；仅 market_context_collector（宏观/指数/汇率/商品）与 `RunStats.top_events` 内部改名两项暂缓，理由见文末。

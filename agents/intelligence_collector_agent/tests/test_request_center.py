@@ -219,7 +219,7 @@ def _batch_spec() -> dict:
 def test_request_batch_registers_everything_with_one_version_per_demand(tmp_path: Path):
     center, store = _center(tmp_path)
     result = center.request_batch(_batch_spec())
-    assert result["registered"] == {"industries": 2, "companies": 3, "stocks": 1}
+    assert result["registered"] == {"industries": 2, "companies": 3, "stocks": 1, "market_contexts": 0}
     assert result["mic_profiles_written"] == 5  # 2 industries + 3 companies (stocks write no profile)
 
     # MIC profiles: industries + all companies (including watch tier) are written

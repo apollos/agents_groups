@@ -17,6 +17,25 @@ from .common import ToolResult
 
 logger = logging.getLogger(__name__)
 
+# Snapshot fields the research pool expects a *high-quality* snapshot to fill. Having a row
+# is not the same as having data: completeness lets `eval hk-connect` tell the two apart
+# (V0.8.1). buyback / AH premium / liquidity stay in the schema but are not counted until a
+# data source actually feeds them, so completeness measures achievable fields only.
+HK_REQUIRED_FIELDS = (
+    "last_price_hkd",
+    "turnover_hkd",
+    "southbound_holding_shares",
+    "southbound_holding_market_value_hkd",
+    "southbound_holding_pct",
+    "southbound_mv_change_1d",
+    "southbound_mv_change_5d",
+    "southbound_mv_change_10d",
+)
+
+# Fields defined in the snapshot schema without a wired provider yet. Reported separately so
+# the evaluation layer can see "no source" instead of mistaking them for collection failures.
+HK_UNSOURCED_FIELDS = ("buyback_amount_hkd", "ah_premium_pct", "hk_liquidity_score")
+
 
 def _hk_code(ticker: str) -> str:
     return str(ticker).split(".")[0].zfill(5)
@@ -105,6 +124,8 @@ class HKConnectAdapter:
             return result.finish()
         try:
             snapshot = self._collect_akshare(ticker=ticker, company_name=company_name, as_of=as_of)
+            missing_fields = [name for name in HK_REQUIRED_FIELDS if getattr(snapshot, name) is None]
+            filled = len(HK_REQUIRED_FIELDS) - len(missing_fields)
             result.status = "success"
             result.result = asdict(snapshot)
             result.quality = {
@@ -112,6 +133,15 @@ class HKConnectAdapter:
                 "source": "eastmoney_via_akshare",
                 "has_holding": snapshot.southbound_holding_shares is not None,
                 "hk_connect_eligible": snapshot.hk_connect_eligible,
+                "missing_fields": missing_fields,
+                "unsourced_fields": [
+                    name for name in HK_UNSOURCED_FIELDS if getattr(snapshot, name) is None
+                ],
+                "field_completeness": {
+                    "required_count": len(HK_REQUIRED_FIELDS),
+                    "filled_count": filled,
+                    "ratio": round(filled / len(HK_REQUIRED_FIELDS), 4),
+                },
             }
         except Exception as exc:  # noqa: BLE001
             result.status = "failed"

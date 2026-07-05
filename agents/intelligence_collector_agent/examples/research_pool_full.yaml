@@ -153,6 +153,12 @@ demands:
       stock_data:
         enabled: false
 
+  # 市场背景每日快照（V0.8.1）：指数/汇率/商品等结构化背景变量（md §5.4、§7.1 盘前流程）。
+  # 目标清单见下方 market_contexts 段；数据源 AKShare（可选依赖），未安装仅此链路失败。
+  demand_market_context_daily:
+    kind: market_context
+    description: 指数/汇率/商品等市场背景每日快照
+
 # ---------------------------------------------------------------------------
 # 一、8 条行业主线（md §1、§2；富档案已预置，按 target_id 引用）
 # ---------------------------------------------------------------------------
@@ -394,3 +400,57 @@ companies:
 # 四、纯行情跟踪（不做 MIC 情报，仅盘后日线刷新 + 股票池），按需追加
 # ---------------------------------------------------------------------------
 stocks: []
+
+# ---------------------------------------------------------------------------
+# 五、市场背景结构化快照（V0.8.1，md §5.4 / §7.1 盘前流程）
+#     指数 / 汇率 / 商品等背景变量。akshare_func + 列名写在 YAML 里：AKShare 接口和
+#     列标签会漂移，改配置即可修，不用改代码。
+# ---------------------------------------------------------------------------
+market_contexts:
+  - context_id: index_csi_300
+    context_type: equity_index
+    name: 沪深300
+    symbol: "000300"
+    akshare_func: stock_zh_index_daily_em
+    akshare_args: {symbol: "000300"}
+    date_column: 日期
+    value_column: 收盘
+    unit: index_points
+
+  - context_id: index_hang_seng_tech
+    context_type: hk_index
+    name: 恒生科技
+    symbol: HSTECH
+    akshare_func: stock_hk_index_daily_sina
+    akshare_args: {symbol: HSTECH}
+    date_column: 日期
+    value_column: 收盘
+    unit: index_points
+
+  - context_id: fx_cny_hkd
+    context_type: fx
+    name: 人民币兑港币
+    symbol: CNYHKD
+    akshare_func: currency_boc_sina
+    akshare_args: {symbol: 港币}
+    date_column: 日期
+    value_column: 现汇卖出价
+    unit: CNY_per_100HKD
+
+  - context_id: commodity_copper
+    context_type: commodity
+    name: 铜
+    symbol: CU0
+    akshare_func: futures_zh_spot
+    akshare_args: {symbol: 铜}
+    value_column: 最新价
+    unit: CNY/ton
+
+  - context_id: commodity_lithium_carbonate
+    context_type: commodity
+    name: 碳酸锂
+    symbol: LC
+    akshare_func: futures_zh_spot
+    akshare_args: {symbol: 碳酸锂}
+    value_column: 最新价
+    unit: CNY/ton
