@@ -4,6 +4,53 @@
 
 ---
 
+## V0.9 — 2026-07-05：研究效果双层看板（第六轮外部审阅采纳）
+
+第六轮审阅（《Dashboard 研究效果看板升级建议》）指出 dashboard 只是运行健康看板，回答不了"研究池是否真的有效"——覆盖矩阵、HK completeness、market context、研究卡、金标 recall 等研究闭环能力（V0.8/V0.8.1 已落地）只有 CLI 能看。核对后建议成立：P0 + P1 全部采纳，个别项裁剪（见文末）。dashboard 升级为"运行健康 + 研究效果"双层看板。
+
+### §13 ResearchDashboardService（采纳，P0）
+
+新增 `research_dashboard.py`：研究效果聚合与 HTTP/页面渲染分离，`dashboard.py` 只管路由。服务复用 `CoverageEvaluator` / 研究卡表 / 质量表，**保证看板数值与 CLI `eval coverage` / `eval hk-connect` / `eval market-context` 完全一致**（有测试断言守护）：
+
+- `summary(trade_date, demand_id)`：confirmed / candidate-inclusive 双口径覆盖、候选-only cells 及示例、权威来源覆盖 cells、零覆盖目标清单、按 industry_id / theme_ids / pool_layer 分组覆盖、HK completeness、market context、研究卡新鲜度与低覆盖清单、open P0/P1 质量问题与高优先缺口、最新 golden run、`research_health_score`。
+- `coverage_matrix(trade_date, demand_id, include_candidates)`：矩阵行附加 target 元数据（industry/theme/pool_layer）。
+- `target_detail(target_id)`：研究卡 JSON + 最近事件 + 变量证据链接 + open coverage gaps，一次点击可人工抽检"模型为何把事件归因到该变量、是否有权威来源"。
+- 审阅代码包的 `_load_targets` 与 `evaluation.py` 重复实现，抽成共享 `evaluation.load_demand_targets`（含 `derived_from_demands` 运行时解析），杜绝两处口径漂移。
+
+### §11/§14 只读研究 API（采纳，P0+P1）
+
+`GET /api/research/summary|coverage|target`（`date` / `demand_id` / `include_candidates` / `target_id` 参数），`target_id` 缺失返回 400，空库返回空结构而非 500。HTTP handler 抽成 `build_dashboard_handler` 工厂，测试直接跑真实路由。默认日期用新增的 `DashboardService.today_local()`（不再为取日期跑整个 overview）。
+
+### §15 前端研究效果区（采纳，P0）
+
+沿用内嵌 HTML + 原生 JS（不引入框架）：研究效果面板含交易日选择、demand 下拉（跟随 active demands 自动同步）、10 个 KPI 卡（健康分/双口径覆盖率/候选-only/权威覆盖/零覆盖/HK 快照与完整度/市场背景/研究卡新鲜/golden recall/P0P1 问题）、行业与主题覆盖进度条、零覆盖与候选-only 双列表、HK 表格（**含 field_completeness 与 missing_fields，不只显示快照数**——为此 `eval hk-connect` 的 rows 补了 `missing_fields` 字段）、market context 表格、研究卡表格（含 pool_layer_suggestion 分布）；点击 target 行拉起右侧 drawer 展示 `target_detail`。刷新策略按审阅 §18：`/api/overview` 维持 5s 轮询；研究效果首次 poll 后加载一次，之后仅在切换日期/demand 或手动点击时请求，不进轮询。
+
+### §16 research_health_score（采纳，P1）
+
+按审阅公式：35% accepted 覆盖 + 20% 权威来源覆盖 + 15% HK 字段完整度 + 10% market context 覆盖 + 10% 研究卡新鲜度 + 10% 无 P0/P1 质量问题；缺失分量按剩余权重归一。仅作趋势参考，验收仍看明细表。
+
+### §17 Golden eval 持久化（采纳，P1）
+
+采纳"dashboard 不应通过 query 参数读任意文件路径"的安全意见：新增 `golden_eval_runs` 表（schema v7，老库幂等建表），`GoldenSetEvaluator.evaluate(..., record=True)` 落库运行结果，CLI `eval golden` 默认记录；dashboard summary 展示最新一次 recall / matched / missed。
+
+### 裁剪项
+
+- **`/api/research/cards` 与 `/api/research/golden/latest` 独立端点不做**：研究卡摘要与最新 golden run 已并入 summary 返回，审阅自己的 P0/P1 清单也未包含这两个端点。
+- **TTL cache 不做**：审阅 §18 说"如果慢再加"；研究接口不进 5s 轮询、按需加载，当前规模（约 1k cells）SQLite 聚合毫秒级返回。
+- **P2 项（覆盖矩阵热力图、多日趋势、dashboard 人工审核 candidate、研究卡中文摘要）**：按审阅自己的建议留待灰度后；其中人工审核涉及写操作/权限/审计，第一版保持只读。
+
+### 验证
+
+- Agent 测试 126 个全部通过（新增 12 个 `tests/test_research_dashboard.py`：summary 与 CoverageEvaluator 数值一致、候选-only cells 计数、行业/主题/池层分组、HK completeness 与 missing_fields 可见、market context 可见与缺失上报、研究卡摘要与 stale 判定、质量问题/缺口、矩阵元数据附加与 include_candidates、target detail 四段返回与未知 target 空返回、空库不报错、golden 落库与 summary 展示、真实 HTTP 路由含 400/空返回语义）。
+- 真实 server 冒烟：种子库上 `/`、`/api/research/summary`（health_score 0.4125 / golden recall 1.0 / confirmed 1/4）、`/api/research/coverage?include_candidates=1`（3/4）、`/api/research/target`（缺参数 400）全部符合预期。
+
+### 升级说明
+
+- 老库自动迁移（v7：新增 `golden_eval_runs` 表），无需手工操作。
+- `eval golden` 现在默认把结果写入 `golden_eval_runs`（输出新增 `run_id`）；看板 Golden Recall 卡片在跑过一次 `eval golden` 后生效。
+
+---
+
 ## V0.8.1 — 2026-07-05：研究闭环补全（第五轮外部审阅甄别采纳）
 
 第五轮审阅（《Agent Trade Intel V0.8.1 Reviewer 建议与代码修改方案》）列出 5 个剩余缺口并附代码包。逐条核对后：**第 1 条（full YAML 与 ChangeLog 不一致）为误判**，其余 4 条全部采纳落地；代码包中的新文件按本仓库约定改写后合入（含一处 export bug 修正），overlay YAML 未直接采用，理由见文末。

@@ -13,14 +13,20 @@ from typing import Any
 
 import yaml
 
-from .db import SQLiteStore
+from .db import SQLiteStore, dumps_json
+from .ids import new_id
 
 
 class GoldenSetEvaluator:
     def __init__(self, store: SQLiteStore):
         self.store = store
 
-    def evaluate(self, golden_file: str | Path) -> dict[str, Any]:
+    def evaluate(self, golden_file: str | Path, *, record: bool = False) -> dict[str, Any]:
+        """Evaluate recall; with record=True persist the run into golden_eval_runs.
+
+        Persisted runs let the dashboard show the latest golden recall without accepting
+        arbitrary file paths in HTTP query parameters.
+        """
         spec = yaml.safe_load(Path(golden_file).read_text(encoding="utf-8")) or {}
         expected = spec.get("golden_events") or []
         results = []
@@ -40,13 +46,30 @@ class GoldenSetEvaluator:
                         "notes": item.get("notes"),
                     }
                 )
-        return {
+        out = {
             "expected_count": len(expected),
             "matched_count": hits,
             "recall": round(hits / len(expected), 4) if expected else None,
             "missed": [r["expected_event_id"] for r in results if not r["matched"]],
             "results": results,
         }
+        if record:
+            run_id = new_id("golden_run")
+            with self.store.session() as con:
+                con.execute(
+                    "INSERT INTO golden_eval_runs(run_id, golden_file, expected_count, matched_count, "
+                    "recall, result_json) VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        run_id,
+                        str(golden_file),
+                        out["expected_count"],
+                        out["matched_count"],
+                        out["recall"],
+                        dumps_json({"missed": out["missed"], "results": out["results"]}),
+                    ),
+                )
+            out["run_id"] = run_id
+        return out
 
     def _match_one(self, con, item: dict[str, Any]):
         start, end = item["date_range"]

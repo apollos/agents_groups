@@ -1,4 +1,4 @@
-# 情报收集员 Agent 代码包 V0.8
+# 情报收集员 Agent 代码包 V0.9
 
 这是 Agent交易公司多 Agent A 股交易辅助系统中的 **情报收集员 Agent**。它面向 OpenClaw 多 Agent 运行环境设计，负责 Demand → Ticket → Message → 工具调用 → 质量闸门 → 事件/特征/日报的采集闭环。
 
@@ -6,7 +6,14 @@
 
 完整版本历史见 [ChangeLog.md](ChangeLog.md)。
 
-## 0. V0.8 关键变更（A股 + 港股通可迭代研究池闭环，第四轮审阅采纳）
+## 0. V0.9 关键变更（研究效果双层看板，第六轮审阅采纳）
+
+1. **dashboard 升级为"运行健康 + 研究效果"双层看板**：新增研究效果区，直接回答"研究池是否有效"——accepted / 含候选双口径覆盖率、候选-only cells、权威来源覆盖、零覆盖目标、按行业/主题/池层分组覆盖、HK 快照字段完整度（含 missing_fields）、market context 覆盖、研究卡新鲜度与维护建议分布、最新 golden recall、open P0/P1 质量问题；点击 target 拉起详情 drawer（研究卡 + 事件 + 变量证据链接 + coverage gaps）。
+2. **只读研究 API**：`GET /api/research/summary|coverage|target`（新模块 `research_dashboard.py` 的 `ResearchDashboardService`，复用 `CoverageEvaluator`，看板数值与 CLI `eval` 系列完全一致）；`/api/overview` 维持 5s 轮询，研究接口按需加载不进轮询。
+3. **`research_health_score`**：35% 覆盖 + 20% 权威 + 15% HK 完整度 + 10% market context + 10% 研究卡新鲜 + 10% 无 P0/P1 问题，仅作趋势参考。
+4. **Golden eval 持久化（schema v7）**：新增 `golden_eval_runs` 表，`eval golden` 默认落库，dashboard 展示最新 recall（不再需要通过 HTTP 传文件路径）。
+
+## 0.1 V0.8 关键变更（A股 + 港股通可迭代研究池闭环，第四轮审阅采纳）
 
 1. **事件→跟踪变量双层标签（schema v5）**：MIC 模型对每条事件输出 `tracking_variables`（变量/方向/强度/理由/置信度，只能从 target 声明清单中选），Agent 落库到新表 `event_variable_links`（confidence ≥ 0.65 记 accepted，否则 pending）；另有中文关键词规则产出 `keyword_candidate` 候选链接，一律 pending、不进 confirmed coverage。
 2. **港股通结构化采集 `hk_connect_collector`**：AKShare（东方财富）拉取港股通资格 + 南向持股（量/市值/占比/1/5/10日变化），落新表 `hk_connect_snapshots`（每标的每日幂等一条）；daily 盘后为 `.HK` 目标自动追加 `hk_connect_daily_snapshot` 任务；akshare 为可选依赖（惰性导入，未安装只影响 HK 快照）。
@@ -480,7 +487,7 @@ intel-agent --config $CFG request batch --file examples/research_pool_full.yaml 
 intel-agent --config $CFG eval coverage --date 2026-07-06 --demand-id demand_company_research_daily
 intel-agent --config $CFG eval coverage --date 2026-07-06 --include-candidates   # 纳入 pending 关键词候选
 intel-agent --config $CFG eval hk-connect --date 2026-07-06
-intel-agent --config $CFG eval golden --file examples/golden_events.yaml
+intel-agent --config $CFG eval golden --file examples/golden_events.yaml   # 结果同时写入 golden_eval_runs，dashboard 展示最新 recall
 
 # 观察层（上下游扩展名单）想暂停/恢复：
 intel-agent --config $CFG demand suspend --demand-id demand_company_watch_daily
@@ -518,7 +525,12 @@ PYTHONPATH=src python3 -m agent_trade_intel.cli --config config/intelligence_col
 # 如需局域网其它机器访问，加 --host 0.0.0.0
 ```
 
-看板内容：会话/心跳存活状态（active / recent / stale）、当前市场阶段、队列深度与死信、未关闭 Ticket、今日任务与工具调用流水、最新结构化事件与行情特征（异常分高亮）、open 状态的数据质量问题与覆盖缺口、Demand 列表、能力验证结果与推荐盘中模式、熔断器状态、最新 checkpoint 与日报。页面支持暂停/调整刷新间隔（2/5/10/30s），拉取失败会显示错误条并自动重试。接口：`GET /api/overview`（聚合 JSON）、`GET /healthz`。
+看板内容分两层：
+
+- **运行健康**：会话/心跳存活状态（active / recent / stale）、当前市场阶段、队列深度与死信、未关闭 Ticket、今日任务与工具调用流水、最新结构化事件与行情特征（异常分高亮）、open 状态的数据质量问题与覆盖缺口、Demand 列表、能力验证结果与推荐盘中模式、熔断器状态、最新 checkpoint 与日报。
+- **研究效果（V0.9）**：按交易日 / demand 查看 accepted 与含候选双口径覆盖率、候选-only cells、权威来源覆盖、零覆盖目标、按行业/主题分组覆盖进度条、港股通快照字段完整度（含缺失字段清单）、market context 覆盖、研究卡新鲜度与维护建议、最新 golden recall、`research_health_score`（趋势参考）；点击 target 行查看详情（研究卡 JSON + 最近事件 + 变量证据链接 + open coverage gaps）。研究效果区不进 5s 轮询，首次加载后仅在切换日期/demand 或手动刷新时请求。
+
+页面支持暂停/调整刷新间隔（2/5/10/30s），拉取失败会显示错误条并自动重试。接口：`GET /api/overview`（聚合 JSON）、`GET /api/research/summary?date=&demand_id=`、`GET /api/research/coverage?date=&demand_id=&include_candidates=0|1`、`GET /api/research/target?target_id=`、`GET /healthz`。看板中的覆盖数值与 CLI `eval coverage` / `eval hk-connect` / `eval market-context` 一致（同一套 evaluator）。
 
 过期 lease 恢复：如果 `attempts < max_attempts`，回到 open；否则进入 dead-letter。
 

@@ -16,6 +16,43 @@ from .time_utils import local_day_utc_range
 AUTHORITATIVE_SOURCE_TYPES = ("official", "exchange", "regulator", "company")
 
 
+def load_demand_targets(con, demand_id: str | None) -> list[dict[str, Any]]:
+    """Resolve demand targets (incl. derived_from_demands runtime references), deduplicated.
+
+    Shared by CoverageEvaluator and ResearchDashboardService so dashboard coverage numbers
+    always match `intel-agent eval coverage`.
+    """
+    if demand_id:
+        rows = con.execute(
+            "SELECT payload_json FROM collection_demands WHERE demand_id=?", (demand_id,)
+        ).fetchall()
+    else:
+        rows = con.execute("SELECT payload_json FROM collection_demands WHERE status='active'").fetchall()
+    payloads = {}
+    for row in rows:
+        payload = loads_json(row["payload_json"], {})
+        payloads[str(payload.get("demand_id"))] = payload
+    targets: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for payload in payloads.values():
+        direct = list(payload.get("targets") or [])
+        # derived_from_demands (runtime reference) resolves against the same table.
+        for source_id in payload.get("derived_from_demands") or []:
+            source = payloads.get(str(source_id))
+            if source is None:
+                row = con.execute(
+                    "SELECT payload_json FROM collection_demands WHERE demand_id=?", (str(source_id),)
+                ).fetchone()
+                source = loads_json(row["payload_json"], {}) if row else {}
+            direct.extend(source.get("targets") or [])
+        for target in direct:
+            key = str(target.get("target_id") or target.get("ticker") or "")
+            if key and key not in seen:
+                seen.add(key)
+                targets.append(target)
+    return targets
+
+
 class CoverageEvaluator:
     def __init__(self, store: SQLiteStore, *, timezone: str = "Asia/Shanghai"):
         self.store = store
@@ -134,6 +171,7 @@ class CoverageEvaluator:
                     )
             row = {k: r[k] for k in r.keys() if not k.endswith("_json")}
             row["field_completeness"] = completeness
+            row["missing_fields"] = loads_json(r["missing_fields_json"], []) or []
             out_rows.append(row)
         return {
             "trade_date": trade_date,
@@ -176,33 +214,6 @@ class CoverageEvaluator:
             "rows": [dict(r) for r in rows],
         }
 
-    def _load_targets(self, con, demand_id: str | None) -> list[dict[str, Any]]:
-        if demand_id:
-            rows = con.execute(
-                "SELECT payload_json FROM collection_demands WHERE demand_id=?", (demand_id,)
-            ).fetchall()
-        else:
-            rows = con.execute("SELECT payload_json FROM collection_demands WHERE status='active'").fetchall()
-        payloads = {}
-        for row in rows:
-            payload = loads_json(row["payload_json"], {})
-            payloads[str(payload.get("demand_id"))] = payload
-        targets: list[dict[str, Any]] = []
-        seen: set[str] = set()
-        for payload in payloads.values():
-            direct = list(payload.get("targets") or [])
-            # derived_from_demands (runtime reference) resolves against the same table.
-            for source_id in payload.get("derived_from_demands") or []:
-                source = payloads.get(str(source_id))
-                if source is None:
-                    row = con.execute(
-                        "SELECT payload_json FROM collection_demands WHERE demand_id=?", (str(source_id),)
-                    ).fetchone()
-                    source = loads_json(row["payload_json"], {}) if row else {}
-                direct.extend(source.get("targets") or [])
-            for target in direct:
-                key = str(target.get("target_id") or target.get("ticker") or "")
-                if key and key not in seen:
-                    seen.add(key)
-                    targets.append(target)
-        return targets
+    @staticmethod
+    def _load_targets(con, demand_id: str | None) -> list[dict[str, Any]]:
+        return load_demand_targets(con, demand_id)

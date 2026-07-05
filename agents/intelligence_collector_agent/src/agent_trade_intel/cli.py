@@ -633,7 +633,8 @@ def main(argv: list[str] | None = None) -> None:
         elif args.eval_command == "market-context":
             _print(evaluator.market_context_coverage(trade_date=args.date))
         elif args.eval_command == "golden":
-            _print(GoldenSetEvaluator(data_store).evaluate(args.file))
+            # record=True persists the run so the dashboard can show the latest recall.
+            _print(GoldenSetEvaluator(data_store).evaluate(args.file, record=True))
         return
 
     if args.command == "research-card":

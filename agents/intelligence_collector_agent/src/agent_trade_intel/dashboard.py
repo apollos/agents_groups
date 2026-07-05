@@ -4,11 +4,12 @@ import json
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from .config import CollectorConfig
 from .db import SQLiteStore, loads_json
 from .logging_setup import get_logger
+from .research_dashboard import ResearchDashboardService
 from .time_utils import local_day_utc_range, market_phase, parse_dt
 
 logger = get_logger("dashboard")
@@ -37,6 +38,10 @@ class DashboardService:
         self.state_store = state_store
         self.bus_store = bus_store
         self.data_store = data_store
+
+    def today_local(self) -> str:
+        """Current local trading day (cheap; used as the default date for research APIs)."""
+        return parse_dt(None, self.config.runtime.timezone).date().isoformat()
 
     def overview(self) -> dict[str, Any]:
         now_utc = datetime.now(timezone.utc)
@@ -273,32 +278,50 @@ def _age_seconds(sqlite_utc_ts: str | None, now_utc: datetime) -> int | None:
     return max(0, int((now_utc - ts).total_seconds()))
 
 
-def run_dashboard(
-    config: CollectorConfig,
-    *,
-    state_store: SQLiteStore,
-    bus_store: SQLiteStore,
-    data_store: SQLiteStore,
-    host: str = "127.0.0.1",
-    port: int = 8700,
-    refresh_seconds: int = 5,
-) -> None:
-    """Serve the live dashboard until interrupted (Ctrl+C)."""
-    service = DashboardService(config, state_store=state_store, bus_store=bus_store, data_store=data_store)
-    page = DASHBOARD_HTML.replace("__REFRESH_SECONDS__", str(max(1, refresh_seconds)))
+def build_dashboard_handler(
+    page: str,
+    service: DashboardService,
+    research_service: ResearchDashboardService,
+) -> type[BaseHTTPRequestHandler]:
+    """HTTP handler shared by run_dashboard and the tests (so tests hit the real routes)."""
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "IntelDashboard/1.0"
 
         def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
-            path = urlparse(self.path).path
+            parsed = urlparse(self.path)
+            path = parsed.path
             try:
                 if path in {"/", "/index.html"}:
                     body = page.encode("utf-8")
                     self._send(200, "text/html; charset=utf-8", body)
                 elif path == "/api/overview":
-                    body = json.dumps(service.overview(), ensure_ascii=False, default=str).encode("utf-8")
-                    self._send(200, "application/json; charset=utf-8", body)
+                    self._send_json(service.overview())
+                elif path == "/api/research/summary":
+                    q = parse_qs(parsed.query)
+                    self._send_json(
+                        research_service.summary(
+                            trade_date=q.get("date", [service.today_local()])[0],
+                            demand_id=q.get("demand_id", [None])[0] or None,
+                        )
+                    )
+                elif path == "/api/research/coverage":
+                    q = parse_qs(parsed.query)
+                    self._send_json(
+                        research_service.coverage_matrix(
+                            trade_date=q.get("date", [service.today_local()])[0],
+                            demand_id=q.get("demand_id", [None])[0] or None,
+                            include_candidates=q.get("include_candidates", ["0"])[0]
+                            in {"1", "true", "yes"},
+                        )
+                    )
+                elif path == "/api/research/target":
+                    q = parse_qs(parsed.query)
+                    target_id = q.get("target_id", [""])[0]
+                    if not target_id:
+                        self._send(400, "application/json; charset=utf-8", b'{"error":"target_id_required"}')
+                        return
+                    self._send_json(research_service.target_detail(target_id=target_id))
                 elif path == "/healthz":
                     self._send(200, "application/json; charset=utf-8", b'{"status":"ok"}')
                 else:
@@ -307,6 +330,10 @@ def run_dashboard(
                 logger.exception("dashboard request failed: %s", path)
                 body = json.dumps({"error": str(exc)}, ensure_ascii=False).encode("utf-8")
                 self._send(500, "application/json; charset=utf-8", body)
+
+        def _send_json(self, obj: Any) -> None:
+            body = json.dumps(obj, ensure_ascii=False, default=str).encode("utf-8")
+            self._send(200, "application/json; charset=utf-8", body)
 
         def _send(self, code: int, content_type: str, body: bytes) -> None:
             self.send_response(code)
@@ -319,7 +346,26 @@ def run_dashboard(
         def log_message(self, fmt: str, *args: Any) -> None:
             logger.debug("dashboard http: " + fmt, *args)
 
-    server = ThreadingHTTPServer((host, port), Handler)
+    return Handler
+
+
+def run_dashboard(
+    config: CollectorConfig,
+    *,
+    state_store: SQLiteStore,
+    bus_store: SQLiteStore,
+    data_store: SQLiteStore,
+    host: str = "127.0.0.1",
+    port: int = 8700,
+    refresh_seconds: int = 5,
+) -> None:
+    """Serve the live dashboard until interrupted (Ctrl+C)."""
+    service = DashboardService(config, state_store=state_store, bus_store=bus_store, data_store=data_store)
+    research_service = ResearchDashboardService(data_store=data_store, timezone=config.runtime.timezone)
+    page = DASHBOARD_HTML.replace("__REFRESH_SECONDS__", str(max(1, refresh_seconds)))
+    handler = build_dashboard_handler(page, service, research_service)
+
+    server = ThreadingHTTPServer((host, port), handler)
     logger.info("dashboard listening on http://%s:%s (refresh every %ss)", host, port, refresh_seconds)
     print(f"情报收集员看板已启动: http://{host}:{port}  (每 {refresh_seconds}s 自动刷新, Ctrl+C 退出)")
     try:
@@ -389,6 +435,17 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   @media(max-width:820px){.twocol{grid-template-columns:1fr}}
   .small{font-size:12px;color:var(--muted)}
   .empty{color:var(--muted);font-size:12.5px;padding:8px 2px}
+  .bar{position:relative;height:20px;background:#f1f5f9;border-radius:999px;overflow:hidden;min-width:90px}
+  .bar span{display:block;height:100%}
+  .bar.good span{background:var(--green)} .bar.warn span{background:var(--amber)} .bar.bad span{background:var(--red)}
+  .bar b{position:absolute;left:8px;top:2px;font-size:12px;color:#111827}
+  tr.click{cursor:pointer} tr.click:hover td{background:#f8fafc}
+  #drawer{display:none;position:fixed;right:0;top:0;width:min(720px,90vw);height:100vh;background:#fff;
+    border-left:1px solid var(--line);box-shadow:var(--shadow);overflow:auto;padding:20px;z-index:20}
+  #drawer pre{background:#f8fafc;border:1px solid var(--line);border-radius:10px;padding:10px;
+    font-size:11.5px;overflow:auto;max-height:320px}
+  #drawer .close{float:right;background:var(--accent);color:#fff;border:0;border-radius:8px;
+    padding:5px 12px;font-weight:600;cursor:pointer}
 </style>
 </head>
 <body>
@@ -418,6 +475,29 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <div id="errbar"></div>
   <div class="grid" id="kpis"></div>
 
+  <section class="panel open"><div class="head"><h2>研究效果（研究池是否有效）</h2><span class="hint" id="researchHint"></span><span class="caret">▶</span></div><div class="body">
+    <div class="ctrl" style="margin:12px 0">
+      <label>交易日 <input id="researchDate" type="date" style="padding:5px 8px;border:1px solid var(--line);border-radius:8px"></label>
+      <label>Demand <select id="researchDemand"><option value="">全部 active demands</option></select></label>
+      <button onclick="loadResearch()">刷新研究效果</button>
+      <span class="small" id="researchStamp"></span>
+    </div>
+    <div id="researchErr" class="small" style="color:var(--red)"></div>
+    <div class="grid" id="researchKpis"></div>
+    <div class="twocol">
+      <div><h3 class="small">按行业覆盖（accepted）</h3><div id="industryCoverage"></div></div>
+      <div><h3 class="small">按主题覆盖（accepted）</h3><div id="themeCoverage"></div></div>
+    </div>
+    <h3 class="small" style="margin-top:14px">低覆盖 / 待行动目标（点击行查看详情）</h3>
+    <div id="coverageProblems"></div>
+    <h3 class="small" style="margin-top:14px">港股通结构化覆盖（有快照 ≠ 字段完整）</h3>
+    <div id="hkCoverage"></div>
+    <h3 class="small" style="margin-top:14px">Market Context（指数 / 汇率 / 商品背景变量）</h3>
+    <div id="marketContext"></div>
+    <h3 class="small" style="margin-top:14px">研究卡状态（点击行查看详情）</h3>
+    <div id="researchCards"></div>
+  </div></section>
+
   <section class="panel open"><div class="head"><h2>工具调用流水（collection_runs）</h2><span class="hint" id="runsHint"></span><span class="caret">▶</span></div><div class="body" id="runsBody"></div></section>
   <section class="panel open"><div class="head"><h2>消息队列</h2><span class="hint" id="queueHint"></span><span class="caret">▶</span></div><div class="body" id="queueBody"></div></section>
   <section class="panel"><div class="head"><h2>Ticket</h2><span class="hint" id="ticketHint"></span><span class="caret">▶</span></div><div class="body" id="ticketBody"></div></section>
@@ -426,6 +506,8 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
   <section class="panel"><div class="head"><h2>质量问题 / 覆盖缺口 / 死信</h2><span class="hint" id="issueHint"></span><span class="caret">▶</span></div><div class="body" id="issueBody"></div></section>
   <section class="panel"><div class="head"><h2>Demand 与能力 / 熔断 / 心跳</h2><span class="hint" id="sysHint"></span><span class="caret">▶</span></div><div class="body" id="sysBody"></div></section>
 </div>
+
+<div id="drawer"></div>
 
 <script>
 let REFRESH = __REFRESH_SECONDS__;
@@ -447,6 +529,188 @@ function table(headers, rows){
   if(!rows.length) return '<div class="empty">暂无数据</div>';
   return `<table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table>`;
 }
+
+// ---------------------------------------------------------------- 研究效果区
+let researchLoaded = false;
+
+const escAttr = (s)=>esc(s).replace(/'/g,"&#39;");
+const pct = (x)=> x==null ? "-" : `${(Number(x)*100).toFixed(1)}%`;
+const num = (x)=> x==null ? "-" : Number(x).toLocaleString("zh-CN");
+
+async function fetchJson(url){
+  const res = await fetch(url, {cache:"no-store"});
+  if(!res.ok) throw new Error("HTTP "+res.status);
+  return await res.json();
+}
+
+function bar(ratio){
+  const v = ratio==null ? 0 : Math.max(0, Math.min(1, Number(ratio)));
+  const cls = v>=.6 ? "good" : v>=.25 ? "warn" : "bad";
+  return `<div class="bar ${cls}"><span style="width:${v*100}%"></span><b>${pct(ratio)}</b></div>`;
+}
+
+function syncDemandOptions(demands){
+  const sel = $("researchDemand");
+  const current = sel.value;
+  const active = (demands||[]).filter(d=>d.status==="active");
+  const wanted = ['<option value="">全部 active demands</option>']
+    .concat(active.map(d=>`<option value="${escAttr(d.demand_id)}">${esc(d.demand_id)}</option>`)).join("");
+  if(sel.dataset.rendered !== wanted){
+    sel.innerHTML = wanted;
+    sel.dataset.rendered = wanted;
+    sel.value = current;
+  }
+}
+
+async function loadResearch(){
+  const date = $("researchDate").value;
+  const demand = $("researchDemand").value;
+  const qs = new URLSearchParams();
+  if(date) qs.set("date", date);
+  if(demand) qs.set("demand_id", demand);
+  try{
+    const d = await fetchJson(`/api/research/summary?${qs.toString()}`);
+    $("researchErr").textContent = "";
+    renderResearch(d);
+    $("researchStamp").textContent = `数据日期 ${d.trade_date} · 生成于 ${new Date().toLocaleTimeString("zh-CN",{hour12:false})}`;
+  }catch(e){
+    $("researchErr").textContent = `研究效果数据拉取失败：${e.message}`;
+  }
+}
+
+function renderResearch(d){
+  const c = d.coverage||{}, hk = d.hk_connect||{}, mc = d.market_context||{};
+  const cards = d.research_cards||{}, quality = d.quality||{}, golden = d.golden;
+  const kpi = (k,v,meta,cls)=>`<div class="card"><div class="k">${k}</div><div class="v ${cls||''}">${v}</div>${meta?`<div class="meta">${meta}</div>`:''}</div>`;
+  const p01 = (quality.open_p0_p1_issues||[]).length;
+  const zeroN = (c.zero_covered_targets||[]).length;
+
+  $("researchHint").textContent = `${d.trade_date} · accepted 覆盖 ${pct(c.confirmed?.coverage_ratio)}`;
+  $("researchKpis").innerHTML =
+    kpi("研究健康分（趋势参考）", pct(d.research_health_score))+
+    kpi("Accepted 覆盖率", pct(c.confirmed?.coverage_ratio), `${c.confirmed?.covered_cells||0} / ${c.confirmed?.expected_cells||0} cells`)+
+    kpi("含候选覆盖率", pct(c.candidate_inclusive?.coverage_ratio), `候选-only ${c.candidate_only_cells??0} cells`)+
+    kpi("权威来源覆盖 cells", c.authoritative_covered_cells??"-", "official/exchange/regulator/company")+
+    kpi("零覆盖目标", zeroN, "有变量清单但无 accepted 证据", zeroN?"wn":"ok")+
+    kpi("HK 快照覆盖", `${hk.hk_targets_with_snapshot||0} / ${hk.expected_hk_targets||0}`, `字段完整度 ${pct(hk.avg_field_completeness)}`)+
+    kpi("市场背景覆盖", `${mc.contexts_with_snapshot||0} / ${mc.expected_contexts||0}`, `缺失 ${(mc.missing_snapshot||[]).length}`)+
+    kpi("研究卡新鲜", `${cards.fresh_cards||0} / ${cards.cards_total||0}`, `低覆盖 ${(cards.low_coverage_cards||[]).length}`)+
+    kpi("Golden Recall", golden?pct(golden.recall):"-", golden?`${golden.matched_count}/${golden.expected_count} · ${utcLocal(golden.created_at)}`:"尚未运行 eval golden")+
+    kpi("Open P0/P1 质量问题", p01, `高优先覆盖缺口 ${(quality.open_high_priority_gaps||[]).length}`, p01?"no":"ok");
+
+  const groups = d.groups||{};
+  renderGroupCoverage("industryCoverage", groups.by_industry||[]);
+  renderGroupCoverage("themeCoverage", groups.by_theme||[]);
+  renderCoverageProblems(c);
+  renderHKCoverage(hk);
+  renderMarketContext(mc);
+  renderResearchCards(cards);
+}
+
+function renderGroupCoverage(id, rows){
+  $(id).innerHTML = table(["组","覆盖率","covered","expected","权威"], rows.map(r=>`
+    <tr><td class="mono">${esc(r.group)}</td><td>${bar(r.coverage_ratio)}</td>
+    <td class="num">${r.covered_cells}</td><td class="num">${r.expected_cells}</td>
+    <td class="num">${r.authoritative_cells}</td></tr>`));
+}
+
+function renderCoverageProblems(c){
+  const zero = c.zero_covered_targets||[];
+  const cand = c.candidate_only_examples||[];
+  $("coverageProblems").innerHTML = `<div class="twocol">
+    <div><h4 class="small">零 accepted 覆盖目标</h4>${table(["target","ticker","行业","期望变量数"], zero.slice(0,50).map(x=>`
+      <tr class="click" onclick="openTarget('${escAttr(x.target_id)}')">
+        <td class="mono">${esc(x.target_id)}</td><td>${esc(x.ticker||"-")}</td>
+        <td class="mono">${esc(x.industry_id||"-")}</td><td class="num">${x.expected_variables}</td></tr>`))}</div>
+    <div><h4 class="small">只有关键词候选的 cells（待人工确认）</h4>${table(["target","ticker","变量"], cand.slice(0,50).map(x=>`
+      <tr class="click" onclick="openTarget('${escAttr(x.target_id)}')">
+        <td class="mono">${esc(x.target_id)}</td><td>${esc(x.ticker||"-")}</td>
+        <td class="mono">${esc(x.tracking_variable)}</td></tr>`))}</div>
+  </div>`;
+}
+
+function renderHKCoverage(hk){
+  $("hkCoverage").innerHTML =
+    `<div class="chips" style="margin-bottom:8px">
+      <span class="chip">快照 <b>${hk.hk_targets_with_snapshot||0}/${hk.expected_hk_targets||0}</b></span>
+      <span class="chip">字段完整度 <b>${pct(hk.avg_field_completeness)}</b></span>
+      <span class="chip">缺快照 <b>${(hk.missing_snapshot||[]).length}</b></span>
+      <span class="chip">缺南向 <b>${(hk.missing_southbound||[]).length}</b></span>
+      <span class="chip">低完整度 <b>${(hk.low_completeness||[]).length}</b></span>
+      ${(hk.missing_snapshot||[]).slice(0,12).map(t=>`<span class="chip">缺 ${esc(t)}</span>`).join("")}
+    </div>`+
+    table(["ticker","资格","南向持股%","南向市值","成交额","完整度","缺失字段"], (hk.rows||[]).slice(0,80).map(r=>`
+      <tr><td>${esc(r.ticker)}</td><td>${r.hk_connect_eligible?'<span class="ok">Y</span>':'<span class="no">N</span>'}</td>
+      <td class="num">${r.southbound_holding_pct??"-"}</td>
+      <td class="num">${num(r.southbound_holding_market_value_hkd)}</td>
+      <td class="num">${num(r.turnover_hkd)}</td>
+      <td>${pct(r.field_completeness?.ratio)}</td>
+      <td class="mono">${esc((r.missing_fields||[]).join(", ")||"-")}</td></tr>`));
+}
+
+function renderMarketContext(mc){
+  $("marketContext").innerHTML =
+    `<div class="chips" style="margin-bottom:8px">
+      <span class="chip">contexts <b>${mc.contexts_with_snapshot||0}/${mc.expected_contexts||0}</b></span>
+      <span class="chip">缺快照 <b>${(mc.missing_snapshot||[]).length}</b></span>
+      <span class="chip">缺取值 <b>${(mc.missing_value||[]).length}</b></span>
+      ${(mc.missing_snapshot||[]).slice(0,12).map(t=>`<span class="chip">缺 ${esc(t)}</span>`).join("")}
+    </div>`+
+    table(["context","类型","取值","单位","1d","5d","20d"], (mc.rows||[]).map(r=>`
+      <tr><td>${esc(r.name||r.context_id)}</td><td class="mono">${esc(r.context_type)}</td>
+      <td class="num">${r.value??"-"}</td><td class="mut">${esc(r.unit||"-")}</td>
+      <td class="num">${r.change_1d??"-"}</td><td class="num">${r.change_5d??"-"}</td>
+      <td class="num">${r.change_20d??"-"}</td></tr>`));
+}
+
+function renderResearchCards(cards){
+  const sug = cards.pool_layer_suggestions||{};
+  $("researchCards").innerHTML =
+    `<div class="chips" style="margin-bottom:8px">
+      <span class="chip">cards <b>${cards.cards_total||0}</b></span>
+      <span class="chip">fresh <b>${cards.fresh_cards||0}</b></span>
+      <span class="chip">stale <b>${(cards.stale_cards||[]).length}</b></span>
+      <span class="chip">低覆盖 <b>${(cards.low_coverage_cards||[]).length}</b></span>
+      ${Object.keys(sug).map(k=>`<span class="chip">${esc(short(k,40))} <b>${sug[k]}</b></span>`).join("")}
+    </div>`+
+    table(["target","ticker","as_of","覆盖率","缺失变量","open questions","维护建议"], (cards.recent_cards||[]).slice(0,80).map(c=>`
+      <tr class="click" onclick="openTarget('${escAttr(c.target_id)}')">
+        <td class="mono">${esc(c.target_id)}</td><td>${esc(c.ticker||"-")}</td>
+        <td class="mut">${esc(c.as_of||"-")}</td><td>${bar(c.coverage_ratio)}</td>
+        <td class="num">${(c.missing_variables||[]).length}</td>
+        <td class="num">${c.open_questions_count??0}</td>
+        <td class="mono">${esc(short(c.pool_layer_suggestion||"-",40))}</td></tr>`));
+}
+
+async function openTarget(targetId){
+  let d;
+  try{ d = await fetchJson(`/api/research/target?target_id=${encodeURIComponent(targetId)}`); }
+  catch(e){ $("researchErr").textContent = `target 详情拉取失败：${e.message}`; return; }
+  const drawer = $("drawer");
+  drawer.innerHTML =
+    `<button class="close" onclick="closeDrawer()">关闭</button>
+     <h3 class="mono">${esc(targetId)}</h3>
+     <h4 class="small">变量证据（event_variable_links）</h4>
+     ${table(["时间","变量","状态","方法","置信度","方向"], (d.variable_links||[]).slice(0,80).map(x=>`
+       <tr><td class="mut">${utcLocal(x.created_at)}</td><td class="mono">${esc(x.tracking_variable)}</td>
+       <td>${st(x.review_status)}</td><td class="mono">${esc(x.mapping_method)}</td>
+       <td class="num">${x.mapping_confidence??"-"}</td><td>${esc(x.direction||"-")}</td></tr>`))}
+     <h4 class="small">最新事件</h4>
+     ${table(["时间","类型","来源","置信度","摘要"], (d.events||[]).slice(0,50).map(e=>`
+       <tr><td class="mut">${utcLocal(e.created_at)}</td><td class="mono">${esc(e.event_type)}</td>
+       <td>${e.source_url?`<a href="${esc(e.source_url)}" target="_blank" rel="noopener">${esc(e.source_type||"link")}</a>`:esc(e.source_type||"-")}</td>
+       <td class="num">${e.confidence!=null?Number(e.confidence).toFixed(2):"-"}</td>
+       <td>${esc(short(e.summary_cn,60))}</td></tr>`))}
+     <h4 class="small">Open coverage gaps</h4>
+     ${table(["时间","优先级","描述"], (d.open_gaps||[]).map(g=>`
+       <tr><td class="mut">${utcLocal(g.created_at)}</td><td>${esc(g.priority)}</td>
+       <td>${esc(short(g.description,70))}</td></tr>`))}
+     <h4 class="small">研究卡 JSON</h4>
+     ${d.research_card?`<pre>${esc(JSON.stringify(d.research_card,null,2))}</pre>`:'<div class="empty">尚未生成研究卡（intel-agent research-card refresh）</div>'}`;
+  drawer.style.display = "block";
+}
+
+function closeDrawer(){ $("drawer").style.display = "none"; }
 
 function render(d){
   const q = d.queue_depth||{};
@@ -557,6 +821,15 @@ function render(d){
         `<tr><td>最新日报</td><td class="mono">${d.latest_report?`${esc(d.latest_report.trade_date)} <span class="mut">${utcLocal(d.latest_report.created_at)}</span>`:'尚未生成'}</td></tr>`,
       ])}</div>
   </div>`;
+
+  // 研究效果区：demand 下拉跟随 active demands；首次成功 poll 后自动加载一次。
+  // 之后仅在用户点击刷新 / 切换 demand 时请求（研究查询较重，不进 5s 轮询）。
+  syncDemandOptions(d.demands);
+  if(!researchLoaded){
+    researchLoaded = true;
+    if(!$("researchDate").value && d.today_local) $("researchDate").value = d.today_local;
+    loadResearch();
+  }
 }
 
 async function poll(){
@@ -593,6 +866,8 @@ document.querySelectorAll("section.panel > .head").forEach(h=>{
 const sel = $("intervalSel");
 [...sel.options].forEach(o=>{ if(Number(o.value)===REFRESH) o.selected=true; });
 sel.addEventListener("change",()=>{ REFRESH = Number(sel.value); schedule(); });
+$("researchDemand").addEventListener("change", loadResearch);
+$("researchDate").addEventListener("change", loadResearch);
 
 poll();
 schedule();

@@ -74,6 +74,10 @@ def _apply_migrations(con: sqlite3.Connection) -> None:
                 f"ALTER TABLE hk_connect_snapshots ADD COLUMN {column} TEXT NOT NULL DEFAULT {default}"
             )
     con.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (6)")
+    # v7: golden_eval_runs persists `eval golden` results so the dashboard can show the
+    # latest recall without reading arbitrary file paths at request time. The table is
+    # created via CREATE TABLE IF NOT EXISTS in SCHEMA_SQL; only stamp the version.
+    con.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (7)")
 
 
 def dumps_json(value: Any) -> str:
@@ -475,6 +479,18 @@ CREATE TABLE IF NOT EXISTS research_cards (
   card_json TEXT NOT NULL DEFAULT '{}',
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS golden_eval_runs (
+  run_id TEXT PRIMARY KEY,
+  golden_file TEXT NOT NULL,
+  trade_date TEXT,
+  expected_count INTEGER,
+  matched_count INTEGER,
+  recall REAL,
+  result_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_golden_eval_runs_created ON golden_eval_runs(created_at);
 
 CREATE TABLE IF NOT EXISTS tool_capabilities (
   capability_id TEXT PRIMARY KEY,
