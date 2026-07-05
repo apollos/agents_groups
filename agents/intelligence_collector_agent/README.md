@@ -1,4 +1,4 @@
-# 情报收集员 Agent 代码包 V0.7.2
+# 情报收集员 Agent 代码包 V0.7.3
 
 这是 Agent交易公司多 Agent A 股交易辅助系统中的 **情报收集员 Agent**。它面向 OpenClaw 多 Agent 运行环境设计，负责 Demand → Ticket → Message → 工具调用 → 质量闸门 → 事件/特征/日报的采集闭环。
 
@@ -6,7 +6,14 @@
 
 完整版本历史见 [ChangeLog.md](ChangeLog.md)。
 
-## 0. V0.7.2 关键变更（研究效果结构化，第二轮审阅采纳）
+## 0. V0.7.3 关键变更（研究池维护闭环，第三轮审阅甄别采纳）
+
+1. **planner 显式支持 `periodic_review`**：每 collect_mic 目标规划 1 个 MIC 深采任务，复盘 Demand 即使盘后也不追加 stock 任务（审阅所报"MIC 重复规划"经核对为误判，规划自 V0.7 起即为单次，测试持续守护）。
+2. **每条主线默认跟踪变量**：batch spec 新增 `tracking_variables_by_industry` 段，公司条目按 `industry_id` 继承主线变量集（可单条目覆盖）；`research_pool_full.yaml` 已填入 8 条主线定制变量，175 家公司全部带变量。
+3. **`copy_targets_from` + 周/月/季复盘并入 full YAML**：复盘 Demand 复用 daily 目标清单，无需重复名单；full YAML 内置周度行业景气复盘（周五）/ 月度公司研究卡（每月1日）/ 季度财报季复盘（1/4/7/10月15日）。
+4. **全量事件落库**：MIC 输出新增 `all_events`，persister 与质量闸门优先使用；未进 Top5 展示的小事件（小额回购、库存边际变化、中标候选人公示）不再丢失。
+
+## 0.1 V0.7.2 关键变更（研究效果结构化，第二轮审阅采纳）
 
 1. **2026 年 A 股交易日历落地**：`market_calendar.holidays` 按沪深交易所 2026 年休市安排填入 19 个工作日休市日（春节/国庆等），`calendar validate --year 2026` 返回 ok；每年 12 月需追加次年条目。
 2. **研究池目标元数据**：`request industry|company`（及 batch 条目）支持 `industry_id` 与 `tracking_variables`，存入 Demand target 供日报/分析员按主线与变量聚合；`examples/research_pool_full.yaml` 175 家公司已全部打上 `industry_id`，40 个港股代码统一补零为 5 位（入库 ticker 也归一为 `00700.HK` 形式）。
@@ -451,9 +458,10 @@ intel-agent --config $CFG request batch --file examples/research_pool_full.yaml
 # Demand（输出 warning 提示）；需要生效时显式加 --update-demand-config：
 intel-agent --config $CFG request batch --file examples/research_pool_full.yaml --update-demand-config
 
-# 周度/月度/季度复盘 Demand（V0.7.2）：demands: 段设 cadence: weekly|monthly|quarterly，
-# runtime tick 只在到期日编译（weekly 默认周五，可用 cadence_anchor 调整）。
-intel-agent --config $CFG request batch --file examples/periodic_reviews.yaml
+# 周度/月度/季度复盘 Demand：demands: 段设 cadence: weekly|monthly|quarterly，runtime tick
+# 只在到期日编译（weekly 默认周五，可用 cadence_anchor 调整）。V0.7.3 起 research_pool_full.yaml
+# 已内置三个复盘 Demand（copy_targets_from 复用 daily 名单），跑 full 注册即一并生效；
+# examples/periodic_reviews.yaml 保留为最小演示。
 
 # 观察层（上下游扩展名单）想暂停/恢复：
 intel-agent --config $CFG demand suspend --demand-id demand_company_watch_daily

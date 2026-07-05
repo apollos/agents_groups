@@ -34,7 +34,9 @@ class TaskGraphPlanner:
             tasks.extend(self._candidate_snapshot_tasks(demand, request_ticket_id, as_of, resolved_targets))
         elif demand_type == "tool_capability_check":
             tasks.append(self._task(demand, request_ticket_id, None, "tool_capability_check", "internal", as_of))
-        elif demand_type in {"daily_collection", "on_demand_research", "coverage_gap_followup"}:
+        elif demand_type in {"daily_collection", "on_demand_research", "coverage_gap_followup", "periodic_review"}:
+            # One MIC deep-collect per collect_mic target -- never planned twice. Only
+            # daily_collection additionally schedules the post-close A-share data refresh.
             tasks.extend(self._mic_tasks(demand, request_ticket_id, as_of, resolved_targets, task_type="mic_deep_collect"))
             if demand_type == "daily_collection" and market_phase in {"post_market", "off_hours"}:
                 tasks.extend(self._stock_daily_tasks(demand, request_ticket_id, as_of, resolved_targets))

@@ -273,14 +273,25 @@ class RequestCenter:
         Spec layout::
 
             defaults: {priority: normal, test_mode: false, pool_layer: watchlist}
+            tracking_variables_by_industry:   # optional per-line defaults for company targets
+              industry_ai_semi: [orders, gross_margin, inventory, export_control]
             demands:                     # optional per-demand scaffold overrides
               demand_company_watch_daily:
                 kind: company
                 priority: low
                 task_profile: {mic: {budget_profile: {max_queries: 6}}}
+              demand_company_monthly_review:
+                kind: company
+                demand_type: periodic_review
+                cadence: monthly
+                copy_targets_from: [demand_company_research_daily]   # reuse another demand's targets
             industries: [{name: ..., target_id: ..., products: [...], ...}]
-            companies:  [{name: ..., ticker: ..., demand_id: ..., ...}]
+            companies:  [{name: ..., ticker: ..., demand_id: ..., industry_id: ..., ...}]
             stocks:     [{ticker: ..., company_name: ...}]
+
+        Company entries without explicit ``tracking_variables`` inherit the entry from
+        ``tracking_variables_by_industry`` matching their ``industry_id`` (industry entries match
+        their ``target_id``), so one variable set per research line covers the whole company list.
 
         On re-runs, ``demands:`` overrides only apply to *existing* demands when
         ``update_demand_config`` is true; otherwise the run keeps the stored demand-level config
@@ -289,6 +300,7 @@ class RequestCenter:
         """
         defaults = spec.get("defaults") or {}
         overrides = spec.get("demands") or {}
+        tv_by_industry = spec.get("tracking_variables_by_industry") or {}
         profiles: dict[str, dict[str, Any]] = {}
         groups: dict[str, dict[str, Any]] = {}
         pool_ops: list[dict[str, Any] | None] = []
@@ -308,6 +320,8 @@ class RequestCenter:
 
         for item in spec.get("industries") or []:
             item = dict(item)
+            if not item.get("tracking_variables") and tv_by_industry.get(item.get("target_id")):
+                item["tracking_variables"] = tv_by_industry[item["target_id"]]
             tid, profile, target = self._industry_entry(item)
             profiles[tid] = profile
             add(item.get("demand_id") or INDUSTRY_DEMAND_ID, "industry", target, item)
@@ -315,6 +329,8 @@ class RequestCenter:
         for item in spec.get("companies") or []:
             item = dict(item)
             item.setdefault("pool_layer", defaults.get("pool_layer", "watchlist"))
+            if not item.get("tracking_variables") and tv_by_industry.get(item.get("industry_id")):
+                item["tracking_variables"] = tv_by_industry[item["industry_id"]]
             tid, profile, target, pool_op = self._company_entry(item)
             profiles[tid] = profile
             add(item.get("demand_id") or COMPANY_DEMAND_ID, "company", target, item)
@@ -330,6 +346,7 @@ class RequestCenter:
 
         profile_path = self._upsert_mic_profiles(profiles) if profiles else None
         demand_results = []
+        extra_warnings: list[str] = []
         for demand_id, group in groups.items():
             demand_results.append(
                 self._merge_targets_into_demand(
@@ -342,8 +359,36 @@ class RequestCenter:
                     update_demand_config=update_demand_config,
                 )
             )
+        # copy_targets_from: demands (e.g. periodic reviews) that reuse another demand's target
+        # list instead of repeating hundreds of entries. Runs after direct groups so sources
+        # registered by this very batch are already up to date.
+        for demand_id, override in overrides.items():
+            sources = _as_list((override or {}).get("copy_targets_from"))
+            if not sources:
+                continue
+            copied: list[dict[str, Any]] = []
+            for src_id in sources:
+                src = self.registry.get(src_id)
+                if not src:
+                    extra_warnings.append(f"demand {demand_id}: copy_targets_from source not found: {src_id}")
+                    continue
+                copied.extend(src.get("targets") or [])
+            if not copied:
+                extra_warnings.append(f"demand {demand_id}: copy_targets_from produced no targets; skipped")
+                continue
+            demand_results.append(
+                self._merge_targets_into_demand(
+                    demand_id,
+                    copied,
+                    demand_kind=override.get("kind") or "company",
+                    priority=override.get("priority") or defaults.get("priority") or "normal",
+                    test_mode=bool(defaults.get("test_mode", False)),
+                    scaffold_overrides=override,
+                    update_demand_config=update_demand_config,
+                )
+            )
         pool_count = sum(1 for op in pool_ops if self._apply_pool_op(op))
-        warnings = [w for entry in demand_results for w in entry.get("warnings", [])]
+        warnings = extra_warnings + [w for entry in demand_results for w in entry.get("warnings", [])]
         return {
             "status": "requested",
             "kind": "batch",
@@ -580,7 +625,8 @@ class RequestCenter:
     ) -> dict[str, Any]:
         warnings: list[str] = []
         config_updated = False
-        override_payload = {k: v for k, v in (scaffold_overrides or {}).items() if k != "kind"}
+        # kind / copy_targets_from steer the batch itself and must not leak into the demand payload.
+        override_payload = {k: v for k, v in (scaffold_overrides or {}).items() if k not in {"kind", "copy_targets_from"}}
         demand = self.registry.get(demand_id)
         if not demand:
             demand = self._demand_scaffold(demand_id, demand_kind, priority, test_mode)

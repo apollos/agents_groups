@@ -548,6 +548,10 @@ class Pipeline:
             },
             "structured_outputs": stats.structured,
             "top_events": stats.top_events[:5],
+            # Full event list for downstream coverage accounting: minor events (small buyback,
+            # inventory drift, tender shortlist) matter for variable coverage even when they
+            # don't make the top-5 display cut.
+            "all_events": stats.top_events,
             "top_relations": stats.top_relations[:5],
             "call_efficiency": {
                 "deduplicated_links": stats.deduplicated_links,

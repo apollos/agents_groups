@@ -14,6 +14,9 @@
 #   companies  —— md 第 3 章"核心研究名单"（demand_company_research_daily，每日深采）
 #                 md 第 4 章"上下游扩展观察名单"（demand_company_watch_daily，低预算观察）
 #   stocks     —— 纯行情跟踪（本文件默认为空，按需追加）
+# 另含（V0.7.3）：
+#   tracking_variables_by_industry —— 每条主线的默认跟踪变量，公司条目按 industry_id 继承
+#   demands 段的周/月/季 periodic_review —— 通过 copy_targets_from 复用 daily 目标清单
 #
 # 预算提示：全量注册后每日 MIC 任务 ≈ 8 行业 + ~85 核心公司 + ~55 观察公司。
 # 想分批启动：先注释掉 watch 部分，或注册后用
@@ -25,6 +28,35 @@ defaults:
   priority: normal
   test_mode: false
   pool_layer: watchlist
+
+# 每条研究主线的默认跟踪变量（V0.7.3）：没有显式 tracking_variables 的公司条目
+# 按其 industry_id 继承下表；行业条目按 target_id 继承。单个条目可写
+# tracking_variables: [...] 覆盖。变量口径来自跟踪建议 md §6。
+tracking_variables_by_industry:
+  industry_ai_semi:
+    [ai_server_orders, optical_module_shipments, customer_capex, contract_liabilities,
+     inventory, gross_margin, export_control, domestic_substitution]
+  industry_high_end_equipment:
+    [new_orders, tender_win, robot_shipments, delivery_schedule, gross_margin,
+     receivables, overseas_orders]
+  industry_power_grid:
+    [grid_investment, tender_win, uhv_progress, nuclear_approval, utilization_hours,
+     electricity_price, gross_margin]
+  industry_pharma:
+    [cde_acceptance, nmpa_approval, clinical_readout, license_out, medical_insurance_policy,
+     hospital_bidding, rd_pipeline_risk]
+  industry_dividend_soe:
+    [dividend_policy, payout_ratio, free_cash_flow, capex_cycle, coal_price_or_fuel_cost,
+     asset_injection, tariff_or_price_regulation]
+  industry_internet_consumer:
+    [revenue_growth, take_rate_or_margin, user_activity, overseas_expansion, buyback,
+     policy_risk, channel_inventory]
+  industry_resource_cycle:
+    [commodity_price, inventory_cycle, supply_discipline, capacity_change, freight_rate,
+     resource_acquisition, cost_curve_position]
+  industry_export_manufacturing:
+    [overseas_revenue_growth, export_orders, tariff_risk, fx_sensitivity, channel_inventory,
+     overseas_capacity, gross_margin]
 
 # 托管 Demand 的创建参数覆盖（仅首次创建该 Demand 时生效）
 demands:
@@ -58,6 +90,54 @@ demands:
         budget_profile: {max_queries: 4, max_links_to_read: 2, max_model_calls: 2}
       stock_data:
         enabled: true
+
+  # ------------------------------------------------------------------------
+  # 周/月/季研究池维护（V0.7.3）：copy_targets_from 复用上面 daily Demand 的目标清单，
+  # 不必重复列名单；cadence 未到期的 runtime tick 会直接跳过编译。
+  # ------------------------------------------------------------------------
+  demand_industry_weekly_review:
+    kind: industry
+    demand_type: periodic_review
+    cadence: weekly
+    cadence_anchor: fri
+    description: 行业周度景气复盘
+    copy_targets_from: [demand_industry_research_daily]
+    task_profile:
+      mic:
+        enabled: true
+        focus: [industry_supply_demand, price_cost_margin, policy, operating_update]
+        time_window: 7d
+        budget_profile: {max_queries: 12, max_links_to_read: 6, max_model_calls: 5}
+  demand_company_monthly_review:
+    kind: company
+    demand_type: periodic_review
+    cadence: monthly
+    cadence_anchor: 1
+    description: 核心公司月度研究卡更新
+    copy_targets_from: [demand_company_research_daily]
+    task_profile:
+      mic:
+        enabled: true
+        focus: [operating_update, financial_leading_indicator, capital_markets, risk]
+        time_window: 30d
+        budget_profile: {max_queries: 12, max_links_to_read: 6, max_model_calls: 5}
+      stock_data:
+        enabled: false
+  demand_earnings_season_review:
+    kind: company
+    demand_type: periodic_review
+    cadence: quarterly
+    cadence_anchor: 15
+    description: 季度财报季复盘（1/4/7/10 月 15 日）
+    copy_targets_from: [demand_company_research_daily]
+    task_profile:
+      mic:
+        enabled: true
+        focus: [financial_leading_indicator, operating_update, risk]
+        time_window: 90d
+        budget_profile: {max_queries: 15, max_links_to_read: 8, max_model_calls: 6}
+      stock_data:
+        enabled: false
 
 # ---------------------------------------------------------------------------
 # 一、8 条行业主线（md §1、§2；富档案已预置，按 target_id 引用）

@@ -12,6 +12,8 @@
 #   - 复盘任务走 MIC 深采（demand_type: periodic_review 在 Planner 中按 MIC 任务规划），
 #     用较大的 time_window 做回看。
 #   - 此文件只演示少量目标；正式使用时按研究池实际名单扩充 targets。
+#   - V0.7.3 起 examples/research_pool_full.yaml 已内置同名周/月/季 Demand（通过
+#     copy_targets_from 复用 daily 名单），跑过 full 注册后无需再跑本文件。
 # =============================================================================
 
 defaults:

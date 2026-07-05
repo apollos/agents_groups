@@ -54,7 +54,9 @@ class ResultPersister:
         target_id = target.get("target_id") or task.get("target_id")
         ticker = target.get("ticker")
         company_name = target.get("company_name")
-        top_events = report.get("top_events") or []
+        # Prefer the full event list (MIC >= V0.7.3); top_events keeps older reports working.
+        # Coverage accounting must not lose minor events that miss the top-5 display cut.
+        top_events = report.get("all_events") or report.get("top_events") or []
         with self.store.session() as con:
             retrieved_at = utc_now_iso()
             for ev in top_events:

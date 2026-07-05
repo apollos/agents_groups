@@ -4,6 +4,37 @@
 
 ---
 
+## V0.7.3 — 2026-07-05：研究池维护闭环（第三轮外部审阅甄别采纳）
+
+第三轮审阅共 11 项意见。经逐条核对代码，**P0-1（planner 重复规划 MIC）为误判**——审阅描述的"先 `_mic_tasks()` 再在 else 分支重复执行"结构与实际代码不符，实际代码自 V0.7 起就是单次规划 + 盘后条件追加 stock 任务，且有 V0.7.1 的 3 个验收测试在守护。本轮采纳其中确实成立的 4 项，其余继续暂缓。
+
+### 采纳并落地
+
+1. **planner 显式支持 `periodic_review`（审阅 P0-2，部分成立）**：此前 periodic_review 落在 planner 的 else 兜底分支，行为恰好正确（每目标一个 MIC 任务）但属于隐式依赖。现将其显式列入 `daily_collection / on_demand_research / coverage_gap_followup / periodic_review` 分支并加注释；新增验收测试（每 collect_mic 目标 1 个 MIC 任务、collect_mic=false 跳过、review 即使盘后也不规划 stock 任务）。
+2. **每条主线默认跟踪变量（审阅 P1-1）**：batch spec 新增 `tracking_variables_by_industry` 段——公司条目缺省时按其 `industry_id` 继承该主线变量集，行业条目按 `target_id` 继承，单条目可显式覆盖。`research_pool_full.yaml` 已填入 8 条主线的定制变量集（AI算力：订单/光模块出货/合同负债/出口管制…；创新药：CDE受理/NMPA批准/license-out…；高股息：分红政策/派息率/FCF…等），175 家公司全部获得变量。
+3. **周/月/季复盘并入 full YAML + `copy_targets_from`（审阅 P1-4）**：batch `demands:` 段支持 `copy_targets_from: [源demand]`，复盘 Demand 直接复用 daily Demand 的目标清单而不必重复百余条名单。`research_pool_full.yaml` 内置 `demand_industry_weekly_review`（周五）/ `demand_company_monthly_review`（每月1日）/ `demand_earnings_season_review`（1/4/7/10月15日）三个 periodic_review。全链路冒烟验证：一次 batch 注册 6 个 Demand（复盘各 108/108/8 目标），runtime tick 周四不编译周报、周五编译，非 1 日不编译月报。
+4. **全量事件落库（审阅 P2-1）**：MIC summary 新增 `all_events`（完整事件列表），`top_events` 仍为展示用 Top5；Agent persister 与质量闸门优先读 `all_events`（老版本 MIC 输出自动回退 `top_events`）。小额回购、库存边际变化、中标候选人公示等未进 Top5 的事件不再丢失，变量覆盖统计有了完整底数。
+
+### 驳回 / 暂缓（附理由）
+
+- **P0-1 planner 重复规划 MIC**：不成立。审阅引用的代码结构（`tasks.extend(_mic_tasks(...))` 后 else 分支再次 `_mic_tasks`）在当前代码中不存在；`plan()` 对上述 demand_type 只调用一次 `_mic_tasks`，V0.7.1 的验收测试（盘前/盘后/on_demand/coverage_gap 各 1 MIC/目标）持续通过。审阅要求的第 5 条验收（collect_mic=false 不生成 MIC）本轮随 periodic_review 测试一并补上。
+- **P1-2 事件→tracking_variable 归属**：暂缓。需要 MIC 模型输出合同增加变量分类（或引入关键词映射，误标率高会污染覆盖矩阵）。变量清单本轮已入库（target 级），待 MIC 侧支持逐事件归属后再建关联表（审阅方案 B）。
+- **P1-3 港股通结构化数据**：暂缓（连续第三轮说明）。需要新的外部行情/资金数据源适配器，当前 stock_data_collector 仅覆盖 A 股；文本层面 hk_connect 查询族已在跟踪。
+- **P1-5 出海制造独立公司层**：不改。当前模型一个公司归属一条主线（industry_id 单值）；美的/海尔/三一/中车按跟踪建议 md 原文归属 3.2/3.6 主线。把它们改挂出海制造线是研究口径决策，改 YAML 的 `industry_id` 重跑 batch 即可生效，留给使用者定夺。
+- **P2-2/P2-3 效果面板与 golden set**、**P2-4 宏观/指数辅助目标**：继续暂缓，结论同前两轮（先积累真实数据；宏观主题可用 industry 型 MIC 档案近似注册，结构化指数/汇率数据需新适配器）。
+
+### 验证
+
+- Agent 测试 80 个全部通过（新增 4 个：periodic_review 规划、tracking_variables_by_industry 继承与显式覆盖、copy_targets_from 复制与缺源告警、all_events 优先落库）。
+- MIC 测试 73 个全部通过（`all_events` 为新增字段，`top_events` 不变）。
+- 端到端冒烟（临时库 + 真实 MIC 档案）：full YAML 一次注册 6 Demand / 183 MIC 档案 / 175 公司全带变量；周报仅周五编译、月报非 1 日不编译。
+
+### 升级说明
+
+- 已跑过旧版 batch 的库直接重跑 `request batch --file examples/research_pool_full.yaml` 即可补上变量与复盘 Demand（幂等；若需更新已有 Demand 的预算/优先级记得加 `--update-demand-config`）。
+
+---
+
 ## V0.7.2 — 2026-07-05：研究效果结构化（第二轮外部审阅采纳）
 
 第二轮审阅（《修改建议与验证方案》）确认 P0 三项（planner 去重、MIC keepalive/超时、dashboard 本地交易日）已在 V0.7.1 落地，本次采纳其余仍有缺口的建议。总体判断：审阅 P0 中唯一未完成的是**交易日历为空**；P1 采纳研究元数据与证据字段的低成本部分；P2（完整效果面板、golden set）继续暂缓。

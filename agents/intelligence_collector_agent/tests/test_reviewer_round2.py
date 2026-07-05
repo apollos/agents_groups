@@ -167,6 +167,101 @@ def test_compiler_skips_weekly_demand_until_due(tmp_path: Path):
     assert len(created) == 2  # ticket + message on the due Friday
 
 
+def test_planner_periodic_review_creates_one_mic_per_target_no_stock():
+    from agent_trade_intel.planner import TaskGraphPlanner
+
+    demand = {
+        "demand_id": "demand_company_monthly_review",
+        "demand_type": "periodic_review",
+        "targets": [
+            {"target_type": "company", "target_id": "company_002371", "ticker": "002371.SZ", "collect_mic": True, "collect_stock": True},
+            {"target_type": "industry", "target_id": "industry_ai_semi", "collect_mic": True},
+            {"target_type": "ticker", "target_id": "ticker_600519.SH", "ticker": "600519.SH", "collect_mic": False},
+        ],
+    }
+    tasks = TaskGraphPlanner({"runtime": {"timezone": "Asia/Shanghai"}, "cadence": {}, "schedule": {}}).plan(
+        demand, request_ticket_id="t1", as_of="2026-08-03T16:30:00+08:00", market_phase="post_market"
+    )
+    mic = [t["target"]["target_id"] for t in tasks if t["task_type"] == "mic_deep_collect"]
+    assert sorted(mic) == ["company_002371", "industry_ai_semi"]  # one each, collect_mic=false skipped
+    assert not [t for t in tasks if t["task_type"] == "post_close_stock_refresh"]  # reviews never plan stock refresh
+
+
+def test_batch_inherits_tracking_variables_by_industry(tmp_path: Path):
+    center, _store_ = _center(tmp_path)
+    spec = {
+        "tracking_variables_by_industry": {
+            "industry_ai_semi": ["orders", "gross_margin", "export_control"],
+        },
+        "industries": [{"name": "AI算力", "target_id": "industry_ai_semi"}],
+        "companies": [
+            {"name": "北方华创", "ticker": "002371.SZ", "industry_id": "industry_ai_semi"},
+            # explicit tracking_variables win over the per-industry default
+            {"name": "中际旭创", "ticker": "300308.SZ", "industry_id": "industry_ai_semi", "tracking_variables": ["optical_orders"]},
+            {"name": "长江电力", "ticker": "600900.SH", "industry_id": "industry_dividend_soe"},
+        ],
+    }
+    center.request_batch(spec)
+    industry_targets = {t["target_id"]: t for t in center.registry.get("demand_industry_research_daily")["targets"]}
+    assert industry_targets["industry_ai_semi"]["tracking_variables"] == ["orders", "gross_margin", "export_control"]
+    targets = {t["target_id"]: t for t in center.registry.get("demand_company_research_daily")["targets"]}
+    assert targets["company_002371"]["tracking_variables"] == ["orders", "gross_margin", "export_control"]
+    assert targets["company_300308"]["tracking_variables"] == ["optical_orders"]
+    assert "tracking_variables" not in targets["company_600900"]  # no default for its line in this spec
+
+
+def test_batch_copy_targets_from_builds_periodic_review(tmp_path: Path):
+    center, _store_ = _center(tmp_path)
+    spec = {
+        "demands": {
+            "demand_company_monthly_review": {
+                "kind": "company",
+                "demand_type": "periodic_review",
+                "cadence": "monthly",
+                "cadence_anchor": 1,
+                "copy_targets_from": ["demand_company_research_daily"],
+                "task_profile": {"mic": {"enabled": True, "time_window": "30d"}},
+            }
+        },
+        "companies": [
+            {"name": "北方华创", "ticker": "002371.SZ", "industry_id": "industry_ai_semi"},
+            {"name": "腾讯控股", "ticker": "0700.HK", "industry_id": "industry_internet_consumer"},
+        ],
+    }
+    out = center.request_batch(spec)
+    review = center.registry.get("demand_company_monthly_review")
+    assert review["demand_type"] == "periodic_review"
+    assert review["cadence"] == "monthly"
+    assert "copy_targets_from" not in review  # batch directive, not demand payload
+    copied_ids = sorted(t["target_id"] for t in review["targets"])
+    assert copied_ids == ["company_002371", "company_hk_00700"]
+    assert not [w for w in out["warnings"] if "copy_targets_from" in w]
+    # missing source produces a warning instead of failing the batch
+    out2 = center.request_batch(
+        {"demands": {"demand_x": {"kind": "company", "copy_targets_from": ["demand_missing"]}}}
+    )
+    assert any("copy_targets_from" in w for w in out2["warnings"])
+
+
+def test_persister_prefers_all_events_over_top_events(tmp_path: Path):
+    store = _store(tmp_path)
+    events = [
+        {"summary": f"事件{i}", "event_type": "operating_update", "event_date": "2026-07-03", "confidence": 0.5}
+        for i in range(7)
+    ]
+    result = ToolResult(tool_name="market_intelligence_collector", operation="collect_intelligence", request={})
+    result.status = "success"
+    result.result = {
+        "search_run_id": "run_x",
+        "summary": {"links_read": 3, "model_calls": 2},
+        "top_events": events[:5],
+        "all_events": events,
+    }
+    task = {"task_id": "t1", "target": {"target_id": "company_002371", "ticker": "002371.SZ"}, "idempotency_key": "k1"}
+    saved = ResultPersister(store).save_mic_structures(task=task, result=result.finish())
+    assert saved["events"] == 7  # coverage accounting keeps events beyond the top-5 display cut
+
+
 def test_batch_registers_periodic_review_demand(tmp_path: Path):
     center, _store_ = _center(tmp_path)
     spec = {

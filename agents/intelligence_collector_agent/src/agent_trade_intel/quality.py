@@ -98,7 +98,7 @@ class QualityGate:
         gaps show up as P2 data-quality issues instead of being silently accepted.
         """
         issues: list[dict[str, Any]] = []
-        events = report.get("top_events") or []
+        events = report.get("all_events") or report.get("top_events") or []
         priority = str(context.get("priority") or "normal")
         if not events and priority in {"high", "urgent"} and bool(self.mic_rules.get("flag_high_priority_zero_events", True)):
             issues.append(
