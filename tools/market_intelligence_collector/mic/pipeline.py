@@ -305,6 +305,7 @@ class Pipeline:
                 "source_link_id": link_id, "title": read.title or hit.title,
                 "url": hit.url, "source_name": hit.domain, "source_type": source_type,
                 "publish_time": read.publish_time or hit.publish_time_guess,
+                "query_family": hit.query_family,
             }
             materiality = tri.read_priority
             link_result = call_planner.run_for_link(
@@ -491,6 +492,7 @@ class Pipeline:
                     "source_type": source_metadata.get("source_type"),
                     "published_at": source_metadata.get("publish_time"),
                     "title": source_metadata.get("title"),
+                    "query_family": source_metadata.get("query_family"),
                 }
             stats.top_events.append(entry)
         for r in bundle.relations:

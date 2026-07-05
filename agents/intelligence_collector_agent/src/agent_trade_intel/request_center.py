@@ -172,6 +172,17 @@ def _is_a_share(ticker: str | None) -> bool:
     return bool(ticker and _A_SHARE_TICKER.match(ticker))
 
 
+def normalize_ticker(ticker: str | None) -> str | None:
+    """Canonical ticker form: uppercase suffix, HK codes zero-padded to 5 digits (00700.HK)."""
+    if not ticker:
+        return ticker
+    text = str(ticker).strip().upper()
+    if _HK_TICKER.match(text):
+        code, suffix = text.split(".")
+        return f"{code.zfill(5)}.{suffix}"
+    return text
+
+
 def _as_list(value: Any) -> list[str] | None:
     """Accept YAML lists or comma-separated strings."""
     if value is None:
@@ -390,7 +401,18 @@ class RequestCenter:
                     "status": (demand.get("_registry") or {}).get("status"),
                     "version": demand.get("current_version"),
                     "targets": [
-                        {k: t.get(k) for k in ("target_type", "target_id", "ticker", "company_name", "industry_name")}
+                        {
+                            k: t.get(k)
+                            for k in (
+                                "target_type",
+                                "target_id",
+                                "ticker",
+                                "company_name",
+                                "industry_name",
+                                "industry_id",
+                                "tracking_variables",
+                            )
+                        }
                         for t in (demand.get("targets") or [])
                     ],
                 }
@@ -439,19 +461,22 @@ class RequestCenter:
                 "representative_companies": _as_list(item.get("companies")),
             }
         )
-        target = {
-            "target_type": "industry",
-            "target_id": tid,
-            "industry_name": name,
-            "collect_mic": True,
-        }
+        target = _clean(
+            {
+                "target_type": "industry",
+                "target_id": tid,
+                "industry_name": name,
+                "tracking_variables": _as_list(item.get("tracking_variables")),
+                "collect_mic": True,
+            }
+        )
         return tid, profile, target
 
     def _company_entry(self, item: dict[str, Any]) -> tuple[str, dict[str, Any], dict[str, Any], dict[str, Any] | None]:
         name = item.get("name")
         if not name:
             raise ValueError("company entry needs a name")
-        ticker = item.get("ticker")
+        ticker = normalize_ticker(item.get("ticker"))
         tid = _company_target_id(name, ticker, item.get("target_id"))
         alias_list = _as_list(item.get("aliases")) or []
         if name not in alias_list:
@@ -479,6 +504,10 @@ class RequestCenter:
                 "target_id": tid,
                 "ticker": ticker,
                 "company_name": name,
+                # Research-pool metadata: which industry line the company belongs to and which
+                # research variables it should be tracked on (used by reports/analyst agent).
+                "industry_id": item.get("industry_id"),
+                "tracking_variables": _as_list(item.get("tracking_variables")),
                 "collect_mic": True,
                 # stock_data_collector only covers A-share tickers.
                 "collect_stock": _is_a_share(ticker),
@@ -492,7 +521,7 @@ class RequestCenter:
         return tid, profile, target, pool_op
 
     def _stock_entry(self, item: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
-        ticker = item.get("ticker")
+        ticker = normalize_ticker(item.get("ticker"))
         if not _is_a_share(ticker):
             raise ValueError(f"stock requests need an A-share ticker like 600519.SH, got: {ticker}")
         company_name = item.get("company_name")

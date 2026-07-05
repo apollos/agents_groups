@@ -9,8 +9,34 @@ from .ids import make_idempotency_key, new_id, stable_hash
 from .logging_setup import get_logger
 from .queue import SQLiteMessageQueue
 from .tickets import TicketRepository, priority_to_int
+from .time_utils import parse_dt
 
 logger = get_logger("demand")
+
+_WEEKDAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+
+
+def cadence_due(demand: dict[str, Any], as_of: str) -> bool:
+    """Whether a demand with cadence daily/weekly/monthly/quarterly is due on the local date.
+
+    daily (or absent) is always due; weekly is due on cadence_anchor weekday (default Friday);
+    monthly/quarterly on cadence_anchor day-of-month (default 1st; quarterly in Jan/Apr/Jul/Oct).
+    Task-level idempotency already dedupes within the due day, so repeated ticks are safe.
+    """
+    cadence = str(demand.get("cadence") or "daily").lower()
+    if cadence in {"", "daily", "intraday"}:
+        return True
+    dt = parse_dt(as_of, demand.get("timezone") or "Asia/Shanghai")
+    anchor = demand.get("cadence_anchor")
+    if cadence == "weekly":
+        weekday = _WEEKDAYS.get(str(anchor).lower()[:3], 4) if anchor else 4
+        return dt.weekday() == weekday
+    if cadence == "monthly":
+        return dt.day == (int(anchor) if anchor else 1)
+    if cadence == "quarterly":
+        return dt.month in {1, 4, 7, 10} and dt.day == (int(anchor) if anchor else 1)
+    logger.warning("unknown cadence %r on demand %s; treating as daily", cadence, demand.get("demand_id"))
+    return True
 
 REQUIRED_DEMAND_FIELDS = ["schema_version", "demand_id", "demand_type", "source_type", "status"]
 
@@ -248,6 +274,9 @@ class DemandCompiler:
         schedule_window = demand.get("schedule_window") or {}
         if market_phase == "non_trading_day" and not bool(schedule_window.get("allow_non_trading_day", False)):
             logger.info("skip demand %s at non-trading day phase", demand_id)
+            return []
+        if not cadence_due(demand, as_of):
+            logger.info("skip demand %s: cadence %s not due on %s", demand_id, demand.get("cadence"), as_of[:10])
             return []
         if demand.get("demand_type") == "intraday_monitoring" and market_phase in {"lunch_break", "pre_market", "post_market", "off_hours"}:
             # The request may still be compiled for black-swan scanning by planner when desired;

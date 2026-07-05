@@ -1,0 +1,78 @@
+# =============================================================================
+# 周度 / 月度 / 季度复盘 Demand 注册示例
+#
+# 用法：
+#   intel-agent --config config/intelligence_collector.yaml request batch \
+#     --file examples/periodic_reviews.yaml
+#
+# 说明：
+#   - cadence: weekly|monthly|quarterly 由 Runtime Controller 在编译 Demand 时判定
+#     是否到期（weekly 默认周五，可用 cadence_anchor 改成 mon..sun；monthly/quarterly
+#     默认每月/每季首日，可用 cadence_anchor 指定几号）。
+#   - 复盘任务走 MIC 深采（demand_type: periodic_review 在 Planner 中按 MIC 任务规划），
+#     用较大的 time_window 做回看。
+#   - 此文件只演示少量目标；正式使用时按研究池实际名单扩充 targets。
+# =============================================================================
+
+defaults:
+  priority: normal
+  test_mode: false
+
+demands:
+  demand_industry_weekly_review:
+    kind: industry
+    demand_type: periodic_review
+    cadence: weekly
+    cadence_anchor: fri
+    description: 行业周度景气复盘
+    task_profile:
+      mic:
+        enabled: true
+        focus: [industry_supply_demand, price_cost_margin, policy, operating_update]
+        time_window: 7d
+        budget_profile: {max_queries: 12, max_links_to_read: 6, max_model_calls: 5}
+
+  demand_company_monthly_review:
+    kind: company
+    demand_type: periodic_review
+    cadence: monthly
+    cadence_anchor: 1
+    description: 核心公司月度研究卡更新
+    task_profile:
+      mic:
+        enabled: true
+        focus: [operating_update, financial_leading_indicator, capital_markets, risk]
+        time_window: 30d
+        budget_profile: {max_queries: 12, max_links_to_read: 6, max_model_calls: 5}
+      stock_data:
+        enabled: false
+
+  demand_earnings_season_review:
+    kind: company
+    demand_type: periodic_review
+    cadence: quarterly
+    cadence_anchor: 15
+    description: 季度财报季复盘
+    task_profile:
+      mic:
+        enabled: true
+        focus: [financial_leading_indicator, operating_update, risk]
+        time_window: 90d
+        budget_profile: {max_queries: 15, max_links_to_read: 8, max_model_calls: 6}
+      stock_data:
+        enabled: false
+
+industries:
+  - {name: AI算力, target_id: industry_ai_semi, demand_id: demand_industry_weekly_review}
+  - {name: 电力系统, target_id: industry_power_grid, demand_id: demand_industry_weekly_review}
+
+companies:
+  - {name: 中际旭创, ticker: 300308.SZ, industry_id: industry_ai_semi,
+     demand_id: demand_company_monthly_review,
+     tracking_variables: "orders,capacity_expansion,gross_margin,inventory"}
+  - {name: 国电南瑞, ticker: 600406.SH, industry_id: industry_power_grid,
+     demand_id: demand_company_monthly_review,
+     tracking_variables: "grid_investment,tender_win,margin"}
+  - {name: 中际旭创, ticker: 300308.SZ, industry_id: industry_ai_semi,
+     demand_id: demand_earnings_season_review,
+     tracking_variables: "revenue_growth,gross_margin,inventory,guidance"}

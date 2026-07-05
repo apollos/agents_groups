@@ -1,4 +1,4 @@
-# 情报收集员 Agent 代码包 V0.7.1
+# 情报收集员 Agent 代码包 V0.7.2
 
 这是 Agent交易公司多 Agent A 股交易辅助系统中的 **情报收集员 Agent**。它面向 OpenClaw 多 Agent 运行环境设计，负责 Demand → Ticket → Message → 工具调用 → 质量闸门 → 事件/特征/日报的采集闭环。
 
@@ -6,7 +6,15 @@
 
 完整版本历史见 [ChangeLog.md](ChangeLog.md)。
 
-## 0. V0.7.1 关键变更（真实运行前加固）
+## 0. V0.7.2 关键变更（研究效果结构化，第二轮审阅采纳）
+
+1. **2026 年 A 股交易日历落地**：`market_calendar.holidays` 按沪深交易所 2026 年休市安排填入 19 个工作日休市日（春节/国庆等），`calendar validate --year 2026` 返回 ok；每年 12 月需追加次年条目。
+2. **研究池目标元数据**：`request industry|company`（及 batch 条目）支持 `industry_id` 与 `tracking_variables`，存入 Demand target 供日报/分析员按主线与变量聚合；`examples/research_pool_full.yaml` 175 家公司已全部打上 `industry_id`，40 个港股代码统一补零为 5 位（入库 ticker 也归一为 `00700.HK` 形式）。
+3. **周/月/季复盘 Demand**：Demand 支持 `cadence: weekly|monthly|quarterly` + `cadence_anchor`（weekly 默认周五），未到期的 runtime tick 直接跳过编译。示例：`examples/periodic_reviews.yaml`（周度行业景气复盘 / 月度公司研究卡 / 季度财报季复盘）。
+4. **query_family 全链路（schema v4，老库自动迁移）**：MIC `top_events` 带 `source.query_family`，落库到 `structured_events.query_family`；dashboard 产出面板新增今日事件按 source_type / query_family 的统计。
+5. **质量规则**：高置信度事件缺 `published_at` → P2 降级（`quality.mic.require_published_at_for_high_confidence`，阈值 0.75 可配）。
+
+## 0.0.0 V0.7.1 关键变更（真实运行前加固）
 
 采纳外部代码审阅意见，消除 full pool 真实启动的工程风险（详情与采纳/暂缓清单见 ChangeLog）：
 
@@ -425,8 +433,11 @@ intel-agent --config $CFG request industry --name "AI算力" \
 intel-agent --config $CFG request company --name 北方华创 --ticker 002371.SZ \
   --products "刻蚀设备,薄膜沉积设备" --competitors "中微公司,拓荆科技"
 
-# 港股公司：自动跳过 stock_data_collector（仅 MIC 采集）
-intel-agent --config $CFG request company --name 腾讯控股 --ticker 0700.HK
+# 港股公司：自动跳过 stock_data_collector（仅 MIC 采集）；ticker 自动补零归一为 00700.HK。
+# V0.7.2：可附带研究主线与跟踪变量，供日报/分析员按主线与变量聚合。
+intel-agent --config $CFG request company --name 腾讯控股 --ticker 0700.HK \
+  --industry-id industry_internet_consumer \
+  --tracking-variables "southbound_holding,buyback,revenue_growth,margin"
 
 # 只要股票日线数据（不做 MIC 情报，盘后刷新，加入 demand_stock_eod_daily + 股票池）
 intel-agent --config $CFG request stock --ticker 600519.SH --company-name 贵州茅台
@@ -439,6 +450,10 @@ intel-agent --config $CFG request batch --file examples/research_pool_full.yaml
 # 重跑时如果修改了 YAML 中 demands: 段的预算/优先级/task_profile，默认不会应用到已存在的
 # Demand（输出 warning 提示）；需要生效时显式加 --update-demand-config：
 intel-agent --config $CFG request batch --file examples/research_pool_full.yaml --update-demand-config
+
+# 周度/月度/季度复盘 Demand（V0.7.2）：demands: 段设 cadence: weekly|monthly|quarterly，
+# runtime tick 只在到期日编译（weekly 默认周五，可用 cadence_anchor 调整）。
+intel-agent --config $CFG request batch --file examples/periodic_reviews.yaml
 
 # 观察层（上下游扩展名单）想暂停/恢复：
 intel-agent --config $CFG demand suspend --demand-id demand_company_watch_daily

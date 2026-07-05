@@ -4,6 +4,53 @@
 
 ---
 
+## V0.7.2 — 2026-07-05：研究效果结构化（第二轮外部审阅采纳）
+
+第二轮审阅（《修改建议与验证方案》）确认 P0 三项（planner 去重、MIC keepalive/超时、dashboard 本地交易日）已在 V0.7.1 落地，本次采纳其余仍有缺口的建议。总体判断：审阅 P0 中唯一未完成的是**交易日历为空**；P1 采纳研究元数据与证据字段的低成本部分；P2（完整效果面板、golden set）继续暂缓。
+
+### P0：2026 年 A 股交易日历落地（审阅 2.4）
+
+1. `config/intelligence_collector.yaml` 的 `market_calendar.holidays` 按上交所/深交所《关于2026年部分节假日休市安排的通知》（上证公告〔2025〕45号）填入 2026 全年 19 个工作日休市日（元旦/春节/清明/劳动节/端午/中秋/国庆）。A 股周末一律休市（含调休上班日 5/9、9/20、10/10），`extra_trading_days` 留空。`calendar validate --year 2026` 现在返回 ok。
+   - 港股假期与 A 股不同，但 stock_data_collector 仅覆盖 A 股、MIC 采集不依赖交易日，单一日历暂够用；分市场日历继续暂缓。
+
+### P1：研究池目标元数据（审阅 3.1 / 4.5）
+
+2. **target 研究元数据**：`request industry|company` 与 batch 条目支持 `industry_id`（公司归属的研究主线）与 `tracking_variables`（跟踪变量清单），原样存入 Demand target，`request status` 一并展示，供日报/分析员 Agent 按主线与变量聚合。CLI 对应新增 `--industry-id` / `--tracking-variables`。
+3. **`examples/research_pool_full.yaml` 全量打标**：175 家公司全部补上 `industry_id`（按 §3/§4 小节归属 8 条主线）；40 个港股代码统一补零为 5 位（`00700.HK`）。`request_center` 新增 `normalize_ticker`，入库 ticker 也统一为 5 位（此前只有 target_id 归一）。
+   - 出海制造主线（`industry_export_manufacturing`）目前只有行业档案、无独立公司层；美的/海尔/三一/中车等按 md 原文归在 3.2/3.6 主线下。工具已支持重新打标（改 YAML 的 `industry_id` 重跑 batch 即可），名单取舍留给研究决策。
+
+### P1：周/月/季复盘 Demand（审阅 4.3）
+
+4. **cadence 编译门槛**（`demand.py` 新增 `cadence_due`）：Demand 支持 `cadence: weekly|monthly|quarterly` + `cadence_anchor`（weekly 默认周五，可写 mon..sun；monthly/quarterly 默认 1 号，可写几号；quarterly 限 1/4/7/10 月）。Runtime tick 编译时未到期直接跳过；到期日内任务级幂等键仍按天去重，重复 tick 安全。
+5. **示例 `examples/periodic_reviews.yaml`**：演示用 `request batch` 注册周度行业景气复盘、月度公司研究卡更新、季度财报季复盘三类 `periodic_review` Demand（走 MIC 深采，7d/30d/90d 回看窗口）。
+
+### P1：事件效果字段与质量规则（审阅 3.2 / 3.3）
+
+6. **query_family 全链路**（schema v4 迁移，老库自动加列）：MIC 搜索命中本就携带 `query_family`，现在透传进 `top_events[].source.query_family`（`mic/pipeline.py`），Agent 落库到 `structured_events.query_family`。可回答"哪些查询族真正产出事件"。
+7. **质量规则**（`quality.mic.require_published_at_for_high_confidence`，默认开，阈值 `high_confidence_threshold: 0.75`）：高置信度事件缺 `published_at`（新鲜度不可判）→ P2 accept_degraded。
+8. **dashboard 来源/查询族聚合**：产出面板新增"今日事件按 source_type / query_family"统计 chips（审阅 Panel 3 / Panel 4 的轻量版）。
+
+### 暂缓项（继续记录在案）
+
+- `tracking_variable` 逐事件归属、`source_pack` 逐事件回填、事件级去重键（canonical_event_key）：需要 MIC 输出合同更大改造或模型分类，待字段积累真实数据后评估。
+- 港股通结构化跟踪层（南向持股/AH 溢价/回购金额）：需新外部数据源，同 V0.7.1 结论。
+- 公司研究卡 scaffold、market_context/macro 目标：属分析员 Agent 输入结构，宏观目标当前可用 industry 型 MIC 档案近似注册。
+- dashboard 完整效果面板（Target Coverage Matrix 等 7 面板）与 golden set 评估：按审阅建议在小样本真实运行积累数据后排期。
+
+### 验证
+
+- Agent 测试 76 个全部通过（新增 10 个 `tests/test_reviewer_round2.py`：2026 日历、HK 补零、target 元数据、cadence 到期判定与编译跳过、batch 注册 periodic_review、query_family 落库、v4 迁移、published_at 质量规则）。
+- MIC 测试 73 个全部通过（source.query_family 为新增可选字段）。
+- CLI 冒烟：`calendar validate --year 2026` 返回 ok（19 个休市日）。
+
+### 升级说明
+
+- 老库自动迁移（v4：structured_events 加 query_family 列），无需手工操作。
+- 已注册的 4 位 HK ticker Demand target 会在下次 `request batch` 重跑时按 target_id 幂等更新为 5 位 ticker。
+- 每年 12 月交易所公布次年休市安排后，需向 `market_calendar.holidays` 追加次年条目（`calendar validate` 会在次年 1 月起告警）。
+
+---
+
 ## V0.7.1 — 2026-07-04：真实运行前加固（外部代码审阅采纳）
 
 本次改动来自一份针对 full pool 真实启动风险的外部代码审阅。审阅共列 11 项建议，采纳情况：P0 两项全部落地（其一在审阅前已修复，本次补齐验收测试）；P1 六项落地（其中两项按现状裁剪范围）；P2 两项（港股结构化数据源、golden set 评估）与 dashboard 效果面板全量版**暂缓**，待第一轮真实小样本跑通后再排期。

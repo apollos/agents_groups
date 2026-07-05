@@ -118,6 +118,22 @@ class QualityGate:
                         "detail": f"all {len(events)} events lack a source URL; evidence cannot be verified",
                     }
                 )
+        if events and bool(self.mic_rules.get("require_published_at_for_high_confidence", True)):
+            threshold = float(self.mic_rules.get("high_confidence_threshold", 0.75))
+            stale = [
+                ev
+                for ev in events
+                if (ev.get("confidence") or 0) >= threshold
+                and not ((ev.get("source") or {}).get("published_at") or ev.get("published_at"))
+            ]
+            if stale:
+                issues.append(
+                    {
+                        "issue_type": "high_confidence_missing_published_at",
+                        "severity": "medium",
+                        "detail": f"{len(stale)} high-confidence event(s) lack published_at; freshness cannot be judged",
+                    }
+                )
         if events and bool(self.mic_rules.get("flag_low_authority_sources", True)):
             weak = {"media", "social", "unknown", None, ""}
             all_weak = all(((ev.get("source") or {}).get("source_type") or ev.get("source_type")) in weak for ev in events)

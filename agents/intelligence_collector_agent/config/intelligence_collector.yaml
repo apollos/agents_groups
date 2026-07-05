@@ -47,8 +47,37 @@ circuit_breaker:
 
 # Trading calendar. Weekdays are trading days unless listed in holidays; weekend make-up
 # sessions go into extra_trading_days. Keep in sync with the exchange calendar each year.
+# 2026 entries follow 上交所/深交所《关于2026年部分节假日休市安排的通知》(上证公告〔2025〕45号).
+# A股周末一律休市（含国家调休上班日 5/9、9/20、10/10），故 extra_trading_days 留空。
+# 注意：这是 A 股日历；港股假期不同（stock_data_collector 仅覆盖 A 股，MIC 采集不依赖交易日）。
 market_calendar:
-  holidays: []
+  holidays:
+    # 元旦 1/1-1/3
+    - "2026-01-01"
+    - "2026-01-02"
+    # 春节 2/15-2/23
+    - "2026-02-16"
+    - "2026-02-17"
+    - "2026-02-18"
+    - "2026-02-19"
+    - "2026-02-20"
+    - "2026-02-23"
+    # 清明 4/4-4/6
+    - "2026-04-06"
+    # 劳动节 5/1-5/5
+    - "2026-05-01"
+    - "2026-05-04"
+    - "2026-05-05"
+    # 端午 6/19-6/21
+    - "2026-06-19"
+    # 中秋 9/25-9/27
+    - "2026-09-25"
+    # 国庆 10/1-10/7
+    - "2026-10-01"
+    - "2026-10-02"
+    - "2026-10-05"
+    - "2026-10-06"
+    - "2026-10-07"
   extra_trading_days: []
 
 schedule:
@@ -133,6 +162,9 @@ quality:
     flag_high_priority_zero_events: true
     # Events whose sources cannot be traced to a URL are unverifiable evidence.
     require_source_url: true
+    # High-confidence events must carry published_at, otherwise freshness can't be judged.
+    require_published_at_for_high_confidence: true
+    high_confidence_threshold: 0.75
     # All-media/social/unknown sourcing without official corroboration gets flagged.
     flag_low_authority_sources: true
 

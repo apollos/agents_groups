@@ -67,6 +67,7 @@ class ResultPersister:
                 source_domain = source.get("domain") or ev.get("source_domain")
                 source_type = source.get("source_type") or ev.get("source_type")
                 published_at = source.get("published_at") or ev.get("published_at")
+                query_family = source.get("query_family") or ev.get("query_family")
                 idem = make_idempotency_key("event", target_id or ticker, event_type, event_date or "unknown", stable_hash(summary, 12))
                 existing = con.execute("SELECT event_id FROM structured_events WHERE idempotency_key=?", (idem,)).fetchone()
                 if existing:
@@ -76,9 +77,9 @@ class ResultPersister:
                     INSERT INTO structured_events(
                       event_id, target_id, ticker, company_name, event_type, event_date,
                       summary_cn, impact_json, source_refs_json,
-                      source_url, source_domain, source_type, published_at, retrieved_at,
+                      source_url, source_domain, source_type, published_at, retrieved_at, query_family,
                       confidence, data_quality, source_run_id, payload_json, idempotency_key
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         new_id("event"),
@@ -95,6 +96,7 @@ class ResultPersister:
                         source_type,
                         published_at,
                         retrieved_at,
+                        query_family,
                         ev.get("confidence"),
                         ev.get("data_quality"),
                         report.get("search_run_id"),

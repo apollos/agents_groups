@@ -187,6 +187,16 @@ class DashboardService:
             events_today = con.execute(
                 "SELECT COUNT(*) c FROM structured_events WHERE created_at >= ? AND created_at < ?", day_range
             ).fetchone()
+            events_by_source = con.execute(
+                "SELECT COALESCE(source_type, 'unknown') source_type, COUNT(*) c FROM structured_events "
+                "WHERE created_at >= ? AND created_at < ? GROUP BY source_type ORDER BY c DESC",
+                day_range,
+            ).fetchall()
+            events_by_family = con.execute(
+                "SELECT COALESCE(query_family, 'unknown') query_family, COUNT(*) c FROM structured_events "
+                "WHERE created_at >= ? AND created_at < ? GROUP BY query_family ORDER BY c DESC",
+                day_range,
+            ).fetchall()
             recent_events = con.execute(
                 "SELECT event_id, ticker, event_type, event_date, summary_cn, confidence, data_quality, "
                 "source_type, source_url, published_at, created_at "
@@ -218,6 +228,8 @@ class DashboardService:
             "runs_today_by_tool_status": [dict(r) for r in runs_today],
             "recent_runs": [dict(r) for r in recent_runs],
             "events_created_today": int(events_today["c"]) if events_today else 0,
+            "events_today_by_source_type": [dict(r) for r in events_by_source],
+            "events_today_by_query_family": [dict(r) for r in events_by_family],
             "recent_events": [dict(r) for r in recent_events],
             "features_created_today": int(features_today["c"]) if features_today else 0,
             "recent_features": [dict(r) for r in recent_features],
@@ -480,7 +492,10 @@ function render(d){
 
   // outputs
   $("outputHint").textContent = `今日事件 ${d.events_created_today||0} · 特征 ${d.features_created_today||0}`;
-  $("outputBody").innerHTML = `<div class="twocol" style="margin-top:12px">
+  const srcChips = (d.events_today_by_source_type||[]).map(s=>`<span class="chip">来源 ${esc(s.source_type)} <b>${s.c}</b></span>`).join("");
+  const famChips = (d.events_today_by_query_family||[]).map(s=>`<span class="chip">查询族 ${esc(short(s.query_family,22))} <b>${s.c}</b></span>`).join("");
+  $("outputBody").innerHTML = `<div class="chips" style="margin:12px 0 0">${srcChips+famChips||'<span class="small">今日暂无事件来源统计</span>'}</div>`+
+    `<div class="twocol" style="margin-top:12px">
     <div><h3 class="small">最新结构化事件</h3>${table(["时间","标的","类型","来源","置信度","摘要"],(d.recent_events||[]).map(e=>
       `<tr><td class="mut">${utcLocal(e.created_at)}</td><td>${esc(e.ticker||'-')}</td><td class="mono">${esc(e.event_type)}</td><td class="mut">${e.source_url?`<a href="${esc(e.source_url)}" target="_blank" rel="noopener">${esc(e.source_type||'link')}</a>`:esc(e.source_type||'-')}</td><td class="num">${e.confidence!=null?Number(e.confidence).toFixed(2):'-'}</td><td>${esc(short(e.summary_cn,40))}</td></tr>`))}</div>
     <div><h3 class="small">最新行情特征</h3>${table(["时间桶","标的","窗口","异常分","摘要"],(d.recent_features||[]).map(f=>

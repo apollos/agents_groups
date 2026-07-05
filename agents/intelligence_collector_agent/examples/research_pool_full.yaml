@@ -78,216 +78,216 @@ companies:
   # =========================================================================
 
   # --- 3.1 AI 算力 / 半导体 / 光模块 / PCB / 电子硬件（A股核心） ---
-  - {name: 工业富联, ticker: 601138.SH, products: "AI服务器,云计算硬件"}
-  - {name: 立讯精密, ticker: 002475.SZ, products: "连接器,消费电子"}
-  - {name: 北方华创, ticker: 002371.SZ, products: "刻蚀设备,薄膜沉积设备"}
-  - {name: 中微公司, ticker: 688012.SH, products: "刻蚀设备,MOCVD"}
-  - {name: 海光信息, ticker: 688041.SH, products: "国产CPU,国产GPU"}
-  - {name: 澜起科技, ticker: 688008.SH, products: "内存接口芯片"}
-  - {name: 中际旭创, ticker: 300308.SZ, products: "800G光模块,1.6T光模块"}
-  - {name: 新易盛, ticker: 300502.SZ, products: "高速光模块"}
-  - {name: 沪电股份, ticker: 002463.SZ, products: "AI服务器PCB,通信PCB"}
-  - {name: 生益科技, ticker: 600183.SH, products: "覆铜板"}
-  - {name: 生益电子, ticker: 688183.SH, products: "PCB"}
-  - {name: 韦尔股份, ticker: 603501.SH, products: "图像传感器"}
-  - {name: 京东方A, ticker: 000725.SZ, aliases: 京东方, products: "面板,显示"}
-  - {name: 寒武纪, ticker: 688256.SH, products: "国产AI芯片"}
-  - {name: 紫光国微, ticker: 002049.SZ, products: "特种IC,安全芯片"}
+  - {name: 工业富联, ticker: 601138.SH, products: "AI服务器,云计算硬件", industry_id: industry_ai_semi}
+  - {name: 立讯精密, ticker: 002475.SZ, products: "连接器,消费电子", industry_id: industry_ai_semi}
+  - {name: 北方华创, ticker: 002371.SZ, products: "刻蚀设备,薄膜沉积设备", industry_id: industry_ai_semi}
+  - {name: 中微公司, ticker: 688012.SH, products: "刻蚀设备,MOCVD", industry_id: industry_ai_semi}
+  - {name: 海光信息, ticker: 688041.SH, products: "国产CPU,国产GPU", industry_id: industry_ai_semi}
+  - {name: 澜起科技, ticker: 688008.SH, products: "内存接口芯片", industry_id: industry_ai_semi}
+  - {name: 中际旭创, ticker: 300308.SZ, products: "800G光模块,1.6T光模块", industry_id: industry_ai_semi}
+  - {name: 新易盛, ticker: 300502.SZ, products: "高速光模块", industry_id: industry_ai_semi}
+  - {name: 沪电股份, ticker: 002463.SZ, products: "AI服务器PCB,通信PCB", industry_id: industry_ai_semi}
+  - {name: 生益科技, ticker: 600183.SH, products: "覆铜板", industry_id: industry_ai_semi}
+  - {name: 生益电子, ticker: 688183.SH, products: "PCB", industry_id: industry_ai_semi}
+  - {name: 韦尔股份, ticker: 603501.SH, products: "图像传感器", industry_id: industry_ai_semi}
+  - {name: 京东方A, ticker: 000725.SZ, aliases: 京东方, products: "面板,显示", industry_id: industry_ai_semi}
+  - {name: 寒武纪, ticker: 688256.SH, products: "国产AI芯片", industry_id: industry_ai_semi}
+  - {name: 紫光国微, ticker: 002049.SZ, products: "特种IC,安全芯片", industry_id: industry_ai_semi}
   # --- 3.1 港股 / 港股通候选 ---
-  - {name: 中芯国际, ticker: 0981.HK, products: "晶圆代工"}
-  - {name: 华虹半导体, ticker: 1347.HK, products: "特色工艺晶圆代工"}
-  - {name: 联想集团, ticker: 0992.HK, products: "AI PC,服务器"}
-  - {name: 小米集团, ticker: 1810.HK, aliases: 小米集团-W, products: "智能终端,汽车,AIoT"}
-  - {name: 中兴通讯, ticker: 0763.HK, products: "通信设备,服务器"}
+  - {name: 中芯国际, ticker: 00981.HK, products: "晶圆代工", industry_id: industry_ai_semi}
+  - {name: 华虹半导体, ticker: 01347.HK, products: "特色工艺晶圆代工", industry_id: industry_ai_semi}
+  - {name: 联想集团, ticker: 00992.HK, products: "AI PC,服务器", industry_id: industry_ai_semi}
+  - {name: 小米集团, ticker: 01810.HK, aliases: 小米集团-W, products: "智能终端,汽车,AIoT", industry_id: industry_ai_semi}
+  - {name: 中兴通讯, ticker: 00763.HK, products: "通信设备,服务器", industry_id: industry_ai_semi}
 
   # --- 3.2 高端装备 / 机器人 / 工业自动化 / 航空航天（A股核心） ---
-  - {name: 汇川技术, ticker: 300124.SZ, products: "伺服系统,变频器,工控"}
-  - {name: 埃斯顿, ticker: 002747.SZ, products: "工业机器人"}
-  - {name: 机器人, ticker: 300024.SZ, aliases: 新松机器人, products: "机器人集成,自动化"}
-  - {name: 绿的谐波, ticker: 688017.SH, products: "谐波减速器"}
-  - {name: 埃夫特, ticker: 688165.SH, products: "工业机器人整机"}
-  - {name: 中控技术, ticker: 688777.SH, products: "流程工业自动化,工业软件"}
-  - {name: 先导智能, ticker: 300450.SZ, products: "锂电设备,光伏设备"}
-  - {name: 中国中车, ticker: 601766.SH, products: "轨交装备"}
-  - {name: 中航光电, ticker: 002179.SZ, products: "军工连接器"}
-  - {name: 中航沈飞, ticker: 600760.SH, products: "航空装备"}
-  - {name: 航发动力, ticker: 600893.SH, products: "航空发动机"}
-  - {name: 三一重工, ticker: 600031.SH, products: "挖掘机,工程机械"}
-  - {name: 中联重科, ticker: 000157.SZ, products: "工程机械"}
+  - {name: 汇川技术, ticker: 300124.SZ, products: "伺服系统,变频器,工控", industry_id: industry_high_end_equipment}
+  - {name: 埃斯顿, ticker: 002747.SZ, products: "工业机器人", industry_id: industry_high_end_equipment}
+  - {name: 机器人, ticker: 300024.SZ, aliases: 新松机器人, products: "机器人集成,自动化", industry_id: industry_high_end_equipment}
+  - {name: 绿的谐波, ticker: 688017.SH, products: "谐波减速器", industry_id: industry_high_end_equipment}
+  - {name: 埃夫特, ticker: 688165.SH, products: "工业机器人整机", industry_id: industry_high_end_equipment}
+  - {name: 中控技术, ticker: 688777.SH, products: "流程工业自动化,工业软件", industry_id: industry_high_end_equipment}
+  - {name: 先导智能, ticker: 300450.SZ, products: "锂电设备,光伏设备", industry_id: industry_high_end_equipment}
+  - {name: 中国中车, ticker: 601766.SH, products: "轨交装备", industry_id: industry_high_end_equipment}
+  - {name: 中航光电, ticker: 002179.SZ, products: "军工连接器", industry_id: industry_high_end_equipment}
+  - {name: 中航沈飞, ticker: 600760.SH, products: "航空装备", industry_id: industry_high_end_equipment}
+  - {name: 航发动力, ticker: 600893.SH, products: "航空发动机", industry_id: industry_high_end_equipment}
+  - {name: 三一重工, ticker: 600031.SH, products: "挖掘机,工程机械", industry_id: industry_high_end_equipment}
+  - {name: 中联重科, ticker: 000157.SZ, products: "工程机械", industry_id: industry_high_end_equipment}
   # --- 3.2 港股 / 港股通候选 ---
-  - {name: 潍柴动力, ticker: 2338.HK, products: "动力系统,商用车"}
-  - {name: 中国中铁, ticker: 0390.HK, products: "基建,轨交工程"}
-  - {name: 中国铁建, ticker: 1186.HK, products: "基建,轨交工程"}
+  - {name: 潍柴动力, ticker: 02338.HK, products: "动力系统,商用车", industry_id: industry_high_end_equipment}
+  - {name: 中国中铁, ticker: 00390.HK, products: "基建,轨交工程", industry_id: industry_high_end_equipment}
+  - {name: 中国铁建, ticker: 01186.HK, products: "基建,轨交工程", industry_id: industry_high_end_equipment}
 
   # --- 3.3 电力系统 / 智能电网 / 核电 / 燃气 / 公用事业（A股核心） ---
-  - {name: 国电南瑞, ticker: 600406.SH, products: "电网自动化,二次设备"}
-  - {name: 许继电气, ticker: 000400.SZ, products: "特高压,柔直设备"}
-  - {name: 平高电气, ticker: 600312.SH, products: "高压开关"}
-  - {name: 中国西电, ticker: 601179.SH, products: "输变电设备"}
-  - {name: 特变电工, ticker: 600089.SH, products: "变压器,新能源"}
-  - {name: 长江电力, ticker: 600900.SH, products: "水电运营"}
-  - {name: 中国核电, ticker: 601985.SH, products: "核电运营"}
-  - {name: 三峡能源, ticker: 600905.SH, products: "新能源运营"}
-  - {name: 东方电气, ticker: 600875.SH, products: "电力设备,核电装备"}
-  - {name: 上海电气, ticker: 601727.SH, products: "电力装备"}
+  - {name: 国电南瑞, ticker: 600406.SH, products: "电网自动化,二次设备", industry_id: industry_power_grid}
+  - {name: 许继电气, ticker: 000400.SZ, products: "特高压,柔直设备", industry_id: industry_power_grid}
+  - {name: 平高电气, ticker: 600312.SH, products: "高压开关", industry_id: industry_power_grid}
+  - {name: 中国西电, ticker: 601179.SH, products: "输变电设备", industry_id: industry_power_grid}
+  - {name: 特变电工, ticker: 600089.SH, products: "变压器,新能源", industry_id: industry_power_grid}
+  - {name: 长江电力, ticker: 600900.SH, products: "水电运营", industry_id: industry_power_grid}
+  - {name: 中国核电, ticker: 601985.SH, products: "核电运营", industry_id: industry_power_grid}
+  - {name: 三峡能源, ticker: 600905.SH, products: "新能源运营", industry_id: industry_power_grid}
+  - {name: 东方电气, ticker: 600875.SH, products: "电力设备,核电装备", industry_id: industry_power_grid}
+  - {name: 上海电气, ticker: 601727.SH, products: "电力装备", industry_id: industry_power_grid}
   # --- 3.3 港股 / 港股通候选 ---
-  - {name: 华润电力, ticker: 0836.HK, products: "电力运营,新能源"}
-  - {name: 新奥能源, ticker: 2688.HK, products: "城市燃气"}
-  - {name: 中国燃气, ticker: 0384.HK, products: "城市燃气"}
-  - {name: 龙源电力, ticker: 0916.HK, products: "风电运营"}
-  - {name: 华能国际电力, ticker: 0902.HK, aliases: 华能国际, products: "火电,新能源"}
-  - {name: 大唐新能源, ticker: 1798.HK, products: "风电运营"}
-  - {name: 中广核电力, ticker: 1816.HK, products: "核电运营"}
+  - {name: 华润电力, ticker: 00836.HK, products: "电力运营,新能源", industry_id: industry_power_grid}
+  - {name: 新奥能源, ticker: 02688.HK, products: "城市燃气", industry_id: industry_power_grid}
+  - {name: 中国燃气, ticker: 00384.HK, products: "城市燃气", industry_id: industry_power_grid}
+  - {name: 龙源电力, ticker: 00916.HK, products: "风电运营", industry_id: industry_power_grid}
+  - {name: 华能国际电力, ticker: 00902.HK, aliases: 华能国际, products: "火电,新能源", industry_id: industry_power_grid}
+  - {name: 大唐新能源, ticker: 01798.HK, products: "风电运营", industry_id: industry_power_grid}
+  - {name: 中广核电力, ticker: 01816.HK, products: "核电运营", industry_id: industry_power_grid}
 
   # --- 3.4 创新药 / 医疗器械 / CXO / 医疗服务（A股核心） ---
-  - {name: 迈瑞医疗, ticker: 300760.SZ, products: "监护仪,IVD,超声影像"}
-  - {name: 联影医疗, ticker: 688271.SH, products: "高端影像设备"}
-  - {name: 恒瑞医药, ticker: 600276.SH, products: "创新药,肿瘤药"}
-  - {name: 药明康德, ticker: 603259.SH, products: "CXO,CRDMO"}
-  - {name: 百济神州, ticker: 688235.SH, products: "创新药国际化"}
-  - {name: 乐普医疗, ticker: 300003.SZ, products: "心血管器械"}
-  - {name: 新产业, ticker: 300832.SZ, products: "IVD设备,试剂"}
-  - {name: 爱尔眼科, ticker: 300015.SZ, products: "眼科医疗服务"}
-  - {name: 科伦药业, ticker: 002422.SZ, products: "创新药BD,输液"}
+  - {name: 迈瑞医疗, ticker: 300760.SZ, products: "监护仪,IVD,超声影像", industry_id: industry_pharma}
+  - {name: 联影医疗, ticker: 688271.SH, products: "高端影像设备", industry_id: industry_pharma}
+  - {name: 恒瑞医药, ticker: 600276.SH, products: "创新药,肿瘤药", industry_id: industry_pharma}
+  - {name: 药明康德, ticker: 603259.SH, products: "CXO,CRDMO", industry_id: industry_pharma}
+  - {name: 百济神州, ticker: 688235.SH, products: "创新药国际化", industry_id: industry_pharma}
+  - {name: 乐普医疗, ticker: 300003.SZ, products: "心血管器械", industry_id: industry_pharma}
+  - {name: 新产业, ticker: 300832.SZ, products: "IVD设备,试剂", industry_id: industry_pharma}
+  - {name: 爱尔眼科, ticker: 300015.SZ, products: "眼科医疗服务", industry_id: industry_pharma}
+  - {name: 科伦药业, ticker: 002422.SZ, products: "创新药BD,输液", industry_id: industry_pharma}
   # --- 3.4 港股 / 港股通候选 ---
-  - {name: 信达生物, ticker: 1801.HK, products: "创新药商业化"}
-  - {name: 药明生物, ticker: 2269.HK, products: "生物药CXO"}
-  - {name: 康方生物, ticker: 9926.HK, products: "双抗,license-out"}
-  - {name: 翰森制药, ticker: 3692.HK, products: "创新药"}
-  - {name: 石药集团, ticker: 1093.HK, products: "创新药,制药"}
-  - {name: 中国生物制药, ticker: 1177.HK, products: "制药平台"}
-  - {name: 荣昌生物, ticker: 9995.HK, products: "ADC,自免管线"}
+  - {name: 信达生物, ticker: 01801.HK, products: "创新药商业化", industry_id: industry_pharma}
+  - {name: 药明生物, ticker: 02269.HK, products: "生物药CXO", industry_id: industry_pharma}
+  - {name: 康方生物, ticker: 09926.HK, products: "双抗,license-out", industry_id: industry_pharma}
+  - {name: 翰森制药, ticker: 03692.HK, products: "创新药", industry_id: industry_pharma}
+  - {name: 石药集团, ticker: 01093.HK, products: "创新药,制药", industry_id: industry_pharma}
+  - {name: 中国生物制药, ticker: 01177.HK, products: "制药平台", industry_id: industry_pharma}
+  - {name: 荣昌生物, ticker: 09995.HK, products: "ADC,自免管线", industry_id: industry_pharma}
 
   # --- 3.5 高股息央国企 / 能源 / 电信 / 银行保险 ---
-  - {name: 中国移动, ticker: 600941.SH, products: "电信运营,算力网络"}
-  - {name: 中国电信, ticker: 601728.SH, products: "电信运营,云"}
-  - {name: 中国联通, ticker: 600050.SH, products: "电信运营"}
-  - {name: 中国神华, ticker: 601088.SH, products: "煤炭,电力"}
-  - {name: 中国海油, ticker: 600938.SH, products: "油气开采"}
-  - {name: 中国石油, ticker: 601857.SH, products: "油气,天然气"}
-  - {name: 中国石化, ticker: 600028.SH, products: "炼化,成品油"}
-  - {name: 工商银行, ticker: 601398.SH, products: "银行"}
-  - {name: 建设银行, ticker: 601939.SH, products: "银行"}
-  - {name: 中国银行, ticker: 601988.SH, products: "银行"}
-  - {name: 交通银行, ticker: 601328.SH, products: "银行"}
-  - {name: 陕西煤业, ticker: 601225.SH, products: "煤炭"}
+  - {name: 中国移动, ticker: 600941.SH, products: "电信运营,算力网络", industry_id: industry_dividend_soe}
+  - {name: 中国电信, ticker: 601728.SH, products: "电信运营,云", industry_id: industry_dividend_soe}
+  - {name: 中国联通, ticker: 600050.SH, products: "电信运营", industry_id: industry_dividend_soe}
+  - {name: 中国神华, ticker: 601088.SH, products: "煤炭,电力", industry_id: industry_dividend_soe}
+  - {name: 中国海油, ticker: 600938.SH, products: "油气开采", industry_id: industry_dividend_soe}
+  - {name: 中国石油, ticker: 601857.SH, products: "油气,天然气", industry_id: industry_dividend_soe}
+  - {name: 中国石化, ticker: 600028.SH, products: "炼化,成品油", industry_id: industry_dividend_soe}
+  - {name: 工商银行, ticker: 601398.SH, products: "银行", industry_id: industry_dividend_soe}
+  - {name: 建设银行, ticker: 601939.SH, products: "银行", industry_id: industry_dividend_soe}
+  - {name: 中国银行, ticker: 601988.SH, products: "银行", industry_id: industry_dividend_soe}
+  - {name: 交通银行, ticker: 601328.SH, products: "银行", industry_id: industry_dividend_soe}
+  - {name: 陕西煤业, ticker: 601225.SH, products: "煤炭", industry_id: industry_dividend_soe}
 
   # --- 3.6 平台互联网 / 线上消费 / 新消费 / 品牌出海（港股通候选） ---
-  - {name: 腾讯控股, ticker: 0700.HK, products: "游戏,广告,金融科技,云"}
-  - {name: 阿里巴巴, ticker: 9988.HK, aliases: 阿里巴巴-W, products: "电商,云,国际业务"}
-  - {name: 美团, ticker: 3690.HK, aliases: 美团-W, products: "本地生活,即时零售"}
-  - {name: 京东集团, ticker: 9618.HK, aliases: 京东集团-SW, products: "自营电商,物流"}
-  - {name: 携程集团, ticker: 9961.HK, aliases: 携程集团-S, products: "旅游出行"}
-  - {name: 快手, ticker: 1024.HK, aliases: 快手-W, products: "短视频,直播电商"}
-  - {name: 网易, ticker: 9999.HK, aliases: 网易-S, products: "游戏,音乐"}
-  - {name: 泡泡玛特, ticker: 9992.HK, products: "潮玩,IP出海"}
-  - {name: 安踏体育, ticker: 2020.HK, products: "运动品牌"}
-  - {name: 李宁, ticker: 2331.HK, products: "运动品牌"}
+  - {name: 腾讯控股, ticker: 00700.HK, products: "游戏,广告,金融科技,云", industry_id: industry_internet_consumer}
+  - {name: 阿里巴巴, ticker: 09988.HK, aliases: 阿里巴巴-W, products: "电商,云,国际业务", industry_id: industry_internet_consumer}
+  - {name: 美团, ticker: 03690.HK, aliases: 美团-W, products: "本地生活,即时零售", industry_id: industry_internet_consumer}
+  - {name: 京东集团, ticker: 09618.HK, aliases: 京东集团-SW, products: "自营电商,物流", industry_id: industry_internet_consumer}
+  - {name: 携程集团, ticker: 09961.HK, aliases: 携程集团-S, products: "旅游出行", industry_id: industry_internet_consumer}
+  - {name: 快手, ticker: 01024.HK, aliases: 快手-W, products: "短视频,直播电商", industry_id: industry_internet_consumer}
+  - {name: 网易, ticker: 09999.HK, aliases: 网易-S, products: "游戏,音乐", industry_id: industry_internet_consumer}
+  - {name: 泡泡玛特, ticker: 09992.HK, products: "潮玩,IP出海", industry_id: industry_internet_consumer}
+  - {name: 安踏体育, ticker: 02020.HK, products: "运动品牌", industry_id: industry_internet_consumer}
+  - {name: 李宁, ticker: 02331.HK, products: "运动品牌", industry_id: industry_internet_consumer}
   # --- 3.6 A股核心 ---
-  - {name: 美的集团, ticker: 000333.SZ, products: "家电,机器人"}
-  - {name: 海尔智家, ticker: 600690.SH, products: "家电出海,高端化"}
-  - {name: 伊利股份, ticker: 600887.SH, products: "乳制品"}
-  - {name: 中国中免, ticker: 601888.SH, products: "免税,旅游零售"}
-  - {name: 珀莱雅, ticker: 603605.SH, products: "国货美妆"}
-  - {name: 顺丰控股, ticker: 002352.SZ, products: "物流,供应链"}
+  - {name: 美的集团, ticker: 000333.SZ, products: "家电,机器人", industry_id: industry_internet_consumer}
+  - {name: 海尔智家, ticker: 600690.SH, products: "家电出海,高端化", industry_id: industry_internet_consumer}
+  - {name: 伊利股份, ticker: 600887.SH, products: "乳制品", industry_id: industry_internet_consumer}
+  - {name: 中国中免, ticker: 601888.SH, products: "免税,旅游零售", industry_id: industry_internet_consumer}
+  - {name: 珀莱雅, ticker: 603605.SH, products: "国货美妆", industry_id: industry_internet_consumer}
+  - {name: 顺丰控股, ticker: 002352.SZ, products: "物流,供应链", industry_id: industry_internet_consumer}
 
   # --- 3.7 资源周期 / 有色 / 化工 / 油气 / 航运 ---
-  - {name: 紫金矿业, ticker: 601899.SH, products: "铜,金"}
-  - {name: 洛阳钼业, ticker: 603993.SH, products: "铜,钴,钼"}
-  - {name: 中国铝业, ticker: 601600.SH, products: "铝产业链"}
-  - {name: 云铝股份, ticker: 000807.SZ, products: "电解铝,水电铝"}
-  - {name: 北方稀土, ticker: 600111.SH, products: "稀土"}
-  - {name: 神火股份, ticker: 000933.SZ, products: "铝,煤"}
-  - {name: 江西铜业, ticker: 600362.SH, products: "铜冶炼"}
-  - {name: 兖矿能源, ticker: 600188.SH, products: "煤炭"}
-  - {name: 中国宏桥, ticker: 1378.HK, products: "铝产业链"}
-  - {name: 中远海控, ticker: 601919.SH, products: "集运"}
-  - {name: 中远海能, ticker: 600026.SH, products: "油运"}
+  - {name: 紫金矿业, ticker: 601899.SH, products: "铜,金", industry_id: industry_resource_cycle}
+  - {name: 洛阳钼业, ticker: 603993.SH, products: "铜,钴,钼", industry_id: industry_resource_cycle}
+  - {name: 中国铝业, ticker: 601600.SH, products: "铝产业链", industry_id: industry_resource_cycle}
+  - {name: 云铝股份, ticker: 000807.SZ, products: "电解铝,水电铝", industry_id: industry_resource_cycle}
+  - {name: 北方稀土, ticker: 600111.SH, products: "稀土", industry_id: industry_resource_cycle}
+  - {name: 神火股份, ticker: 000933.SZ, products: "铝,煤", industry_id: industry_resource_cycle}
+  - {name: 江西铜业, ticker: 600362.SH, products: "铜冶炼", industry_id: industry_resource_cycle}
+  - {name: 兖矿能源, ticker: 600188.SH, products: "煤炭", industry_id: industry_resource_cycle}
+  - {name: 中国宏桥, ticker: 01378.HK, products: "铝产业链", industry_id: industry_resource_cycle}
+  - {name: 中远海控, ticker: 601919.SH, products: "集运", industry_id: industry_resource_cycle}
+  - {name: 中远海能, ticker: 600026.SH, products: "油运", industry_id: industry_resource_cycle}
 
   # =========================================================================
   # 三、上下游扩展观察名单（md §4，进入 demand_company_watch_daily 低预算层）
   # =========================================================================
 
   # --- 4.1 AI / 半导体链：设备-材料-封测-PCB-光器件-服务器 ---
-  - {name: 拓荆科技, ticker: 688072.SH, demand_id: demand_company_watch_daily}
-  - {name: 华海清科, ticker: 688120.SH, demand_id: demand_company_watch_daily}
-  - {name: 沪硅产业, ticker: 688126.SH, demand_id: demand_company_watch_daily}
-  - {name: 安集科技, ticker: 688019.SH, demand_id: demand_company_watch_daily}
-  - {name: 江丰电子, ticker: 300666.SZ, demand_id: demand_company_watch_daily}
-  - {name: 雅克科技, ticker: 002409.SZ, demand_id: demand_company_watch_daily}
-  - {name: 鼎龙股份, ticker: 300054.SZ, demand_id: demand_company_watch_daily}
-  - {name: 长电科技, ticker: 600584.SH, demand_id: demand_company_watch_daily}
-  - {name: 通富微电, ticker: 002156.SZ, demand_id: demand_company_watch_daily}
-  - {name: 华天科技, ticker: 002185.SZ, demand_id: demand_company_watch_daily}
-  - {name: 深南电路, ticker: 002916.SZ, demand_id: demand_company_watch_daily}
-  - {name: 胜宏科技, ticker: 300476.SZ, demand_id: demand_company_watch_daily}
-  - {name: 景旺电子, ticker: 603228.SH, demand_id: demand_company_watch_daily}
-  - {name: 天孚通信, ticker: 300394.SZ, demand_id: demand_company_watch_daily}
-  - {name: 光迅科技, ticker: 002281.SZ, demand_id: demand_company_watch_daily}
-  - {name: 浪潮信息, ticker: 000977.SZ, demand_id: demand_company_watch_daily}
-  - {name: 中科曙光, ticker: 603019.SH, demand_id: demand_company_watch_daily}
-  - {name: 紫光股份, ticker: 000938.SZ, demand_id: demand_company_watch_daily}
-  - {name: 烽火通信, ticker: 600498.SH, demand_id: demand_company_watch_daily}
-  - {name: 百度, ticker: 9888.HK, aliases: 百度集团-SW, demand_id: demand_company_watch_daily}
+  - {name: 拓荆科技, ticker: 688072.SH, demand_id: demand_company_watch_daily, industry_id: industry_ai_semi}
+  - {name: 华海清科, ticker: 688120.SH, demand_id: demand_company_watch_daily, industry_id: industry_ai_semi}
+  - {name: 沪硅产业, ticker: 688126.SH, demand_id: demand_company_watch_daily, industry_id: industry_ai_semi}
+  - {name: 安集科技, ticker: 688019.SH, demand_id: demand_company_watch_daily, industry_id: industry_ai_semi}
+  - {name: 江丰电子, ticker: 300666.SZ, demand_id: demand_company_watch_daily, industry_id: industry_ai_semi}
+  - {name: 雅克科技, ticker: 002409.SZ, demand_id: demand_company_watch_daily, industry_id: industry_ai_semi}
+  - {name: 鼎龙股份, ticker: 300054.SZ, demand_id: demand_company_watch_daily, industry_id: industry_ai_semi}
+  - {name: 长电科技, ticker: 600584.SH, demand_id: demand_company_watch_daily, industry_id: industry_ai_semi}
+  - {name: 通富微电, ticker: 002156.SZ, demand_id: demand_company_watch_daily, industry_id: industry_ai_semi}
+  - {name: 华天科技, ticker: 002185.SZ, demand_id: demand_company_watch_daily, industry_id: industry_ai_semi}
+  - {name: 深南电路, ticker: 002916.SZ, demand_id: demand_company_watch_daily, industry_id: industry_ai_semi}
+  - {name: 胜宏科技, ticker: 300476.SZ, demand_id: demand_company_watch_daily, industry_id: industry_ai_semi}
+  - {name: 景旺电子, ticker: 603228.SH, demand_id: demand_company_watch_daily, industry_id: industry_ai_semi}
+  - {name: 天孚通信, ticker: 300394.SZ, demand_id: demand_company_watch_daily, industry_id: industry_ai_semi}
+  - {name: 光迅科技, ticker: 002281.SZ, demand_id: demand_company_watch_daily, industry_id: industry_ai_semi}
+  - {name: 浪潮信息, ticker: 000977.SZ, demand_id: demand_company_watch_daily, industry_id: industry_ai_semi}
+  - {name: 中科曙光, ticker: 603019.SH, demand_id: demand_company_watch_daily, industry_id: industry_ai_semi}
+  - {name: 紫光股份, ticker: 000938.SZ, demand_id: demand_company_watch_daily, industry_id: industry_ai_semi}
+  - {name: 烽火通信, ticker: 600498.SH, demand_id: demand_company_watch_daily, industry_id: industry_ai_semi}
+  - {name: 百度, ticker: 09888.HK, aliases: 百度集团-SW, demand_id: demand_company_watch_daily, industry_id: industry_ai_semi}
 
   # --- 4.2 机器人 / 高端装备链：减速器-伺服-丝杠-视觉-整机-下游设备 ---
-  - {name: 双环传动, ticker: 002472.SZ, demand_id: demand_company_watch_daily}
-  - {name: 秦川机床, ticker: 000837.SZ, demand_id: demand_company_watch_daily}
-  - {name: 禾川科技, ticker: 688320.SH, demand_id: demand_company_watch_daily}
-  - {name: 雷赛智能, ticker: 002979.SZ, demand_id: demand_company_watch_daily}
-  - {name: 贝斯特, ticker: 300580.SZ, demand_id: demand_company_watch_daily}
-  - {name: 恒立液压, ticker: 601100.SH, demand_id: demand_company_watch_daily}
-  - {name: 五洲新春, ticker: 603667.SH, demand_id: demand_company_watch_daily}
-  - {name: 柯力传感, ticker: 603662.SH, demand_id: demand_company_watch_daily}
-  - {name: 凌云光, ticker: 688400.SH, demand_id: demand_company_watch_daily}
-  - {name: 奥普光电, ticker: 002338.SZ, demand_id: demand_company_watch_daily}
-  - {name: 拓斯达, ticker: 300607.SZ, demand_id: demand_company_watch_daily}
-  - {name: 博实股份, ticker: 002698.SZ, demand_id: demand_company_watch_daily}
-  - {name: 捷佳伟创, ticker: 300724.SZ, demand_id: demand_company_watch_daily}
-  - {name: 迈为股份, ticker: 300751.SZ, demand_id: demand_company_watch_daily}
-  - {name: 比亚迪, ticker: 002594.SZ, demand_id: demand_company_watch_daily}
-  - {name: 长城汽车, ticker: 601633.SH, demand_id: demand_company_watch_daily}
-  - {name: 上汽集团, ticker: 600104.SH, demand_id: demand_company_watch_daily}
-  - {name: 吉利汽车, ticker: 0175.HK, demand_id: demand_company_watch_daily}
+  - {name: 双环传动, ticker: 002472.SZ, demand_id: demand_company_watch_daily, industry_id: industry_high_end_equipment}
+  - {name: 秦川机床, ticker: 000837.SZ, demand_id: demand_company_watch_daily, industry_id: industry_high_end_equipment}
+  - {name: 禾川科技, ticker: 688320.SH, demand_id: demand_company_watch_daily, industry_id: industry_high_end_equipment}
+  - {name: 雷赛智能, ticker: 002979.SZ, demand_id: demand_company_watch_daily, industry_id: industry_high_end_equipment}
+  - {name: 贝斯特, ticker: 300580.SZ, demand_id: demand_company_watch_daily, industry_id: industry_high_end_equipment}
+  - {name: 恒立液压, ticker: 601100.SH, demand_id: demand_company_watch_daily, industry_id: industry_high_end_equipment}
+  - {name: 五洲新春, ticker: 603667.SH, demand_id: demand_company_watch_daily, industry_id: industry_high_end_equipment}
+  - {name: 柯力传感, ticker: 603662.SH, demand_id: demand_company_watch_daily, industry_id: industry_high_end_equipment}
+  - {name: 凌云光, ticker: 688400.SH, demand_id: demand_company_watch_daily, industry_id: industry_high_end_equipment}
+  - {name: 奥普光电, ticker: 002338.SZ, demand_id: demand_company_watch_daily, industry_id: industry_high_end_equipment}
+  - {name: 拓斯达, ticker: 300607.SZ, demand_id: demand_company_watch_daily, industry_id: industry_high_end_equipment}
+  - {name: 博实股份, ticker: 002698.SZ, demand_id: demand_company_watch_daily, industry_id: industry_high_end_equipment}
+  - {name: 捷佳伟创, ticker: 300724.SZ, demand_id: demand_company_watch_daily, industry_id: industry_high_end_equipment}
+  - {name: 迈为股份, ticker: 300751.SZ, demand_id: demand_company_watch_daily, industry_id: industry_high_end_equipment}
+  - {name: 比亚迪, ticker: 002594.SZ, demand_id: demand_company_watch_daily, industry_id: industry_high_end_equipment}
+  - {name: 长城汽车, ticker: 601633.SH, demand_id: demand_company_watch_daily, industry_id: industry_high_end_equipment}
+  - {name: 上汽集团, ticker: 600104.SH, demand_id: demand_company_watch_daily, industry_id: industry_high_end_equipment}
+  - {name: 吉利汽车, ticker: 00175.HK, demand_id: demand_company_watch_daily, industry_id: industry_high_end_equipment}
 
   # --- 4.3 电力系统链：一次设备-线缆-储能-核电设备-运营 ---
-  - {name: 思源电气, ticker: 002028.SZ, demand_id: demand_company_watch_daily}
-  - {name: 东方电缆, ticker: 603606.SH, demand_id: demand_company_watch_daily}
-  - {name: 中天科技, ticker: 600522.SH, demand_id: demand_company_watch_daily}
-  - {name: 亨通光电, ticker: 600487.SH, demand_id: demand_company_watch_daily}
-  - {name: 阳光电源, ticker: 300274.SZ, demand_id: demand_company_watch_daily}
-  - {name: 南网科技, ticker: 688248.SH, demand_id: demand_company_watch_daily}
-  - {name: 科华数据, ticker: 002335.SZ, demand_id: demand_company_watch_daily}
-  - {name: 上能电气, ticker: 300827.SZ, demand_id: demand_company_watch_daily}
-  - {name: 江苏神通, ticker: 002438.SZ, demand_id: demand_company_watch_daily}
-  - {name: 应流股份, ticker: 603308.SH, demand_id: demand_company_watch_daily}
-  - {name: 华能水电, ticker: 600025.SH, demand_id: demand_company_watch_daily}
-  - {name: 昆仑能源, ticker: 0135.HK, demand_id: demand_company_watch_daily}
+  - {name: 思源电气, ticker: 002028.SZ, demand_id: demand_company_watch_daily, industry_id: industry_power_grid}
+  - {name: 东方电缆, ticker: 603606.SH, demand_id: demand_company_watch_daily, industry_id: industry_power_grid}
+  - {name: 中天科技, ticker: 600522.SH, demand_id: demand_company_watch_daily, industry_id: industry_power_grid}
+  - {name: 亨通光电, ticker: 600487.SH, demand_id: demand_company_watch_daily, industry_id: industry_power_grid}
+  - {name: 阳光电源, ticker: 300274.SZ, demand_id: demand_company_watch_daily, industry_id: industry_power_grid}
+  - {name: 南网科技, ticker: 688248.SH, demand_id: demand_company_watch_daily, industry_id: industry_power_grid}
+  - {name: 科华数据, ticker: 002335.SZ, demand_id: demand_company_watch_daily, industry_id: industry_power_grid}
+  - {name: 上能电气, ticker: 300827.SZ, demand_id: demand_company_watch_daily, industry_id: industry_power_grid}
+  - {name: 江苏神通, ticker: 002438.SZ, demand_id: demand_company_watch_daily, industry_id: industry_power_grid}
+  - {name: 应流股份, ticker: 603308.SH, demand_id: demand_company_watch_daily, industry_id: industry_power_grid}
+  - {name: 华能水电, ticker: 600025.SH, demand_id: demand_company_watch_daily, industry_id: industry_power_grid}
+  - {name: 昆仑能源, ticker: 00135.HK, demand_id: demand_company_watch_daily, industry_id: industry_power_grid}
 
   # --- 4.4 医药链：CXO-器械-内镜 ---
-  - {name: 康龙化成, ticker: 300759.SZ, demand_id: demand_company_watch_daily}
-  - {name: 泰格医药, ticker: 300347.SZ, demand_id: demand_company_watch_daily}
-  - {name: 凯莱英, ticker: 002821.SZ, demand_id: demand_company_watch_daily}
-  - {name: 开立医疗, ticker: 300633.SZ, demand_id: demand_company_watch_daily}
-  - {name: 澳华内镜, ticker: 688212.SH, demand_id: demand_company_watch_daily}
+  - {name: 康龙化成, ticker: 300759.SZ, demand_id: demand_company_watch_daily, industry_id: industry_pharma}
+  - {name: 泰格医药, ticker: 300347.SZ, demand_id: demand_company_watch_daily, industry_id: industry_pharma}
+  - {name: 凯莱英, ticker: 002821.SZ, demand_id: demand_company_watch_daily, industry_id: industry_pharma}
+  - {name: 开立医疗, ticker: 300633.SZ, demand_id: demand_company_watch_daily, industry_id: industry_pharma}
+  - {name: 澳华内镜, ticker: 688212.SH, demand_id: demand_company_watch_daily, industry_id: industry_pharma}
 
   # --- 4.5 高股息链：油服与资本开支供应商 ---
-  - {name: 中海油服, ticker: 601808.SH, demand_id: demand_company_watch_daily}
-  - {name: 石化油服, ticker: 600871.SH, demand_id: demand_company_watch_daily}
-  - {name: 海油工程, ticker: 600583.SH, demand_id: demand_company_watch_daily}
+  - {name: 中海油服, ticker: 601808.SH, demand_id: demand_company_watch_daily, industry_id: industry_dividend_soe}
+  - {name: 石化油服, ticker: 600871.SH, demand_id: demand_company_watch_daily, industry_id: industry_dividend_soe}
+  - {name: 海油工程, ticker: 600583.SH, demand_id: demand_company_watch_daily, industry_id: industry_dividend_soe}
 
   # --- 4.6 互联网 / 消费链：履约-品牌-供应链 ---
-  - {name: 圆通速递, ticker: 600233.SH, demand_id: demand_company_watch_daily}
-  - {name: 韵达股份, ticker: 002120.SZ, demand_id: demand_company_watch_daily}
-  - {name: 中通快递, ticker: 2057.HK, demand_id: demand_company_watch_daily}
-  - {name: 申洲国际, ticker: 2313.HK, demand_id: demand_company_watch_daily}
-  - {name: 巨子生物, ticker: 2367.HK, demand_id: demand_company_watch_daily}
-  - {name: 贝泰妮, ticker: 300957.SZ, demand_id: demand_company_watch_daily}
-  - {name: 名创优品, ticker: 9896.HK, demand_id: demand_company_watch_daily}
-  - {name: 海信家电, ticker: 000921.SZ, demand_id: demand_company_watch_daily}
+  - {name: 圆通速递, ticker: 600233.SH, demand_id: demand_company_watch_daily, industry_id: industry_internet_consumer}
+  - {name: 韵达股份, ticker: 002120.SZ, demand_id: demand_company_watch_daily, industry_id: industry_internet_consumer}
+  - {name: 中通快递, ticker: 02057.HK, demand_id: demand_company_watch_daily, industry_id: industry_internet_consumer}
+  - {name: 申洲国际, ticker: 02313.HK, demand_id: demand_company_watch_daily, industry_id: industry_internet_consumer}
+  - {name: 巨子生物, ticker: 02367.HK, demand_id: demand_company_watch_daily, industry_id: industry_internet_consumer}
+  - {name: 贝泰妮, ticker: 300957.SZ, demand_id: demand_company_watch_daily, industry_id: industry_internet_consumer}
+  - {name: 名创优品, ticker: 09896.HK, demand_id: demand_company_watch_daily, industry_id: industry_internet_consumer}
+  - {name: 海信家电, ticker: 000921.SZ, demand_id: demand_company_watch_daily, industry_id: industry_internet_consumer}
 
   # --- 4.7 资源周期链 ---
-  - {name: 盛和资源, ticker: 600392.SH, demand_id: demand_company_watch_daily}
+  - {name: 盛和资源, ticker: 600392.SH, demand_id: demand_company_watch_daily, industry_id: industry_resource_cycle}
 
 # ---------------------------------------------------------------------------
 # 四、纯行情跟踪（不做 MIC 情报，仅盘后日线刷新 + 股票池），按需追加

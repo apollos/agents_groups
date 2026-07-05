@@ -53,6 +53,10 @@ def _apply_migrations(con: sqlite3.Connection) -> None:
         if column not in event_cols:
             con.execute(f"ALTER TABLE structured_events ADD COLUMN {column} TEXT")
     con.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (3)")
+    # v4: query_family so dashboards/reports can judge which query families produce events.
+    if "query_family" not in event_cols:
+        con.execute("ALTER TABLE structured_events ADD COLUMN query_family TEXT")
+    con.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (4)")
 
 
 def dumps_json(value: Any) -> str:
@@ -227,6 +231,7 @@ CREATE TABLE IF NOT EXISTS structured_events (
   source_type TEXT,
   published_at TEXT,
   retrieved_at TEXT,
+  query_family TEXT,
   confidence REAL,
   data_quality REAL,
   source_corroboration_status TEXT,
