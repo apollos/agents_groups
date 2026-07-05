@@ -57,6 +57,10 @@ def _apply_migrations(con: sqlite3.Connection) -> None:
     if "query_family" not in event_cols:
         con.execute("ALTER TABLE structured_events ADD COLUMN query_family TEXT")
     con.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (4)")
+    # v5: event -> tracking_variable links and HK-connect structured snapshots (V0.8 research
+    # loop). Both tables are created via CREATE TABLE IF NOT EXISTS in SCHEMA_SQL, which runs
+    # before migrations, so old databases pick them up automatically; only stamp the version.
+    con.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (5)")
 
 
 def dumps_json(value: Any) -> str:
@@ -383,6 +387,48 @@ CREATE TABLE IF NOT EXISTS pool_members (
   PRIMARY KEY (pool_layer, ticker)
 );
 CREATE INDEX IF NOT EXISTS idx_pool_members_layer ON pool_members(pool_layer, status);
+
+CREATE TABLE IF NOT EXISTS event_variable_links (
+  event_id TEXT NOT NULL,
+  target_id TEXT,
+  ticker TEXT,
+  tracking_variable TEXT NOT NULL,
+  direction TEXT,
+  strength REAL,
+  mapping_method TEXT NOT NULL,
+  mapping_confidence REAL,
+  review_status TEXT NOT NULL DEFAULT 'pending',
+  evidence_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY(event_id, tracking_variable, mapping_method)
+);
+CREATE INDEX IF NOT EXISTS idx_event_variable_links_target
+ON event_variable_links(target_id, tracking_variable, review_status);
+
+CREATE TABLE IF NOT EXISTS hk_connect_snapshots (
+  snapshot_id TEXT PRIMARY KEY,
+  target_id TEXT,
+  ticker TEXT NOT NULL,
+  company_name TEXT,
+  as_of TEXT NOT NULL,
+  hk_connect_eligible INTEGER,
+  last_price_hkd REAL,
+  turnover_hkd REAL,
+  southbound_holding_shares REAL,
+  southbound_holding_market_value_hkd REAL,
+  southbound_holding_pct REAL,
+  southbound_mv_change_1d REAL,
+  southbound_mv_change_5d REAL,
+  southbound_mv_change_10d REAL,
+  buyback_amount_hkd REAL,
+  ah_premium_pct REAL,
+  hk_liquidity_score REAL,
+  source_url TEXT,
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  idempotency_key TEXT UNIQUE,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_hk_connect_snapshots_ticker ON hk_connect_snapshots(ticker, as_of);
 
 CREATE TABLE IF NOT EXISTS tool_capabilities (
   capability_id TEXT PRIMARY KEY,

@@ -167,6 +167,10 @@ quality:
     high_confidence_threshold: 0.75
     # All-media/social/unknown sourcing without official corroboration gets flagged.
     flag_low_authority_sources: true
+    # V0.8 research loop: flag runs covering none (medium) or few (low) of the target's
+    # tracking_variables. Low-severity issues are reported but do not degrade the decision.
+    flag_tracking_variable_coverage: true
+    low_variable_coverage_ratio: 0.7
 
 intraday:
   # Agent bucket remains configurable. When the source supports 5m, Agent fetches then queries
@@ -245,3 +249,8 @@ tools:
     # absolute path to the stock_data_collector project root.
     working_dir: null
     timeout_seconds: 180
+  # Structured HK-connect snapshots for .HK targets (southbound holding / eligibility /
+  # turnover). Requires the optional `akshare` package; disable if it is not installed.
+  hk_connect_collector:
+    enabled: true
+    provider: akshare

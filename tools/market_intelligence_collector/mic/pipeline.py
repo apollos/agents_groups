@@ -222,8 +222,8 @@ class Pipeline:
                         need_model=False)
                     self.repo.update_link_read(
                         link_id, "link_record_only", prior.content_hash, prior.simhash)
-                    self._tally_counts(stats, self.repo.clone_latest_analysis(
-                        prior.id, link_id, profile.target_id))
+                    self._tally_cloned(stats, self.repo.clone_latest_analysis(
+                        prior.id, link_id, profile.target_id), hit)
                     continue
                 triaged.append((link_id, hit, tri))
 
@@ -285,8 +285,8 @@ class Pipeline:
                     link_id, "link_record_only", read.content_hash, read.simhash,
                     document_type=read.document_type,
                     access_profile_id=self.reader.access_profile_id)
-                self._tally_counts(stats, self.repo.clone_latest_analysis(
-                    prior_body.id, link_id, profile.target_id))
+                self._tally_cloned(stats, self.repo.clone_latest_analysis(
+                    prior_body.id, link_id, profile.target_id), hit)
                 continue
             seen_content_hash.add(read.content_hash)
             self.repo.update_link_read(
@@ -483,7 +483,9 @@ class Pipeline:
             entry = {
                 "summary": e.summary, "event_type": e.event_type,
                 "event_date": e.event_date, "impact_channels": e.impact.channels,
-                "confidence": e.confidence, "source_link_id": bundle.source_link_id}
+                "confidence": e.confidence, "source_link_id": bundle.source_link_id,
+                # Model-attributed research variable coverage (V0.8 research loop).
+                "tracking_variables": [tv.model_dump() for tv in e.tracking_variables]}
             # Evidence fields for downstream consumers (agent structured_events).
             if source_metadata:
                 entry["source"] = {
@@ -505,6 +507,24 @@ class Pipeline:
         for key, n in counts.items():
             if key in stats.structured:
                 stats.structured[key] += n
+
+    def _tally_cloned(self, stats: RunStats, cloned: dict, hit) -> None:
+        """Fold a cache-reuse clone result into run stats, including event details.
+
+        Without this, all_events only contains fresh-analysis events and the
+        "full event persistence" contract breaks whenever a link is reused.
+        """
+        self._tally_counts(stats, cloned)
+        source = {
+            "url": hit.url,
+            "domain": hit.domain,
+            "source_type": self.triage.source_type(hit.domain),
+            "published_at": hit.publish_time_guess,
+            "title": hit.title,
+            "query_family": hit.query_family,
+        }
+        for entry in cloned.get("cloned_events") or []:
+            stats.top_events.append({**entry, "source": source})
 
     def _run_gaps(self, stats: RunStats) -> list[CoverageGap]:
         gaps = []

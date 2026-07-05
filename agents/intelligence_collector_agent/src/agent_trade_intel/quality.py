@@ -87,8 +87,13 @@ class QualityGate:
         if summary.get("queries_skipped_by_hit_budget", 0):
             issues.append({"issue_type": "budget_tight", "severity": "medium"})
         issues.extend(self._mic_research_issues(report, context))
-        if issues:
+        # Low-severity issues (e.g. partial variable coverage) are reported but do not
+        # degrade the run decision; only medium+ issues do.
+        significant = [i for i in issues if i.get("severity") != "low"]
+        if significant:
             return {"decision": "accept_degraded", "severity": "P2", "usable": True, "issues": issues}
+        if issues:
+            return {"decision": "accept", "severity": "P3", "usable": True, "issues": issues}
         return {"decision": "accept", "severity": "P3", "usable": True, "issues": []}
 
     def _mic_research_issues(self, report: dict[str, Any], context: dict[str, Any]) -> list[dict[str, Any]]:
@@ -145,4 +150,40 @@ class QualityGate:
                         "detail": "no exchange/regulator/official corroboration among event sources",
                     }
                 )
+        issues.extend(self._variable_coverage_issues(events, context))
         return issues
+
+    def _variable_coverage_issues(self, events: list[dict[str, Any]], context: dict[str, Any]) -> list[dict[str, Any]]:
+        """Flag runs whose events cover none / few of the target's tracking variables (V0.8)."""
+        if not bool(self.mic_rules.get("flag_tracking_variable_coverage", True)):
+            return []
+        target = context.get("target") or {}
+        expected = {str(v) for v in (target.get("tracking_variables") or []) if v}
+        if not expected or not events:
+            return []
+        covered: set[str] = set()
+        for ev in events:
+            for tv in ev.get("tracking_variables") or []:
+                variable = tv if isinstance(tv, str) else (tv or {}).get("variable")
+                if variable:
+                    covered.add(str(variable))
+        missing = sorted(expected - covered)
+        if len(missing) == len(expected):
+            return [
+                {
+                    "issue_type": "zero_tracking_variable_coverage",
+                    "severity": "medium",
+                    "detail": "target declares tracking_variables but this run covered none of them",
+                    "missing_variables": missing,
+                }
+            ]
+        if len(missing) / len(expected) >= float(self.mic_rules.get("low_variable_coverage_ratio", 0.7)):
+            return [
+                {
+                    "issue_type": "low_tracking_variable_coverage",
+                    "severity": "low",
+                    "detail": f"only {len(expected) - len(missing)}/{len(expected)} tracking variables covered",
+                    "missing_variables": missing,
+                }
+            ]
+        return []

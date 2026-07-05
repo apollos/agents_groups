@@ -25,6 +25,8 @@ SYSTEM_PROMPT = """你是一名服务于股票/行业研究分析师的信息抽
 4. 不确定或缺失的信息放入 analyst_questions 或 coverage_gaps，不要编造。
 5. decision 取值：save_structured（值得入库）| link_only（仅记录链接）| skip（无价值）。
 6. 关系方向必须标准化：A 向 B 供货 => A supplier_of B，B customer_of A。
+7. 如果 target_profile.tracking_variables 非空，每个 events[] 项应尽量判断它覆盖了哪些
+   tracking_variables。只能从给定变量清单中选择；没有明确证据时输出空列表，不要猜测。
 """
 
 SCHEMA_HINT = {
@@ -68,6 +70,13 @@ SCHEMA_HINT = {
                    "horizon": "1w|1m|quarter|annual|long_term", "magnitude_guess": "low|medium|high|unknown"},
         "source_corroboration_status": "single_source|multi_source|official_confirmed|conflicting",
         "evidence_locator": {"passage_id": "p1"}, "confidence": 0.0,
+        "tracking_variables": [{
+            "variable": "must be one of target_profile.tracking_variables; empty list if none fits",
+            "direction": "positive|negative|neutral|mixed|unclear",
+            "strength": "0.0-1.0",
+            "reasoning": "short reason based only on selected passages",
+            "confidence": "0.0-1.0",
+        }],
     }],
     "relations": [{
         "subject_entity": {"name": "", "type": "company", "ticker": None},
@@ -122,6 +131,7 @@ def _profile_block(profile: TargetProfile) -> dict[str, Any]:
         "products": profile.products,
         "customers": profile.customers,
         "suppliers": profile.suppliers,
+        "tracking_variables": profile.tracking_variables,
     }
 
 

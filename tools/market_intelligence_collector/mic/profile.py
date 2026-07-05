@@ -27,6 +27,8 @@ class TargetProfile:
     core_metrics: list[str] = field(default_factory=list)
     representative_companies: list[str] = field(default_factory=list)
     regions: list[str] = field(default_factory=list)
+    tracking_variables: list[str] = field(default_factory=list)
+    theme_ids: list[str] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -46,6 +48,8 @@ class TargetProfile:
             core_metrics=data.get("core_metrics", []),
             representative_companies=data.get("representative_companies", []),
             regions=data.get("regions", []),
+            tracking_variables=data.get("tracking_variables", []),
+            theme_ids=data.get("theme_ids", []),
             raw=data,
         )
 

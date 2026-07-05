@@ -91,15 +91,43 @@ class PoolRepository:
         return out
 
 
-def resolve_demand_targets(demand: dict[str, Any], pool_repo: PoolRepository | None = None) -> list[dict[str, Any]]:
+def _dedupe_targets(targets: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for t in targets:
+        key = t.get("target_id") or t.get("ticker") or t.get("company_name") or t.get("industry_name")
+        if key:
+            out[str(key)] = t
+    return list(out.values())
+
+
+def resolve_demand_targets(
+    demand: dict[str, Any],
+    pool_repo: PoolRepository | None = None,
+    registry: Any = None,
+) -> list[dict[str, Any]]:
     """Resolve a Demand into concrete collection targets.
 
     Precedence: explicit demand.targets > target_scope.include_tickers > dynamic_pool layers
     resolved via PoolRepository with sellability / exclude_st / exclude_suspended filters.
+
+    demand.derived_from_demands is a runtime reference (V0.8): the target list of each source
+    demand is re-read at planning time, so periodic review demands automatically follow target
+    additions/removals in their daily source demand instead of drifting from a batch-time copy.
     """
+    derived: list[dict[str, Any]] = []
+    if registry is not None:
+        for source_id in demand.get("derived_from_demands") or []:
+            source = registry.get(str(source_id))
+            if not source:
+                logger.warning(
+                    "demand %s: derived source demand not found: %s", demand.get("demand_id"), source_id
+                )
+                continue
+            # Sources resolve without registry so derivation chains cannot recurse.
+            derived.extend(resolve_demand_targets(source, pool_repo))
     targets = list(demand.get("targets") or [])
-    if targets:
-        return targets
+    if targets or derived:
+        return _dedupe_targets([*targets, *derived])
     scope = demand.get("target_scope") or {}
     pool_layers = scope.get("pool_layers") or []
     for ticker in scope.get("include_tickers") or []:

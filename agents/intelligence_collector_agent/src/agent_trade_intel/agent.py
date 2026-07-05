@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta, timezone
 from threading import Event, Thread
 from typing import Any, Callable, Iterator
 
+from .adapters.hk_connect_adapter import HKConnectAdapter
 from .adapters.mic_adapter import MICAdapter
 from .adapters.stock_data_adapter import StockDataCLIAdapter
 from .capabilities import ToolCapabilityVerifier
@@ -105,6 +106,7 @@ class IntelligenceCollectorAgent:
             working_dir=config.tools.stock_working_dir,
             timeout_seconds=int(config.get("tools.stock_data_collector.timeout_seconds", 180)),
         )
+        self.hk_connect = HKConnectAdapter(provider=str(config.get("tools.hk_connect_collector.provider", "akshare")))
         self.capabilities = ToolCapabilityVerifier(self.state_store, self.stock, config.raw)
         self.heartbeats = HeartbeatRecorder(self.state_store, config.runtime.agent_id)
         self.breaker = CircuitBreaker(self.state_store, config.raw)
@@ -231,8 +233,9 @@ class IntelligenceCollectorAgent:
             raise ValueError(f"demand not found: {demand_id}")
         as_of = payload.get("as_of") or utc_now_iso()
         market_phase = payload.get("market_phase") or "unknown"
-        # dynamic_pool scopes (e.g. current_holding) resolve against the pool_members table.
-        targets = resolve_demand_targets(demand, self.pool_repo)
+        # dynamic_pool scopes (e.g. current_holding) resolve against the pool_members table;
+        # derived_from_demands review demands re-read their source demand targets at plan time.
+        targets = resolve_demand_targets(demand, self.pool_repo, registry=self.registry)
         task_payloads = self.planner.plan(
             demand, request_ticket_id=ticket["ticket_id"], as_of=as_of, market_phase=market_phase, targets=targets
         )
@@ -277,6 +280,8 @@ class IntelligenceCollectorAgent:
             return self._execute_mic_task(ticket, task)
         if task_type in {"intraday_snapshot_10m", "candidate_full_stock_snapshot", "post_close_stock_refresh"}:
             return self._execute_stock_task(ticket, task)
+        if task_type == "hk_connect_daily_snapshot":
+            return self._execute_hk_connect_task(ticket, task)
         self.tickets.update_status(ticket["ticket_id"], "done", "unknown task type ignored")
         return {"status": "ignored", "task_type": task_type}
 
@@ -354,7 +359,7 @@ class IntelligenceCollectorAgent:
             result = self.mic.collect(target_id=target_id, task_profile=task_profile)
         self._record_breaker(self.mic.tool_name, result.status)
         run_id = self.persister.save_run(task=task, ticket_id=ticket["ticket_id"], result=result, demand_id=task.get("demand_id"))
-        q = self.quality.evaluate(result, context={"priority": ticket.get("priority")})
+        q = self.quality.evaluate(result, context={"priority": ticket.get("priority"), "target": target})
         saved = self.persister.save_mic_structures(task=task, result=result) if result.status == "success" else {"events": 0, "coverage_gaps": 0}
         if q["severity"] in {"P0", "P1"}:
             self._emit_data_quality(
@@ -561,6 +566,56 @@ class IntelligenceCollectorAgent:
         self.tickets.update_status(ticket["ticket_id"], "done" if usable else "failed", "stock data task completed")
         self._publish_collection_result(ticket, status="success" if usable else "partial_or_failed", run_ids=run_ids, usable=usable)
         return {"status": "success" if usable else "partial_or_failed", "run_ids": run_ids, "quality": quality_decisions, "feature": feature}
+
+    def _execute_hk_connect_task(self, ticket: dict[str, Any], task: dict[str, Any]) -> dict[str, Any]:
+        """Structured HK-connect daily snapshot (southbound holding, eligibility, turnover)."""
+        target = task.get("target") or {}
+        ticker = target.get("ticker")
+        if not ticker:
+            raise ValueError("hk_connect task missing target.ticker")
+        if not bool(self.config.get("tools.hk_connect_collector.enabled", True)):
+            self.tickets.update_status(ticket["ticket_id"], "done", "hk_connect_collector disabled")
+            return {"status": "skipped", "reason": "hk_connect_collector disabled"}
+        if not self.breaker.allow(self.hk_connect.tool_name):
+            return self._handle_circuit_open(
+                ticket, tool_name=self.hk_connect.tool_name, ticker=ticker, target_id=target.get("target_id")
+            )
+        self._keepalive()
+        result = self.hk_connect.collect_snapshot(
+            target_id=target.get("target_id"),
+            ticker=ticker,
+            company_name=target.get("company_name"),
+            as_of=task.get("as_of"),
+        )
+        self._record_breaker(self.hk_connect.tool_name, result.status)
+        run_id = self.persister.save_run(task=task, ticket_id=ticket["ticket_id"], result=result, demand_id=task.get("demand_id"))
+        if result.status == "success":
+            self.persister.save_hk_connect_snapshot(task=task, result=result, run_id=run_id)
+            self.tickets.update_status(ticket["ticket_id"], "done", "hk_connect snapshot saved")
+            self._publish_collection_result(ticket, status="success", run_ids=[run_id], usable=True)
+            return {"status": "success", "run_id": run_id}
+        self._emit_data_quality(
+            severity="P2",
+            issue_type="hk_connect_collect_failed",
+            summary_cn=f"{ticker} 的港股通结构化快照采集失败。",
+            payload={"errors": result.errors, "run_id": run_id},
+            ticker=ticker,
+            target_id=target.get("target_id"),
+            parent_ticket_id=ticket["ticket_id"],
+            correlation_id=ticket.get("correlation_id"),
+        )
+        retryable = any(err.get("retryable") for err in result.errors)
+        if retryable:
+            self.tickets.update_status(ticket["ticket_id"], "open", "hk_connect snapshot scheduled for retry", result.errors)
+            return {
+                "status": "failed",
+                "run_id": run_id,
+                "_message_action": "retry",
+                "_retry_error": (result.errors or [{}])[0],
+            }
+        self.tickets.update_status(ticket["ticket_id"], "failed", "hk_connect snapshot failed")
+        self._publish_collection_result(ticket, status="failed", run_ids=[run_id], usable=False)
+        return {"status": "failed", "run_id": run_id}
 
     def _feature_enrichment_queries(
         self, *, ticker: str, task: dict[str, Any], intraday_frequency: str | None

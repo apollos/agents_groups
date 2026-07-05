@@ -284,7 +284,9 @@ class RequestCenter:
                 kind: company
                 demand_type: periodic_review
                 cadence: monthly
-                copy_targets_from: [demand_company_research_daily]   # reuse another demand's targets
+                derived_from_demands: [demand_company_research_daily]  # runtime reference (follows source)
+              demand_snapshot_review:
+                copy_targets_from: [demand_company_research_daily]     # batch-time copy (frozen list)
             industries: [{name: ..., target_id: ..., products: [...], ...}]
             companies:  [{name: ..., ticker: ..., demand_id: ..., industry_id: ..., ...}]
             stocks:     [{ticker: ..., company_name: ...}]
@@ -326,11 +328,21 @@ class RequestCenter:
             profiles[tid] = profile
             add(item.get("demand_id") or INDUSTRY_DEMAND_ID, "industry", target, item)
             summary["industries"] += 1
+        hk_company_defaults = defaults.get("hk_company") or {}
         for item in spec.get("companies") or []:
             item = dict(item)
             item.setdefault("pool_layer", defaults.get("pool_layer", "watchlist"))
             if not item.get("tracking_variables") and tv_by_industry.get(item.get("industry_id")):
                 item["tracking_variables"] = tv_by_industry[item["industry_id"]]
+            # HK targets get the HK-connect variable set (southbound_holding, buyback, ...) on
+            # top of their industry variables, without repeating it on every company entry.
+            ticker = normalize_ticker(item.get("ticker"))
+            if ticker and _HK_TICKER.match(ticker) and hk_company_defaults:
+                extra_vars = _as_list(hk_company_defaults.get("tracking_variables")) or []
+                current = _as_list(item.get("tracking_variables")) or []
+                item["tracking_variables"] = current + [v for v in extra_vars if v not in current]
+                if item.get("collect_hk_connect") is None and "collect_hk_connect" in hk_company_defaults:
+                    item["collect_hk_connect"] = bool(hk_company_defaults["collect_hk_connect"])
             tid, profile, target, pool_op = self._company_entry(item)
             profiles[tid] = profile
             add(item.get("demand_id") or COMPANY_DEMAND_ID, "company", target, item)
@@ -359,10 +371,32 @@ class RequestCenter:
                     update_demand_config=update_demand_config,
                 )
             )
-        # copy_targets_from: demands (e.g. periodic reviews) that reuse another demand's target
-        # list instead of repeating hundreds of entries. Runs after direct groups so sources
-        # registered by this very batch are already up to date.
+        # Demands that reuse another demand's target list instead of repeating hundreds of
+        # entries. Two flavours, both run after direct groups so sources registered by this
+        # very batch are already visible:
+        #   derived_from_demands -- runtime reference: targets are re-read from the source
+        #     demand at every planning tick, so review demands follow source changes.
+        #   copy_targets_from    -- batch-time copy: a one-shot snapshot of today's targets.
         for demand_id, override in overrides.items():
+            derived_sources = _as_list((override or {}).get("derived_from_demands"))
+            if derived_sources:
+                for src_id in derived_sources:
+                    if not self.registry.get(src_id):
+                        extra_warnings.append(
+                            f"demand {demand_id}: derived_from_demands source not registered yet: {src_id}"
+                        )
+                demand_results.append(
+                    self._merge_targets_into_demand(
+                        demand_id,
+                        [],
+                        demand_kind=override.get("kind") or "company",
+                        priority=override.get("priority") or defaults.get("priority") or "normal",
+                        test_mode=bool(defaults.get("test_mode", False)),
+                        scaffold_overrides=override,
+                        update_demand_config=update_demand_config,
+                    )
+                )
+                continue
             sources = _as_list((override or {}).get("copy_targets_from"))
             if not sources:
                 continue
@@ -455,6 +489,7 @@ class RequestCenter:
                                 "company_name",
                                 "industry_name",
                                 "industry_id",
+                                "theme_ids",
                                 "tracking_variables",
                             )
                         }
@@ -504,6 +539,7 @@ class RequestCenter:
                 "downstream_terms": _as_list(item.get("downstream")),
                 "core_metrics": _as_list(item.get("metrics")),
                 "representative_companies": _as_list(item.get("companies")),
+                "tracking_variables": _as_list(item.get("tracking_variables")),
             }
         )
         target = _clean(
@@ -528,6 +564,7 @@ class RequestCenter:
             alias_list.insert(0, name)
         if ticker and ticker.split(".")[0] not in alias_list:
             alias_list.append(ticker.split(".")[0])
+        is_hk = bool(ticker and _HK_TICKER.match(ticker))
         profile = _clean(
             {
                 "target_id": tid,
@@ -541,6 +578,10 @@ class RequestCenter:
                 "competitors": _as_list(item.get("competitors")),
                 "upstream_terms": _as_list(item.get("upstream")),
                 "downstream_terms": _as_list(item.get("downstream")),
+                # Research metadata surfaced to MIC prompts (event -> variable attribution)
+                # and cross-theme aggregation.
+                "tracking_variables": _as_list(item.get("tracking_variables")),
+                "theme_ids": _as_list(item.get("theme_ids")),
             }
         )
         target = _clean(
@@ -552,13 +593,22 @@ class RequestCenter:
                 # Research-pool metadata: which industry line the company belongs to and which
                 # research variables it should be tracked on (used by reports/analyst agent).
                 "industry_id": item.get("industry_id"),
+                # Secondary / cross-cutting themes (e.g. export manufacturing) on top of the
+                # primary industry_id, so one company can be aggregated by multiple lines.
+                "theme_ids": _as_list(item.get("theme_ids")),
                 "tracking_variables": _as_list(item.get("tracking_variables")),
+                "ah_pair_a_ticker": normalize_ticker(item.get("ah_pair_a_ticker")),
                 "collect_mic": True,
                 # stock_data_collector only covers A-share tickers.
                 "collect_stock": _is_a_share(ticker),
+                # HK tickers additionally get structured HK-connect snapshots unless opted out.
+                "collect_hk_connect": is_hk if item.get("collect_hk_connect") is None else bool(item.get("collect_hk_connect")),
             },
             keep_false=True,
         )
+        if not is_hk:
+            # collect_hk_connect only means something for .HK tickers; drop the noise otherwise.
+            target.pop("collect_hk_connect", None)
         pool_op = None
         pool_layer = item.get("pool_layer")
         if pool_layer and _is_a_share(ticker):

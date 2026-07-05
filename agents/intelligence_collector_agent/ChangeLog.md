@@ -4,6 +4,75 @@
 
 ---
 
+## V0.8 — 2026-07-05：A股 + 港股通可迭代研究池闭环版（第四轮外部审阅采纳）
+
+第四轮审阅（《A股 + 港股通可迭代股票研究池 V0.8 完整方案》）提出"不考虑工程排期，只要能做就做"。本轮采纳其中绝大多数建议——事件→变量归因、港股通结构化采集、多主题归因、运行时目标引用、评估 CLI 全部落地；仅 market_context_collector（宏观/指数/汇率/商品）与 `RunStats.top_events` 内部改名两项暂缓，理由见文末。
+
+### 1. 事件 → tracking_variable 双层标签（审阅 §2-§5，采纳）
+
+前三轮暂缓的核心项本轮完整落地，按审阅的"双层标签"方案：模型归因 + 关键词候选，`mapping_method` 与 `review_status` 全程留痕，互不污染。
+
+- **MIC 侧**（跨包改动）：`EventCard` 新增 `tracking_variables: list[TrackingVariableEvidence]`（variable/direction/strength/reasoning/confidence）；`TargetProfile` 新增 `tracking_variables` 与 `theme_ids` 并透传给模型 prompt（SYSTEM_PROMPT 明确"只能从给定清单选择，无明确证据输出空列表"）；`_tally` 把变量证据带进 `all_events`。
+- **Agent 侧（schema v5，老库自动迁移）**：新增 `event_variable_links` 关联表（一事件可覆盖多变量），主键 `(event_id, tracking_variable, mapping_method)`。模型归因写 `mic_model`，confidence ≥ 0.65 记 `accepted`、否则 `pending`；重复事件（幂等命中）也会补写变量链接，不会因事件已存在而丢归因。
+- **关键词候选**（新模块 `variable_mapper.py`）：15 组中文关键词规则（订单/毛利率/南向持股/出口管制/CDE受理…），只对 target 声明过的变量生效，产出一律 `keyword_candidate` + `pending`、confidence 上限 0.6，**永不进入 confirmed coverage**。
+
+### 2. 港股通结构化采集 hk_connect_collector（审阅 §6-§7，采纳）
+
+前三轮以"需要新外部数据源"暂缓，本轮按审阅建议用 AKShare（东方财富数据）落地：
+
+- 新增 `adapters/hk_connect_adapter.py`：港股通成分（资格判定）+ 南向持股统计（持股量/市值/占比/1/5/10日变化），akshare **惰性导入**——未安装只影响 HK 快照任务（返回不可重试的 `AKSHARE_NOT_INSTALLED`），其余功能不受影响。附 `calc_ah_premium_pct` 换算函数（A股人民币价折港币相对 H 股溢价）。
+- 新增 `hk_connect_snapshots` 表（schema v5）：资格/价格/成交额/南向持股/回购/AH溢价/流动性字段先建全，数据源能取哪个填哪个；`(ticker, as_of)` 幂等键保证每标的每日至多一条。
+- planner 新增 `_hk_connect_tasks`：daily_collection 盘后为 `.HK` 且未显式关闭 `collect_hk_connect` 的目标追加 `hk_connect_daily_snapshot` 任务；A股/periodic_review 不生成。配置 `tools.hk_connect_collector.enabled`（默认开）。
+- `agent.py` 新增任务分发与执行：成功落快照表；akshare 缺失按不可重试处理，网络类失败走常规重试。
+- YAML `defaults.hk_company`：港股公司默认 `collect_hk_connect: true` 并追加港股通变量集（southbound_holding/hk_connect_eligible/hk_liquidity/buyback/ah_premium/dividend_yield）；公司条目支持 `ah_pair_a_ticker` 记录 AH 对。
+
+### 3. theme_ids 多主题归因（审阅 §8，采纳）
+
+上一轮"出海制造不改 primary industry"的处理被审阅指出模型限制不应保留——本轮采纳 `industry_id`（主线）+ `theme_ids`（跨主题）双层归因：batch 条目、`request company`、MIC profile、Demand target 全链路支持；`research_pool_full.yaml` 已给三一重工/中联重科/中国中车/潍柴动力/美的集团/海尔智家打上 `industry_export_manufacturing` 主题，主线归属不变。
+
+### 4. derived_from_demands 运行时引用（审阅 §9，采纳）
+
+`copy_targets_from` 是注册时一次性拷贝，daily 名单增删后复盘 Demand 会漂移。本轮新增 `derived_from_demands`：复盘 Demand 不再存目标快照，`resolve_demand_targets` 在**每次规划时**重新读取来源 Demand 的当前目标并去重合并。`research_pool_full.yaml` 三个复盘 Demand 已全部切换（周报/月报/季报注册时 target_count=0，运行时解析出 108 个）。`copy_targets_from` 保留兼容。审阅 YAML 中的 `derived_sync_policy: runtime_reference` 键未实现——运行时引用是 `derived_from_demands` 的唯一语义，无需二级开关。
+
+### 5. 评估 CLI：coverage / hk-connect / golden（审阅 §12-§13，采纳）
+
+上一轮"等真实数据积累"的理由被审阅驳回（评估框架可以先建，没数据输出 0）——本轮采纳：
+
+- 新增 `evaluation.py`（`CoverageEvaluator`）：`eval coverage --date --demand-id [--include-candidates]` 输出 target × tracking_variable 覆盖矩阵（expected/covered/coverage_ratio + 每格 event_count/max_confidence/权威源标记；默认只算 accepted 链接，`--include-candidates` 纳入 pending 候选）；`eval hk-connect --date` 输出港股通快照覆盖率与缺失清单（支持 `derived_from_demands` 的目标解析，按本地交易日过滤）。
+- 新增 `golden_eval.py`（`GoldenSetEvaluator`）+ `examples/golden_events.yaml`：`eval golden --file` 按 target/日期窗/关键词/期望变量/权威源类型匹配已落库事件，输出 expected_count/matched_count/recall 与逐条命中明细。
+- dashboard 产出面板新增今日变量映射（按 review_status 分组）与港股通快照数 chips。
+
+### 6. planner 无歧义重构（审阅 §1，采纳）
+
+上一轮已证明无重复规划 bug，但审阅指出 `elif/else` 结构容易被误读——采纳重构为显式 `if/return` 风格：`TEXT_RESEARCH_DEMAND_TYPES` 常量 + 每种 demand_type 一个 return 分支，daily 盘后在 MIC 任务上追加 stock + hk_connect 任务后统一返回。行为不变（V0.7.1/V0.7.3 全部规划测试原样通过）。
+
+### 7. all_events 缓存复用路径补全（审阅 §10，采纳）
+
+审阅正确指出：V0.7.3 的 `all_events` 只覆盖 fresh analysis 路径，cache/reuse 命中时 `clone_latest_analysis` 只回传 counts，克隆事件不进 `all_events`，"全量事件落库"契约在复用场景下不成立。修复：`clone_latest_analysis` 现在返回 `cloned_events` 明细（含 event_type/event_date/impact channels/confidence），pipeline 新增 `_tally_cloned` 把克隆事件连同来源元数据并入事件列表，两处复用调用点（同 target 复用 / 跨 target 复用）都已接入。审阅附带的"`RunStats.top_events` 改名 `all_events`"属内部字段改名，无行为差异，不改（summary 已同时输出 `top_events` 前5 与 `all_events` 全量）。
+
+### 8. 质量闸门变量覆盖规则（审阅 §15，采纳）
+
+`quality.mic` 新增 `flag_tracking_variable_coverage`（默认开）与 `low_variable_coverage_ratio`（默认 0.7）：目标声明了 tracking_variables 但本次 MIC 零覆盖 → medium issue，P2 accept_degraded 留痕；覆盖但缺失比例 ≥ 阈值 → low issue，**不降级**（P3 accept，只记录）。低严重度问题不再触发降级路径，避免变量覆盖提示淹没真正的质量问题。
+
+### 暂缓（2 项，附理由）
+
+- **market_context_collector 宏观/指数/汇率/商品辅助目标（审阅 §11、§14.4）**：方向认可但本轮不做。这是与 hk_connect_collector 同量级的新 demand kind + adapter + 表 + 调度分支；本轮已引入两张新表和一个新采集链路，宏观背景当前可用 industry 型 MIC 档案近似（文本层面）。AKShare 同样覆盖指数/汇率/商品，adapter 模式本轮已建立，V0.8 数据链路跑通后作为下一版增量成本很低。
+- **`RunStats.top_events` 改名**：见第 7 条——纯内部改名，无功能收益，不做。
+
+### 验证
+
+- Agent 测试 100 个全部通过（新增 20 个 `tests/test_v08_research_loop.py`：planner HK 任务与 opt-out、v5 迁移、模型/关键词变量链接落库、重复事件补链接、HK adapter 行映射与缺 akshare 报错、快照幂等、AH 溢价计算、derived_from_demands 运行时跟随、theme_ids 与 HK 默认、质量闸门零/低覆盖、coverage/hk-connect/golden 三个评估器）。
+- MIC 测试 77 个全部通过（新增 4 个 `tests/test_event_tracking_variables.py`：EventCard 变量证据 schema、profile 透传、prompt 包含变量清单、clone 返回事件明细）。
+- 端到端冒烟（临时库 + full YAML）：一次 batch 注册 8 行业 / 175 公司，33 个港股目标全部 `collect_hk_connect=true` 且继承行业+港股通变量集；月度复盘 `derived_from_demands` 注册时 0 目标、运行时解析 108 个；daily 盘后规划 108 MIC + 75 stock + 33 hk_connect 任务；`eval coverage`（931 个期望格）/ `eval hk-connect`（40 个港股目标）/ `eval golden` 三个命令在空库上正确输出 0 覆盖而非报错。
+
+### 升级说明
+
+- 老库自动迁移（v5：新增 `event_variable_links` 与 `hk_connect_snapshots` 两张表），无需手工操作。
+- 港股通结构化采集需要 `pip install akshare`（可选依赖）；未安装时仅 HK 快照任务失败留痕，MIC/A股链路不受影响。
+- 重跑 `request batch --file examples/research_pool_full.yaml` 即可获得 theme_ids、港股通默认变量与 derived_from_demands 复盘 Demand（幂等）。
+
+---
+
 ## V0.7.3 — 2026-07-05：研究池维护闭环（第三轮外部审阅甄别采纳）
 
 第三轮审阅共 11 项意见。经逐条核对代码，**P0-1（planner 重复规划 MIC）为误判**——审阅描述的"先 `_mic_tasks()` 再在 else 分支重复执行"结构与实际代码不符，实际代码自 V0.7 起就是单次规划 + 盘后条件追加 stock 任务，且有 V0.7.1 的 3 个验收测试在守护。本轮采纳其中确实成立的 4 项，其余继续暂缓。

@@ -14,9 +14,11 @@
 #   companies  —— md 第 3 章"核心研究名单"（demand_company_research_daily，每日深采）
 #                 md 第 4 章"上下游扩展观察名单"（demand_company_watch_daily，低预算观察）
 #   stocks     —— 纯行情跟踪（本文件默认为空，按需追加）
-# 另含（V0.7.3）：
+# 另含（V0.7.3 / V0.8）：
 #   tracking_variables_by_industry —— 每条主线的默认跟踪变量，公司条目按 industry_id 继承
-#   demands 段的周/月/季 periodic_review —— 通过 copy_targets_from 复用 daily 目标清单
+#   defaults.hk_company —— 港股公司默认追加的港股通变量集，且默认 collect_hk_connect: true
+#   demands 段的周/月/季 periodic_review —— 通过 derived_from_demands 运行时引用 daily
+#     目标清单（daily 增删目标后 review 自动跟随，不会漂移）
 #
 # 预算提示：全量注册后每日 MIC 任务 ≈ 8 行业 + ~85 核心公司 + ~55 观察公司。
 # 想分批启动：先注释掉 watch 部分，或注册后用
@@ -28,6 +30,16 @@ defaults:
   priority: normal
   test_mode: false
   pool_layer: watchlist
+  # 港股公司默认字段（V0.8）：在行业变量之外追加港股通结构化变量，并默认开启
+  # hk_connect_daily_snapshot（南向持股/资格/成交额，AKShare 数据源）。
+  hk_company:
+    collect_hk_connect: true
+    tracking_variables:
+      - southbound_holding
+      - hk_liquidity
+      - buyback
+      - ah_premium
+      - dividend_yield
 
 # 每条研究主线的默认跟踪变量（V0.7.3）：没有显式 tracking_variables 的公司条目
 # 按其 industry_id 继承下表；行业条目按 target_id 继承。单个条目可写
@@ -92,8 +104,10 @@ demands:
         enabled: true
 
   # ------------------------------------------------------------------------
-  # 周/月/季研究池维护（V0.7.3）：copy_targets_from 复用上面 daily Demand 的目标清单，
-  # 不必重复列名单；cadence 未到期的 runtime tick 会直接跳过编译。
+  # 周/月/季研究池维护（V0.8）：derived_from_demands 运行时引用 daily Demand 的目标
+  # 清单——每次规划时重新读取来源 demand，daily 增删目标后 review 自动跟随。
+  # （copy_targets_from 仍可用，但那是注册时一次性拷贝，会随时间漂移。）
+  # cadence 未到期的 runtime tick 会直接跳过编译。
   # ------------------------------------------------------------------------
   demand_industry_weekly_review:
     kind: industry
@@ -101,7 +115,7 @@ demands:
     cadence: weekly
     cadence_anchor: fri
     description: 行业周度景气复盘
-    copy_targets_from: [demand_industry_research_daily]
+    derived_from_demands: [demand_industry_research_daily]
     task_profile:
       mic:
         enabled: true
@@ -114,7 +128,7 @@ demands:
     cadence: monthly
     cadence_anchor: 1
     description: 核心公司月度研究卡更新
-    copy_targets_from: [demand_company_research_daily]
+    derived_from_demands: [demand_company_research_daily]
     task_profile:
       mic:
         enabled: true
@@ -129,7 +143,7 @@ demands:
     cadence: quarterly
     cadence_anchor: 15
     description: 季度财报季复盘（1/4/7/10 月 15 日）
-    copy_targets_from: [demand_company_research_daily]
+    derived_from_demands: [demand_company_research_daily]
     task_profile:
       mic:
         enabled: true
@@ -188,14 +202,19 @@ companies:
   - {name: 埃夫特, ticker: 688165.SH, products: "工业机器人整机", industry_id: industry_high_end_equipment}
   - {name: 中控技术, ticker: 688777.SH, products: "流程工业自动化,工业软件", industry_id: industry_high_end_equipment}
   - {name: 先导智能, ticker: 300450.SZ, products: "锂电设备,光伏设备", industry_id: industry_high_end_equipment}
-  - {name: 中国中车, ticker: 601766.SH, products: "轨交装备", industry_id: industry_high_end_equipment}
+  - {name: 中国中车, ticker: 601766.SH, products: "轨交装备", industry_id: industry_high_end_equipment,
+     theme_ids: [industry_export_manufacturing]}
   - {name: 中航光电, ticker: 002179.SZ, products: "军工连接器", industry_id: industry_high_end_equipment}
   - {name: 中航沈飞, ticker: 600760.SH, products: "航空装备", industry_id: industry_high_end_equipment}
   - {name: 航发动力, ticker: 600893.SH, products: "航空发动机", industry_id: industry_high_end_equipment}
-  - {name: 三一重工, ticker: 600031.SH, products: "挖掘机,工程机械", industry_id: industry_high_end_equipment}
-  - {name: 中联重科, ticker: 000157.SZ, products: "工程机械", industry_id: industry_high_end_equipment}
+  # theme_ids（V0.8）：主线不变，同时纳入"出海制造"等跨主题聚合（md §2.8）
+  - {name: 三一重工, ticker: 600031.SH, products: "挖掘机,工程机械", industry_id: industry_high_end_equipment,
+     theme_ids: [industry_export_manufacturing]}
+  - {name: 中联重科, ticker: 000157.SZ, products: "工程机械", industry_id: industry_high_end_equipment,
+     theme_ids: [industry_export_manufacturing]}
   # --- 3.2 港股 / 港股通候选 ---
-  - {name: 潍柴动力, ticker: 02338.HK, products: "动力系统,商用车", industry_id: industry_high_end_equipment}
+  - {name: 潍柴动力, ticker: 02338.HK, products: "动力系统,商用车", industry_id: industry_high_end_equipment,
+     theme_ids: [industry_export_manufacturing]}
   - {name: 中国中铁, ticker: 00390.HK, products: "基建,轨交工程", industry_id: industry_high_end_equipment}
   - {name: 中国铁建, ticker: 01186.HK, products: "基建,轨交工程", industry_id: industry_high_end_equipment}
 
@@ -264,8 +283,10 @@ companies:
   - {name: 安踏体育, ticker: 02020.HK, products: "运动品牌", industry_id: industry_internet_consumer}
   - {name: 李宁, ticker: 02331.HK, products: "运动品牌", industry_id: industry_internet_consumer}
   # --- 3.6 A股核心 ---
-  - {name: 美的集团, ticker: 000333.SZ, products: "家电,机器人", industry_id: industry_internet_consumer}
-  - {name: 海尔智家, ticker: 600690.SH, products: "家电出海,高端化", industry_id: industry_internet_consumer}
+  - {name: 美的集团, ticker: 000333.SZ, products: "家电,机器人", industry_id: industry_internet_consumer,
+     theme_ids: [industry_export_manufacturing]}
+  - {name: 海尔智家, ticker: 600690.SH, products: "家电出海,高端化", industry_id: industry_internet_consumer,
+     theme_ids: [industry_export_manufacturing]}
   - {name: 伊利股份, ticker: 600887.SH, products: "乳制品", industry_id: industry_internet_consumer}
   - {name: 中国中免, ticker: 601888.SH, products: "免税,旅游零售", industry_id: industry_internet_consumer}
   - {name: 珀莱雅, ticker: 603605.SH, products: "国货美妆", industry_id: industry_internet_consumer}

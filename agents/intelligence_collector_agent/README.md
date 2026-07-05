@@ -1,4 +1,4 @@
-# 情报收集员 Agent 代码包 V0.7.3
+# 情报收集员 Agent 代码包 V0.8
 
 这是 Agent交易公司多 Agent A 股交易辅助系统中的 **情报收集员 Agent**。它面向 OpenClaw 多 Agent 运行环境设计，负责 Demand → Ticket → Message → 工具调用 → 质量闸门 → 事件/特征/日报的采集闭环。
 
@@ -6,14 +6,24 @@
 
 完整版本历史见 [ChangeLog.md](ChangeLog.md)。
 
-## 0. V0.7.3 关键变更（研究池维护闭环，第三轮审阅甄别采纳）
+## 0. V0.8 关键变更（A股 + 港股通可迭代研究池闭环，第四轮审阅采纳）
+
+1. **事件→跟踪变量双层标签（schema v5）**：MIC 模型对每条事件输出 `tracking_variables`（变量/方向/强度/理由/置信度，只能从 target 声明清单中选），Agent 落库到新表 `event_variable_links`（confidence ≥ 0.65 记 accepted，否则 pending）；另有中文关键词规则产出 `keyword_candidate` 候选链接，一律 pending、不进 confirmed coverage。
+2. **港股通结构化采集 `hk_connect_collector`**：AKShare（东方财富）拉取港股通资格 + 南向持股（量/市值/占比/1/5/10日变化），落新表 `hk_connect_snapshots`（每标的每日幂等一条）；daily 盘后为 `.HK` 目标自动追加 `hk_connect_daily_snapshot` 任务；akshare 为可选依赖（惰性导入，未安装只影响 HK 快照）。
+3. **`theme_ids` 多主题归因**：公司保持单一 `industry_id` 主线，同时可挂多个跨主题（如出海制造）；三一/中车/潍柴/美的/海尔等已在 full YAML 打上 `industry_export_manufacturing`。
+4. **`derived_from_demands` 运行时目标引用**：周/月/季复盘 Demand 不再注册时拷贝名单，而是每次规划时读取来源 daily Demand 的当前目标（增删自动跟随不漂移）；full YAML 三个复盘 Demand 已切换。
+5. **评估 CLI `intel-agent eval`**：`eval coverage`（target × tracking_variable 覆盖矩阵）、`eval hk-connect`（港股通快照覆盖率与缺失清单）、`eval golden`（人工金标事件集 recall）；dashboard 新增今日变量映射与港股通快照统计。
+6. **质量闸门变量覆盖规则**：目标有变量清单但本次零覆盖 → P2 降级留痕；低覆盖（缺失 ≥ 70%）→ 仅记录不降级。
+7. **`all_events` 缓存复用补全（MIC 侧）**：cache/reuse 命中时克隆的事件明细现在也进入 `all_events`，全量事件落库契约在复用场景同样成立。
+
+## 0.1 V0.7.3 关键变更（研究池维护闭环，第三轮审阅甄别采纳）
 
 1. **planner 显式支持 `periodic_review`**：每 collect_mic 目标规划 1 个 MIC 深采任务，复盘 Demand 即使盘后也不追加 stock 任务（审阅所报"MIC 重复规划"经核对为误判，规划自 V0.7 起即为单次，测试持续守护）。
 2. **每条主线默认跟踪变量**：batch spec 新增 `tracking_variables_by_industry` 段，公司条目按 `industry_id` 继承主线变量集（可单条目覆盖）；`research_pool_full.yaml` 已填入 8 条主线定制变量，175 家公司全部带变量。
 3. **`copy_targets_from` + 周/月/季复盘并入 full YAML**：复盘 Demand 复用 daily 目标清单，无需重复名单；full YAML 内置周度行业景气复盘（周五）/ 月度公司研究卡（每月1日）/ 季度财报季复盘（1/4/7/10月15日）。
 4. **全量事件落库**：MIC 输出新增 `all_events`，persister 与质量闸门优先使用；未进 Top5 展示的小事件（小额回购、库存边际变化、中标候选人公示）不再丢失。
 
-## 0.1 V0.7.2 关键变更（研究效果结构化，第二轮审阅采纳）
+## 0.2 V0.7.2 关键变更（研究效果结构化，第二轮审阅采纳）
 
 1. **2026 年 A 股交易日历落地**：`market_calendar.holidays` 按沪深交易所 2026 年休市安排填入 19 个工作日休市日（春节/国庆等），`calendar validate --year 2026` 返回 ok；每年 12 月需追加次年条目。
 2. **研究池目标元数据**：`request industry|company`（及 batch 条目）支持 `industry_id` 与 `tracking_variables`，存入 Demand target 供日报/分析员按主线与变量聚合；`examples/research_pool_full.yaml` 175 家公司已全部打上 `industry_id`，40 个港股代码统一补零为 5 位（入库 ticker 也归一为 `00700.HK` 形式）。
@@ -202,6 +212,9 @@ tools:
     enabled: true
     config_dir: null      # 可填绝对路径；null 表示让 stock_data_collector 自行解析配置/env
     working_dir: null     # 若 CLI 不可 import，可填 stock_data_collector 项目根目录绝对路径
+  hk_connect_collector:   # V0.8：港股通结构化快照（可选依赖 akshare，未安装仅 HK 快照任务失败留痕）
+    enabled: true
+    provider: akshare
 ```
 
 ## 5. SQLite 三库边界
@@ -459,9 +472,15 @@ intel-agent --config $CFG request batch --file examples/research_pool_full.yaml
 intel-agent --config $CFG request batch --file examples/research_pool_full.yaml --update-demand-config
 
 # 周度/月度/季度复盘 Demand：demands: 段设 cadence: weekly|monthly|quarterly，runtime tick
-# 只在到期日编译（weekly 默认周五，可用 cadence_anchor 调整）。V0.7.3 起 research_pool_full.yaml
-# 已内置三个复盘 Demand（copy_targets_from 复用 daily 名单），跑 full 注册即一并生效；
-# examples/periodic_reviews.yaml 保留为最小演示。
+# 只在到期日编译（weekly 默认周五，可用 cadence_anchor 调整）。V0.8 起 research_pool_full.yaml
+# 内置的三个复盘 Demand 改用 derived_from_demands 运行时引用 daily 名单（daily 增删目标后
+# 复盘自动跟随；copy_targets_from 注册时拷贝仍兼容）；examples/periodic_reviews.yaml 保留为最小演示。
+
+# 研究效果评估（V0.8）：变量覆盖矩阵 / 港股通结构化覆盖 / 金标事件集 recall
+intel-agent --config $CFG eval coverage --date 2026-07-06 --demand-id demand_company_research_daily
+intel-agent --config $CFG eval coverage --date 2026-07-06 --include-candidates   # 纳入 pending 关键词候选
+intel-agent --config $CFG eval hk-connect --date 2026-07-06
+intel-agent --config $CFG eval golden --file examples/golden_events.yaml
 
 # 观察层（上下游扩展名单）想暂停/恢复：
 intel-agent --config $CFG demand suspend --demand-id demand_company_watch_daily
@@ -627,6 +646,13 @@ stock_data 质量检查包括：
 - 如设置 `tools.stock_data_collector.config_dir`，必须是绝对路径或由 `workspace_root` 正确解析出的路径。
 - `TUSHARE_TOKEN` 等凭证已配置。
 - 资金流需要有效 `EASTMONEY_COOKIE`。
+
+### hk_connect_collector（V0.8）
+
+需要满足：
+
+- `pip install akshare`（可选依赖；数据来自东方财富，无需 API Key）。
+- 未安装 akshare 时，HK 快照任务返回不可重试的 `AKSHARE_NOT_INSTALLED` 并留痕，MIC / A 股链路不受影响。
 - 盘中能力必须先跑 `tools verify-capabilities`。
 
 ## 16. 内部读取 CLI

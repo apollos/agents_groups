@@ -1,0 +1,34 @@
+# =============================================================================
+# Golden-set 评估样例（V0.8）
+#
+# 用法：手工维护"这段时间内必然发生、采集系统必须捕获"的事件清单，然后运行
+#   intel-agent --config $CFG eval golden --file examples/golden_events.yaml
+# 输出 expected_count / matched_count / recall / missed。
+#
+# 匹配规则（全部满足才算命中）：
+#   target_id + date_range        必填：事件归属目标与日期窗口
+#   keywords                      可选：summary_cn 需命中任一关键词
+#   expected_variables            可选：事件需挂到任一列出的 tracking_variable
+#   must_have_source_type         可选：事件来源需属于列出的 source_type 之一
+#
+# 维护建议：每周从公开新闻中挑 5-10 条确定性事件补进来，recall 下降即说明
+# query_families / source_packs / 预算配置需要调整。
+# =============================================================================
+
+golden_events:
+  - expected_event_id: golden_001
+    target_id: company_hk_00700
+    ticker: 00700.HK
+    date_range: ["2026-07-01", "2026-07-06"]
+    expected_variables: [southbound_holding, buyback]
+    must_have_source_type: [exchange, company, official]
+    keywords: [腾讯, 回购]
+    notes: 腾讯回购或南向持股变化应被捕获
+
+  - expected_event_id: golden_002
+    target_id: industry_power_grid
+    date_range: ["2026-07-01", "2026-07-06"]
+    expected_variables: [grid_tender, uhv_approval]
+    must_have_source_type: [official, regulator, exchange]
+    keywords: [特高压, 中标]
+    notes: 特高压核准/国网招标结果应被捕获

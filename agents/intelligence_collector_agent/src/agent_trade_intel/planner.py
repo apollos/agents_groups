@@ -7,6 +7,15 @@ from .demand import demand_targets
 from .ids import make_idempotency_key, new_id
 from .time_utils import floor_bucket, parse_dt
 
+# Demand types whose primary output is MIC text research. daily_collection additionally
+# schedules post-close structured refreshes (A-share stock data, HK-connect snapshots).
+TEXT_RESEARCH_DEMAND_TYPES = {
+    "daily_collection",
+    "on_demand_research",
+    "coverage_gap_followup",
+    "periodic_review",
+}
+
 
 class TaskGraphPlanner:
     """Convert one COLLECTION_REQUEST_TICKET + Demand into executable task payloads."""
@@ -25,24 +34,30 @@ class TaskGraphPlanner:
     ) -> list[dict[str, Any]]:
         demand_type = demand.get("demand_type")
         resolved_targets = targets if targets is not None else demand_targets(demand)
-        tasks: list[dict[str, Any]] = []
+
         if demand_type == "intraday_monitoring":
-            tasks.extend(self._intraday_tasks(demand, request_ticket_id, as_of, market_phase, resolved_targets))
-        elif demand_type == "black_swan_scan":
-            tasks.extend(self._mic_tasks(demand, request_ticket_id, as_of, resolved_targets, task_type="black_swan_scan"))
-        elif demand_type == "candidate_full_snapshot":
-            tasks.extend(self._candidate_snapshot_tasks(demand, request_ticket_id, as_of, resolved_targets))
-        elif demand_type == "tool_capability_check":
-            tasks.append(self._task(demand, request_ticket_id, None, "tool_capability_check", "internal", as_of))
-        elif demand_type in {"daily_collection", "on_demand_research", "coverage_gap_followup", "periodic_review"}:
+            return self._intraday_tasks(demand, request_ticket_id, as_of, market_phase, resolved_targets)
+
+        if demand_type == "black_swan_scan":
+            return self._mic_tasks(demand, request_ticket_id, as_of, resolved_targets, task_type="black_swan_scan")
+
+        if demand_type == "candidate_full_snapshot":
+            return self._candidate_snapshot_tasks(demand, request_ticket_id, as_of, resolved_targets)
+
+        if demand_type == "tool_capability_check":
+            return [self._task(demand, request_ticket_id, None, "tool_capability_check", "internal", as_of)]
+
+        if demand_type in TEXT_RESEARCH_DEMAND_TYPES:
             # One MIC deep-collect per collect_mic target -- never planned twice. Only
-            # daily_collection additionally schedules the post-close A-share data refresh.
-            tasks.extend(self._mic_tasks(demand, request_ticket_id, as_of, resolved_targets, task_type="mic_deep_collect"))
+            # daily_collection additionally schedules the post-close structured refreshes.
+            tasks = self._mic_tasks(demand, request_ticket_id, as_of, resolved_targets, task_type="mic_deep_collect")
             if demand_type == "daily_collection" and market_phase in {"post_market", "off_hours"}:
                 tasks.extend(self._stock_daily_tasks(demand, request_ticket_id, as_of, resolved_targets))
-        else:
-            tasks.extend(self._mic_tasks(demand, request_ticket_id, as_of, resolved_targets, task_type="mic_deep_collect"))
-        return tasks
+                tasks.extend(self._hk_connect_tasks(demand, request_ticket_id, as_of, resolved_targets))
+            return tasks
+
+        # Unknown demand types default to text intelligence only.
+        return self._mic_tasks(demand, request_ticket_id, as_of, resolved_targets, task_type="mic_deep_collect")
 
     def _cadence_profile(self, demand: dict[str, Any]) -> dict[str, Any]:
         """Named cadence profile referenced by demand.cadence_profile (design §7.2)."""
@@ -186,6 +201,23 @@ class TaskGraphPlanner:
             if not target or not target.get("ticker") or target.get("collect_stock") is False:
                 continue
             tasks.append(self._task(demand, request_ticket_id, target, "post_close_stock_refresh", "stock_data_collector", as_of))
+        return tasks
+
+    def _hk_connect_tasks(
+        self, demand: dict[str, Any], request_ticket_id: str, as_of: str, targets: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """One structured HK-connect snapshot per .HK target (V0.8 research pool)."""
+        hk_cfg = (self.config.get("tools", {}) or {}).get("hk_connect_collector", {}) or {}
+        if not hk_cfg.get("enabled", True):
+            return []
+        tasks: list[dict[str, Any]] = []
+        for target in targets:
+            ticker = str((target or {}).get("ticker") or "")
+            if not ticker.upper().endswith(".HK"):
+                continue
+            if target.get("collect_hk_connect") is False:
+                continue
+            tasks.append(self._task(demand, request_ticket_id, target, "hk_connect_daily_snapshot", "hk_connect_collector", as_of))
         return tasks
 
     def _task(

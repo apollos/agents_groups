@@ -14,6 +14,8 @@ from .config import load_config
 from .dashboard import run_dashboard
 from .db import SQLiteStore
 from .demand import DemandCompiler, DemandRegistry
+from .evaluation import CoverageEvaluator
+from .golden_eval import GoldenSetEvaluator
 from .heartbeat import HeartbeatRecorder
 from .logging_setup import get_logger, setup_logging
 from .openclaw import OpenClawArtifactRenderer, OpenClawModelValidator
@@ -235,6 +237,17 @@ def main(argv: list[str] | None = None) -> None:
     oc_sub.add_parser("validate-model")
     render = oc_sub.add_parser("render-artifacts")
     render.add_argument("--output-dir", required=True)
+
+    eval_cmd = sub.add_parser("eval", help="Research effectiveness evaluation (coverage matrices, golden-set recall)")
+    eval_sub = eval_cmd.add_subparsers(dest="eval_command", required=True)
+    ev_cov = eval_sub.add_parser("coverage", help="target x tracking_variable coverage matrix for one day")
+    ev_cov.add_argument("--date", required=True, help="Local trading day, e.g. 2026-07-06")
+    ev_cov.add_argument("--demand-id", help="Limit to one demand's targets (default: all active demands)")
+    ev_cov.add_argument("--include-candidates", action="store_true", help="Count pending keyword-candidate links too")
+    ev_hk = eval_sub.add_parser("hk-connect", help="Structured HK-connect snapshot coverage for one day")
+    ev_hk.add_argument("--date", required=True)
+    ev_gold = eval_sub.add_parser("golden", help="Recall against a hand-curated golden event set")
+    ev_gold.add_argument("--file", required=True, help="Golden events YAML, see examples/golden_events.yaml")
 
     report = sub.add_parser("report")
     rep_sub = report.add_subparsers(dest="report_command", required=True)
@@ -590,6 +603,22 @@ def main(argv: list[str] | None = None) -> None:
             port=args.port,
             refresh_seconds=args.refresh_seconds,
         )
+        return
+
+    if args.command == "eval":
+        evaluator = CoverageEvaluator(data_store, timezone=cfg.runtime.timezone)
+        if args.eval_command == "coverage":
+            _print(
+                evaluator.target_variable_coverage(
+                    trade_date=args.date,
+                    demand_id=args.demand_id,
+                    confirmed_only=not args.include_candidates,
+                )
+            )
+        elif args.eval_command == "hk-connect":
+            _print(evaluator.hk_connect_coverage(trade_date=args.date))
+        elif args.eval_command == "golden":
+            _print(GoldenSetEvaluator(data_store).evaluate(args.file))
         return
 
     if args.command == "report":

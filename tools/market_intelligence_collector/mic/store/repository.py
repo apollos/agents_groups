@@ -441,19 +441,21 @@ class Repository:
 
     def clone_latest_analysis(
         self, previous_source_link_id: str, new_source_link_id: str, target_id: str,
-    ) -> dict[str, int]:
+    ) -> dict[str, Any]:
         """Clone the latest merged structured objects from one link to another.
 
         Implements the canonical/content-hash cache contract without storing raw
         text: the new run gets its own structured rows pointing at the new
         ``source_link_id`` while preserving merge metadata and values. Returns the
-        per-type counts of cloned rows so the pipeline can tally reused output.
+        per-type counts of cloned rows so the pipeline can tally reused output,
+        plus ``cloned_events``: the cloned event details so cache-reuse runs still
+        surface full event lists (all_events) to downstream consumers.
         """
-        counts = {
+        counts: dict[str, Any] = {
             "briefs": 0, "facts": 0, "metrics": 0, "events": 0, "relations": 0,
             "risks": 0, "catalysts": 0, "customer_supplier_signals": 0,
             "price_cost_margin_signals": 0, "policy_signals": 0,
-            "analyst_questions": 0,
+            "analyst_questions": 0, "cloned_events": [],
         }
         with self.db.session() as s:
             merged = s.scalars(
@@ -524,6 +526,14 @@ class Repository:
                     confidence=event.confidence, created_at=now(),
                 ))
                 counts["events"] += 1
+                counts["cloned_events"].append({
+                    "summary": event.summary,
+                    "event_type": event.event_type,
+                    "event_date": event.event_date.isoformat() if event.event_date else None,
+                    "impact_channels": (event.impact or {}).get("channels", []),
+                    "confidence": event.confidence,
+                    "source_link_id": new_source_link_id,
+                })
 
             for rel in s.scalars(select(m.RelationRecordRow).where(
                     m.RelationRecordRow.source_link_id == previous_source_link_id)).all():

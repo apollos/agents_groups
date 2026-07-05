@@ -84,6 +84,16 @@ class EventImpact(BaseModel):
     magnitude_guess: str = "unknown"
 
 
+class TrackingVariableEvidence(BaseModel):
+    """Model-attributed research variable covered by an event (V0.8 research loop)."""
+
+    variable: str = ""
+    direction: str = "unclear"       # positive | negative | neutral | mixed | unclear
+    strength: float = 0.0            # 0.0 - 1.0
+    reasoning: str = ""
+    confidence: float = 0.0
+
+
 class EventCard(BaseModel):
     event_id: str | None = None
     event_type: str = "unknown"
@@ -95,6 +105,8 @@ class EventCard(BaseModel):
     source_corroboration_status: str = "single_source"
     evidence_locator: EvidenceLocator = Field(default_factory=EvidenceLocator)
     confidence: float = 0.0
+    # Which of target_profile.tracking_variables this event covers; empty when none fits.
+    tracking_variables: list[TrackingVariableEvidence] = Field(default_factory=list)
 
 
 class EntityRef(BaseModel):

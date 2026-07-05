@@ -197,6 +197,21 @@ class DashboardService:
                 "WHERE created_at >= ? AND created_at < ? GROUP BY query_family ORDER BY c DESC",
                 day_range,
             ).fetchall()
+            variable_links_today = con.execute(
+                "SELECT review_status, COUNT(*) c FROM event_variable_links "
+                "WHERE created_at >= ? AND created_at < ? GROUP BY review_status ORDER BY c DESC",
+                day_range,
+            ).fetchall()
+            top_variables_today = con.execute(
+                "SELECT tracking_variable, COUNT(*) c FROM event_variable_links "
+                "WHERE created_at >= ? AND created_at < ? AND review_status = 'accepted' "
+                "GROUP BY tracking_variable ORDER BY c DESC LIMIT 10",
+                day_range,
+            ).fetchall()
+            hk_snapshots_today = con.execute(
+                "SELECT COUNT(*) c FROM hk_connect_snapshots WHERE created_at >= ? AND created_at < ?",
+                day_range,
+            ).fetchone()
             recent_events = con.execute(
                 "SELECT event_id, ticker, event_type, event_date, summary_cn, confidence, data_quality, "
                 "source_type, source_url, published_at, created_at "
@@ -230,6 +245,9 @@ class DashboardService:
             "events_created_today": int(events_today["c"]) if events_today else 0,
             "events_today_by_source_type": [dict(r) for r in events_by_source],
             "events_today_by_query_family": [dict(r) for r in events_by_family],
+            "variable_links_today_by_status": [dict(r) for r in variable_links_today],
+            "top_variables_today": [dict(r) for r in top_variables_today],
+            "hk_snapshots_today": int(hk_snapshots_today["c"]) if hk_snapshots_today else 0,
             "recent_events": [dict(r) for r in recent_events],
             "features_created_today": int(features_today["c"]) if features_today else 0,
             "recent_features": [dict(r) for r in recent_features],
@@ -494,7 +512,10 @@ function render(d){
   $("outputHint").textContent = `今日事件 ${d.events_created_today||0} · 特征 ${d.features_created_today||0}`;
   const srcChips = (d.events_today_by_source_type||[]).map(s=>`<span class="chip">来源 ${esc(s.source_type)} <b>${s.c}</b></span>`).join("");
   const famChips = (d.events_today_by_query_family||[]).map(s=>`<span class="chip">查询族 ${esc(short(s.query_family,22))} <b>${s.c}</b></span>`).join("");
-  $("outputBody").innerHTML = `<div class="chips" style="margin:12px 0 0">${srcChips+famChips||'<span class="small">今日暂无事件来源统计</span>'}</div>`+
+  const varChips = (d.variable_links_today_by_status||[]).map(s=>`<span class="chip">变量映射 ${esc(s.review_status)} <b>${s.c}</b></span>`).join("")+
+    (d.top_variables_today||[]).map(s=>`<span class="chip">变量 ${esc(short(s.tracking_variable,20))} <b>${s.c}</b></span>`).join("");
+  const hkChip = d.hk_snapshots_today?`<span class="chip">港股通快照 <b>${d.hk_snapshots_today}</b></span>`:"";
+  $("outputBody").innerHTML = `<div class="chips" style="margin:12px 0 0">${srcChips+famChips+varChips+hkChip||'<span class="small">今日暂无事件来源统计</span>'}</div>`+
     `<div class="twocol" style="margin-top:12px">
     <div><h3 class="small">最新结构化事件</h3>${table(["时间","标的","类型","来源","置信度","摘要"],(d.recent_events||[]).map(e=>
       `<tr><td class="mut">${utcLocal(e.created_at)}</td><td>${esc(e.ticker||'-')}</td><td class="mono">${esc(e.event_type)}</td><td class="mut">${e.source_url?`<a href="${esc(e.source_url)}" target="_blank" rel="noopener">${esc(e.source_type||'link')}</a>`:esc(e.source_type||'-')}</td><td class="num">${e.confidence!=null?Number(e.confidence).toFixed(2):'-'}</td><td>${esc(short(e.summary_cn,40))}</td></tr>`))}</div>
