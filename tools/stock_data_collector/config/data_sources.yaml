@@ -105,18 +105,27 @@ providers:
       token: TUSHARE_TOKEN
     retry_attempts: 3
     timeout_seconds: 30
+    # Account-tier quota guard (checked on tushare.pro 2026-08-20 for this token:
+    # 每分钟频次 200, 每天总量上限 100000 次/个API). All limits are enforced at
+    # (cap - safety_margin) across processes, via flocked counter files under
+    # ~/.cache/stock_data_ingestion (override dir with STOCK_DATA_PACER_DIR):
+    #   - requests_per_minute: minute window budget; when exhausted the caller
+    #     sleeps into the next minute instead of hitting the vendor cap.
+    #   - requests_per_day_per_api: per-day per-API cap; a call that would cross
+    #     it is refused with a clear DailyQuotaExceeded error (resets next day).
+    #   - safety_margin: stop this many calls short of each cap (default 1).
+    # Update the numbers here when the account tier changes; set 0 to disable.
     rate_limit:
-      requests_per_minute: 180
+      requests_per_minute: 200
+      requests_per_day_per_api: 100000
+      safety_margin: 1
       burst: 20
       # Per-API minimum call interval (seconds), keyed by Tushare endpoint name.
-      # Enforced across processes via a timestamp file (~/.cache/stock_data_ingestion,
-      # override with STOCK_DATA_PACER_DIR). Remove an entry or set 0 to disable.
-      #
-      # stk_mins (minute bars via pro_bar) is limited per token tier. Observed
-      # 2026-08-20 on the current token: "1次/分钟" first, then "1次/小时" after a
-      # few calls in the hour - i.e. minute bars are effectively unusable at this
-      # tier and the agent falls back to trading_status_only intraday mode. 90s
-      # matches the per-minute cap; revisit after checking/upgrading Tushare 积分.
+      # stk_mins (minute bars via pro_bar) has its own harsher per-tier cap.
+      # Observed 2026-08-20 on the current token: "1次/分钟" first, then "1次/小时"
+      # after a few calls in the hour - i.e. minute bars are effectively unusable
+      # at this tier and the agent falls back to trading_status_only intraday
+      # mode. 90s matches the per-minute cap; revisit after upgrading Tushare 积分.
       min_interval_seconds:
         stk_mins: 90
     allow_fallback: false

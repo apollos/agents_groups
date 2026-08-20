@@ -208,6 +208,24 @@ baostock / bao_stock / bs
 joinquant / jqdata / jq
 ```
 
+Tushare 配额守护（`providers.tushare.rate_limit`）：
+
+```yaml
+rate_limit:
+  requests_per_minute: 200        # 账户档位的每分钟总频次
+  requests_per_day_per_api: 100000 # 每天每个 API 的上限
+  safety_margin: 1                # 实际按 (上限 - margin) 卡线，默认留 1 次余量
+  min_interval_seconds:
+    stk_mins: 90                  # 单接口更严的最小调用间隔（秒）
+```
+
+- 所有 Tushare 接口调用都会先过守护：分钟预算用完就睡到下一分钟窗口；
+  当天该 API 达到预算则直接拒绝（`DailyQuotaExceeded`，次日北京时间自动重置），
+  保证永远不会真正触发 Tushare 的封顶。
+- 计数是跨进程的（flock 计数文件，默认在 `~/.cache/stock_data_ingestion`，
+  可用 `STOCK_DATA_PACER_DIR` 覆盖），多个 CLI 进程共享同一 token 配额。
+- 账户档位（积分）变化时只需改这里的数字；设为 `0` 表示不限制该项。
+
 ### 3.2 `config/storage.yaml`
 
 默认存储：
