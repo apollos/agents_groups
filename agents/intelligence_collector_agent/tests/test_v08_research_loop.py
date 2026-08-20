@@ -381,6 +381,25 @@ def test_hk_connect_adapter_handles_missing_cli(monkeypatch):
     assert result.errors[0]["retryable"] is False
 
 
+def test_stock_adapter_query_meta_summary_without_status_field_is_success(monkeypatch):
+    """`query meta-summary` prints a plain JSON object with no `status` field; the
+    adapter must read returncode 0 as success instead of misreporting the check as
+    failed (observed as a false `query_meta_summary: unavailable` in
+    tools verify-capabilities)."""
+    from agent_trade_intel.adapters.stock_data_adapter import StockDataCLIAdapter
+
+    summary = {"ticker": "600519.SH", "rows_by_table": {"daily_bars": 42}}
+
+    def _fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(summary), stderr="")
+
+    monkeypatch.setattr("agent_trade_intel.adapters.stock_data_adapter.subprocess.run", _fake_run)
+    result = StockDataCLIAdapter(config_dir=None).query_meta_summary(ticker="600519.SH")
+    assert result.status == "success"
+    assert result.quality["usable"] is True
+    assert result.result["stdout"]["rows_by_table"]["daily_bars"] == 42
+
+
 def test_hk_connect_adapter_reports_nonzero_exit(monkeypatch):
     _fake_cli(monkeypatch, "boom", returncode=1, stderr="traceback: ValueError")
     result = HKConnectAdapter().collect_snapshot(target_id=None, ticker="00700.HK")

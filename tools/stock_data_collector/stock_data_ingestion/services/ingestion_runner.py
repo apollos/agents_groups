@@ -304,8 +304,9 @@ class IngestionRunner:
         self.raw_store = raw_store
         self.database = database
         self.parquet_store = parquet_store or ParquetStore(config.storage.parquet_root)
+        tushare_provider = config.data_sources.providers.get("tushare")
         self.adapters = adapters or {
-            "tushare": TushareAdapter(),
+            "tushare": TushareAdapter(rate_limit=tushare_provider.rate_limit if tushare_provider else None),
             "akshare": AKShareAdapter(),
             "baostock": BaoStockAdapter(),
             "joinquant": JoinQuantAdapter(),

@@ -108,6 +108,17 @@ providers:
     rate_limit:
       requests_per_minute: 180
       burst: 20
+      # Per-API minimum call interval (seconds), keyed by Tushare endpoint name.
+      # Enforced across processes via a timestamp file (~/.cache/stock_data_ingestion,
+      # override with STOCK_DATA_PACER_DIR). Remove an entry or set 0 to disable.
+      #
+      # stk_mins (minute bars via pro_bar) is limited per token tier. Observed
+      # 2026-08-20 on the current token: "1次/分钟" first, then "1次/小时" after a
+      # few calls in the hour - i.e. minute bars are effectively unusable at this
+      # tier and the agent falls back to trading_status_only intraday mode. 90s
+      # matches the per-minute cap; revisit after checking/upgrading Tushare 积分.
+      min_interval_seconds:
+        stk_mins: 90
     allow_fallback: false
     allow_cross_validation: true
     allow_field_level_supplement: false

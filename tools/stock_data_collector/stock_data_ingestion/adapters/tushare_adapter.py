@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
+import logging
 import os
+import time
 from datetime import date
+from pathlib import Path
 from typing import Any, Iterable
 
 from stock_data_ingestion.adapters.base import BaseDataAdapter
@@ -11,6 +14,42 @@ from stock_data_ingestion.normalization.ticker import is_hk_ticker, normalize_ti
 from stock_data_ingestion.schemas.errors import ErrorCode
 from stock_data_ingestion.schemas.records import AdapterFetchStatus, ProviderFetchResult
 from stock_data_ingestion.schemas.requests import StockDataRequest
+
+logger = logging.getLogger(__name__)
+
+
+def _pacer_state_dir() -> Path:
+    # Overridable so tests never touch the real home directory.
+    return Path(os.environ.get("STOCK_DATA_PACER_DIR") or "~/.cache/stock_data_ingestion").expanduser()
+
+
+def pace_min_interval(api: str, min_interval_seconds: float) -> None:
+    """Enforce a minimum interval between calls to a per-token rate-limited API.
+
+    Tushare limits some endpoints per account tier (observed 2026-08-20:
+    stk_mins allows 1 call/minute on the current token). The limit is per
+    token, not per process, and callers like `tools verify-capabilities`
+    invoke the CLI once per frequency — separate processes — so an in-process
+    sleep would not help. The last-call timestamp therefore lives in a file
+    shared by all processes on this machine.
+    """
+    if min_interval_seconds <= 0:
+        return
+    state = _pacer_state_dir() / f"pacer_{api}"
+    try:
+        last = float(state.read_text().strip())
+    except (OSError, ValueError):
+        last = 0.0
+    wait = last + float(min_interval_seconds) - time.time()
+    if wait > 0:
+        logger.info("pacing %s: sleeping %.1fs (min interval %.0fs per token tier)", api, wait, min_interval_seconds)
+        time.sleep(wait)
+    try:
+        state.parent.mkdir(parents=True, exist_ok=True)
+        state.write_text(str(time.time()))
+    except OSError:
+        # Pacing is best-effort: an unwritable state dir must not break the fetch.
+        logger.warning("cannot persist pacer state at %s", state)
 
 
 class TushareAdapter(BaseDataAdapter):
@@ -91,10 +130,22 @@ class TushareAdapter(BaseDataAdapter):
     _REPURCHASE_FIELDS = "ts_code,ann_date,end_date,proc,exp_date,vol,amount,high_limit,low_limit"
     _DEFAULT_EVENT_START_DATE = "19000101"
 
-    def __init__(self) -> None:
+    def __init__(self, rate_limit: dict[str, Any] | None = None) -> None:
         super().__init__()
         self.token = os.getenv("TUSHARE_TOKEN")
         self._pro: Any | None = None
+        # Per-API minimum call intervals from config (data_sources.yaml ->
+        # providers.tushare.rate_limit.min_interval_seconds). Keyed by Tushare
+        # endpoint name, e.g. {"stk_mins": 90}. Empty mapping disables pacing.
+        self._min_intervals: dict[str, float] = {
+            str(api): float(seconds)
+            for api, seconds in ((rate_limit or {}).get("min_interval_seconds") or {}).items()
+        }
+
+    def _pace(self, api: str) -> None:
+        interval = self._min_intervals.get(api, 0.0)
+        if interval > 0:
+            pace_min_interval(api, interval)
 
     def is_available(self) -> bool:
         return bool(self.token) and importlib.util.find_spec("tushare") is not None
@@ -545,6 +596,10 @@ class TushareAdapter(BaseDataAdapter):
                         "60m": "60min",
                     }.get(str(frequency), "D")
                     adj = None if str(request.adjust or "none") == "none" else str(request.adjust)
+                    if freq.endswith("min"):
+                        # Minute bars go through stk_mins, which is rate-limited per
+                        # token tier; space calls per configured minimum interval.
+                        self._pace("stk_mins")
                     df = ts.pro_bar(ts_code=ts_code, start_date=start, end_date=end, freq=freq, adj=adj)
                 for row in self._dataframe_to_records(df):
                     row = dict(row)

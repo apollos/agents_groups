@@ -155,6 +155,13 @@ class StockDataCLIAdapter:
                 elif operation.startswith("query_") and isinstance(parsed_stdout, list):
                     result.status = "success"
                     result.quality = {"usable": len(parsed_stdout) > 0, "data_quality": 1.0 if parsed_stdout else 0.0, "rows_fetched": len(parsed_stdout), "conflicts": []}
+                elif operation.startswith("query_") and isinstance(parsed_stdout, dict) and "status" not in parsed_stdout:
+                    # Summary-style query outputs (e.g. query meta-summary) are plain
+                    # JSON objects without a `status` field; returncode 0 already
+                    # means the query succeeded. Without this branch they fall into
+                    # the generic path below and get misread as failed.
+                    result.status = "success"
+                    result.quality = {"usable": bool(parsed_stdout), "data_quality": 1.0 if parsed_stdout else 0.0, "conflicts": []}
                 else:
                     status = (parsed_stdout or {}).get("status") if isinstance(parsed_stdout, dict) else "success"
                     result.status = "success" if status in {"success", "partial_success"} else "failed"
