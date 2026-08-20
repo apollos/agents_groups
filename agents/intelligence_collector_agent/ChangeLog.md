@@ -4,6 +4,39 @@
 
 ---
 
+## V0.9.1 — 2026-08-20：港股通采集下沉到 stock_data_collector（架构归位）
+
+设计原则归位：**agent 模拟人，负责编排与验收；采集能力属于 tools**。此前
+`adapters/hk_connect_adapter.py` 在 agent 内部直接访问 akshare/东财（含 WAF 兜底、
+cookie 注入、DNS 挂死超时），与 stock_data_collector 形成两套东财访问栈、两处
+cookie 配置。本次将采集本体迁入工具：
+
+- **stock_data_collector 新增 `fetch hk-connect` CLI**（`services/hk_connect_service.py`）：
+  港股通成分（资格判定）+ 南向持股统计（量/市值/占比/1/5/10 日变化），akshare 调用复用
+  工具已有的 `_call_ak`（东财 cookie 注入 + 浏览器请求头），失败时直连东财 API 兜底；
+  所有网络步骤带硬超时（DNS/WAF 挂死 → 快速失败而非吃掉整个消息 lease）；南向持股
+  当日未发布时自动回退最近已发布交易日（`quality.holding_data_date` 标注实际日期）；
+  批量 tickers 单次调用共享成分表；错误 `suggested_action` 区分 cookie 未配置/已过期。
+  只返回结构化 JSON，不落工具库（快照属研究域数据，由 agent 入库）。
+- **agent 的 `HKConnectAdapter` 改为薄 CLI 适配器**：与 `StockDataCLIAdapter` 同一套
+  子进程约定（共用 `config_dir` / `working_dir` / `python_executable` 配置），透传工具的
+  snapshot 字段与 quality（completeness/missing_fields/holding_data_date），新增
+  `HK_CONNECT_TIMEOUT` / `HK_CONNECT_CLI_UNAVAILABLE` / `HK_CONNECT_CLI_FAILED` 错误码；
+  `calc_ah_premium_pct` 与 `HK_REQUIRED_FIELDS` 契约常量保留在 agent 侧。
+- **EASTMONEY_COOKIE 归一到工具 `.env`**（tools/stock_data_collector/.env），agent 运行
+  环境不再需要任何东财凭证；config 的 `tools.hk_connect_collector` 精简为
+  `enabled` + `timeout_seconds`（移除 `provider` / `cookie_env`）。
+- **测试迁移**：采集场景（WAF 兜底、持股日期回退、硬超时、cookie 提示、批量部分失败、
+  字段完整度）移入工具套件 `tests/test_hk_connect_service.py`；agent 侧测试改为验证
+  CLI 契约（命令构造、payload 映射、错误/quality 透传、超时与 CLI 缺失处理）。
+  持久化（`save_hk_connect_snapshot`）与 eval 链路不变。
+- **holding-only 降级**（当日真实验证）：东财成分表（push2 集群）与持股统计
+  （datacenter-web）会被独立封禁；成分表不可用时降级为 holding-only 快照（资格由
+  南向持股存在性推断、收盘价取持股行，仅 `turnover_hkd` 缺失，完整度 7/8），响应带
+  `warnings[].HK_CONNECT_COMPONENTS_UNAVAILABLE`；两者皆不可用才算该标的失败。
+
+---
+
 ## V0.9 — 2026-07-05：研究效果双层看板（第六轮外部审阅采纳）
 
 第六轮审阅（《Dashboard 研究效果看板升级建议》）指出 dashboard 只是运行健康看板，回答不了"研究池是否真的有效"——覆盖矩阵、HK completeness、market context、研究卡、金标 recall 等研究闭环能力（V0.8/V0.8.1 已落地）只有 CLI 能看。核对后建议成立：P0 + P1 全部采纳，个别项裁剪（见文末）。dashboard 升级为"运行健康 + 研究效果"双层看板。

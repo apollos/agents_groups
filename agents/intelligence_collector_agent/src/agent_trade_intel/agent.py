@@ -107,7 +107,13 @@ class IntelligenceCollectorAgent:
             working_dir=config.tools.stock_working_dir,
             timeout_seconds=int(config.get("tools.stock_data_collector.timeout_seconds", 180)),
         )
-        self.hk_connect = HKConnectAdapter(provider=str(config.get("tools.hk_connect_collector.provider", "akshare")))
+        # Same tool package as stock_data_collector, so CLI location settings are shared.
+        self.hk_connect = HKConnectAdapter(
+            config_dir=config.tools.stock_config_dir,
+            python_executable=config.tools.python_executable,
+            working_dir=config.tools.stock_working_dir,
+            timeout_seconds=int(config.get("tools.hk_connect_collector.timeout_seconds", 300)),
+        )
         self.market_context = MarketContextAdapter(provider=str(config.get("tools.market_context_collector.provider", "akshare")))
         self.capabilities = ToolCapabilityVerifier(self.state_store, self.stock, config.raw)
         self.heartbeats = HeartbeatRecorder(self.state_store, config.runtime.agent_id)

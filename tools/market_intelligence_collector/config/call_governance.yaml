@@ -25,7 +25,7 @@ call_governance:
     # agent attachments that text-only primaries never see.
     model_config_id: openclaw_research
     # Agent route requested in the payload's "model" field.
-    request_model: openclaw/default
+    request_model: openclaw/research
     # x-openclaw-model header: forces a vision-capable (text+image) backend
     # for image transcription calls, so the gateway's default text-only model
     # is never asked to look at pictures. Deployment-specific; set

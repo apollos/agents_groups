@@ -219,9 +219,9 @@ tools:
     enabled: true
     config_dir: null      # 可填绝对路径；null 表示让 stock_data_collector 自行解析配置/env
     working_dir: null     # 若 CLI 不可 import，可填 stock_data_collector 项目根目录绝对路径
-  hk_connect_collector:   # V0.8：港股通结构化快照（可选依赖 akshare，未安装仅 HK 快照任务失败留痕）
-    enabled: true
-    provider: akshare
+  hk_connect_collector:   # 港股通结构化快照：委托 stock_data_collector 的 `fetch hk-connect`
+    enabled: true         # CLI 位置沿用上面 stock_data_collector 的 config_dir/working_dir
+    timeout_seconds: 300
 ```
 
 ## 5. SQLite 三库边界
@@ -659,12 +659,23 @@ stock_data 质量检查包括：
 - `TUSHARE_TOKEN` 等凭证已配置。
 - 资金流需要有效 `EASTMONEY_COOKIE`。
 
-### hk_connect_collector（V0.8）
+### hk_connect_collector（V0.8，V0.9.1 起委托给 stock_data_collector）
 
-需要满足：
+采集本体在工具侧：agent 通过子进程调用 `stock_data_ingestion.cli fetch hk-connect`
+（与 stock_data_collector 共用 `config_dir` / `working_dir` / `python_executable` 配置），
+东财反爬处理（EASTMONEY_COOKIE 注入、浏览器请求头、DNS/WAF 挂死硬超时、直连兜底）
+全部由工具负责。需要满足：
 
-- `pip install akshare`（可选依赖；数据来自东方财富，无需 API Key）。
-- 未安装 akshare 时，HK 快照任务返回不可重试的 `AKSHARE_NOT_INSTALLED` 并留痕，MIC / A 股链路不受影响。
+- stock_data_collector 环境里 `pip install akshare`（可选依赖；数据来自东方财富，无需 API Key）。
+- **在工具的 `.env`（tools/stock_data_collector/.env）里配置 `EASTMONEY_COOKIE`**（部署必做项）：
+  东财 WAF 会对无浏览器特征的客户端直接掐断连接（RST）。从浏览器打开 quote.eastmoney.com，
+  F12 → Network 复制任一请求的 Cookie 头即可（匿名 cookie，无需登录）。agent 运行环境
+  无需再配置任何东财凭证——工具 CLI 启动时自动加载自己的 .env。
+- **Cookie 会过期（数周至数月）**：长期运行中如果 HK 快照任务持续失败，错误
+  `HK_CONNECT_COLLECT_FAILED` 的 `suggested_action` 会明确提示更换 cookie；从浏览器
+  重新复制一份更新工具 .env 即可，无需改代码或配置。
+- 工具环境未安装 akshare 时，HK 快照任务返回不可重试的 `AKSHARE_NOT_INSTALLED` 并留痕，
+  MIC / A 股链路不受影响。
 - 盘中能力必须先跑 `tools verify-capabilities`。
 
 ## 16. 内部读取 CLI

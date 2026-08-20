@@ -146,7 +146,7 @@ export STOCK_DATA_DISABLE_ENV_AUTOLOAD=true
 | 变量 | 用途 | 必需性 |
 |---|---|---|
 | `TUSHARE_TOKEN` | Tushare Pro token | 主流程必需 |
-| `EASTMONEY_COOKIE` | 东方财富 Cookie，AKShare 资金流 fallback 用 | 资金流走东财时需要 |
+| `EASTMONEY_COOKIE` | 东方财富 Cookie，AKShare 资金流 fallback 与 `fetch hk-connect` 用 | 资金流走东财 / 港股通快照时需要 |
 | `EASTMONEY_USER_AGENT` | 与 Cookie 对应的 User-Agent | 可选，建议复制同一浏览器请求头 |
 | `EASTMONEY_ACCEPT_LANGUAGE` | Eastmoney 请求语言 | 可选 |
 | `JQDATA_USERNAME` / `JQDATA_PASSWORD` | JoinQuant/JQData 账号 | 默认不用，仅启用 JQData 时需要 |
@@ -334,9 +334,29 @@ adj-factor
 financial-indicator
 financial-statement
 money-flow
+hk-connect
 trading-status
 corporate-action
 ```
+
+其中 `hk-connect` 为港股通结构化快照（南向持股/资格/1/5/10 日市值变化，东财数据源，
+可选依赖 akshare），**只返回结构化 JSON、不落本工具库**——快照属研究域数据，由调用方
+（如 intelligence_collector_agent）自行入库。反爬处理（`EASTMONEY_COOKIE` 注入、浏览器
+请求头、DNS/WAF 挂死硬超时、akshare 失败后直连东财 API 兜底）由本工具负责：
+
+```bash
+python -m stock_data_ingestion.cli fetch hk-connect --tickers 00700.HK 09988.HK --as-of 2026-08-19
+```
+
+注意：南向持股统计在结算后（当日深夜或 T+1）才发布，盘中查询当日会自动回退到最近一个
+已发布交易日，返回的 `quality.holding_data_date` 标明实际数据日期。Cookie 缺失/过期时
+错误的 `suggested_action` 会给出更换指引（匿名 cookie 即可，从 quote.eastmoney.com 浏览器
+会话复制，写入本工具 `.env`）。
+
+成分表（push2 行情集群）与持股统计（datacenter-web）会被东财**独立封禁**：成分表不可用时
+自动降级为 holding-only 快照（资格由"存在南向持股"推断、收盘价取自持股行，仅 `turnover_hkd`
+记入 `missing_fields`，完整度 7/8），响应带 `warnings[].HK_CONNECT_COMPONENTS_UNAVAILABLE`；
+两者都不可用才算该标的采集失败。
 
 当前 `query` 命令：
 

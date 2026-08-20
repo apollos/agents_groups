@@ -12,7 +12,7 @@ search_providers:
   # canonical URL; each hit keeps its own "provider" tag (e.g. serpapi:baidu).
   # Engines missing their API key are skipped (logged); if none remain,
   # MIC_ALLOW_MOCK=true falls back to mock, MIC_ALLOW_MOCK=false fails fast.
-  active: mock
+  active: searxng
 
   # Rescue provider(s): when every active engine fails for a query (or it
   # yields zero hits), the same query is retried against the fallback chain in
@@ -38,9 +38,15 @@ search_providers:
     searxng:
       type: searxng
       base_url_env: SEARXNG_BASE_URL   # default http://localhost:8888
-      engines: [baidu, google, bing]
+      # sogou replaces google: on this network (and on mainland cloud hosts)
+      # google contributes nothing, while baidu+sogou carry the results.
+      engines: [baidu, bing, sogou]
       language: zh-CN
       hits_per_query: 10
+      # Randomized spacing between consecutive queries (seconds). Upstream
+      # engines CAPTCHA-block rapid bursts; ~2-10s jitter keeps a batch
+      # collect under the radar at the cost of a slower run.
+      pacing_seconds: [2.0, 10.0]
 
     # Tavily (https://tavily.com): LLM-oriented search API, bills per call
     # (basic=1 credit, advanced=2; free tier 1000 credits/month). Snippets are

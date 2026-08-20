@@ -8,6 +8,8 @@ and the coverage / golden-set evaluators.
 
 from __future__ import annotations
 
+import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -230,46 +232,76 @@ def test_variable_links_saved_even_for_duplicate_events(tmp_path: Path):
 
 
 # ---------------------------------------------------------------------------
-# HK-connect adapter + persistence (reviewer §6)
+# HK-connect adapter (CLI boundary to stock_data_collector) + persistence (reviewer §6)
 # ---------------------------------------------------------------------------
+# Collection scenarios (WAF fallback, holding date fallback, deadline bounds,
+# cookie hints) are covered by the tool's own suite
+# (tools/stock_data_collector/tests/test_hk_connect_service.py); here we verify
+# the agent<->tool CLI contract: command construction and payload mapping.
 
 
-class _FakeDF:
-    def __init__(self, rows: list[dict]):
-        self._rows = rows
+def _hk_tool_snapshot(**overrides) -> dict:
+    snap = {
+        "ticker": "00700.HK",
+        "company_name": "腾讯控股",
+        "as_of": "2026-07-06",
+        "hk_connect_eligible": True,
+        "last_price_hkd": 512.0,
+        "turnover_hkd": 8.1e9,
+        "southbound_holding_shares": 8.2e8,
+        "southbound_holding_market_value_hkd": 4.2e11,
+        "southbound_holding_pct": 8.9,
+        "southbound_mv_change_1d": 1.2e9,
+        "southbound_mv_change_5d": -3.0e9,
+        "southbound_mv_change_10d": 5.5e9,
+        "buyback_amount_hkd": None,
+        "ah_premium_pct": None,
+        "hk_liquidity_score": None,
+        "source_url": "https://data.eastmoney.com/hsgtcg/",
+        "quality": {
+            "usable": True,
+            "source": "eastmoney_via_akshare",
+            "has_holding": True,
+            "holding_data_date": "20260706",
+            "hk_connect_eligible": True,
+            "missing_fields": [],
+            "unsourced_fields": ["buyback_amount_hkd", "ah_premium_pct", "hk_liquidity_score"],
+            "field_completeness": {"required_count": 8, "filled_count": 8, "ratio": 1.0},
+        },
+        "errors": [],
+    }
+    snap.update(overrides)
+    return snap
 
-    def to_dict(self, orient: str) -> list[dict]:
-        assert orient == "records"
-        return self._rows
+
+def _hk_tool_payload(*snapshots: dict, status: str = "success", errors: list | None = None) -> dict:
+    return {
+        "status": status,
+        "request_type": "hk_connect_snapshot",
+        "as_of": "2026-07-06",
+        "provider": "eastmoney_via_akshare",
+        "data": {"hk_connect_snapshots": list(snapshots)},
+        "errors": errors or [],
+    }
 
 
-class _FakeAkshare:
-    @staticmethod
-    def stock_hk_ggt_components_em():
-        return _FakeDF([{"代码": "00700", "名称": "腾讯控股", "最新价": 512.0, "成交额": 8.1e9}])
+def _fake_cli(monkeypatch, payload: dict | str, returncode: int = 0, stderr: str = "") -> dict:
+    """Route HKConnectAdapter's subprocess boundary to a canned tool response."""
+    captured: dict = {}
 
-    @staticmethod
-    def stock_hsgt_stock_statistics_em(symbol: str, start_date: str, end_date: str):
-        assert symbol == "南向持股"
-        return _FakeDF(
-            [
-                {
-                    "股票代码": "00700",
-                    "股票简称": "腾讯控股",
-                    "持股数量": 8.2e8,
-                    "持股市值": 4.2e11,
-                    "持股数量占发行股百分比": 8.9,
-                    "持股市值变化-1日": 1.2e9,
-                    "持股市值变化-5日": -3.0e9,
-                    "持股市值变化-10日": 5.5e9,
-                }
-            ]
-        )
+    def _run(self, cmd):
+        captured["cmd"] = cmd
+        stdout = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False)
+        return subprocess.CompletedProcess(cmd, returncode, stdout=stdout, stderr=stderr)
+
+    monkeypatch.setattr(HKConnectAdapter, "_run_cli", _run)
+    return captured
 
 
-def test_hk_connect_adapter_maps_akshare_component_and_southbound_rows(monkeypatch):
-    monkeypatch.setitem(sys.modules, "akshare", _FakeAkshare())
-    result = HKConnectAdapter().collect_snapshot(
+def test_hk_connect_adapter_maps_tool_payload_and_builds_command(monkeypatch):
+    captured = _fake_cli(monkeypatch, _hk_tool_payload(_hk_tool_snapshot()))
+    adapter = HKConnectAdapter(config_dir="/cfg", python_executable="py3", working_dir="/tool")
+    result = adapter.collect_snapshot(
         target_id="company_hk_00700", ticker="0700.HK", as_of="2026-07-06T16:30:00+08:00"
     )
     assert result.status == "success"
@@ -280,14 +312,82 @@ def test_hk_connect_adapter_maps_akshare_component_and_southbound_rows(monkeypat
     assert data["southbound_mv_change_5d"] == -3.0e9
     assert data["as_of"] == "2026-07-06"
     assert result.quality["has_holding"] is True
+    assert result.quality["field_completeness"]["ratio"] == 1.0
+    cmd = captured["cmd"]
+    assert cmd[:2] == ["py3", "-m"]
+    assert "--config-dir" in cmd and "/cfg" in cmd
+    assert ["fetch", "hk-connect", "--tickers", "0700.HK"] == cmd[cmd.index("fetch"): cmd.index("fetch") + 4]
+    assert cmd[-2:] == ["--as-of", "2026-07-06"]  # date-only, tool takes YYYY-MM-DD
 
 
-def test_hk_connect_adapter_fails_cleanly_without_akshare(monkeypatch):
-    monkeypatch.setitem(sys.modules, "akshare", None)  # import akshare -> ImportError
+def test_hk_connect_adapter_passes_through_tool_failure_hints(monkeypatch):
+    """Tool-side errors (e.g. cookie missing/expired hints) must reach the agent's
+    quality gate unchanged, marked retryable so the message is nacked for retry."""
+    error = {
+        "error_code": "HK_CONNECT_COLLECT_FAILED",
+        "error_message": "component list unavailable: Connection aborted",
+        "retryable": True,
+        "suggested_action": "EASTMONEY_COOKIE may have expired: refresh the Cookie from a browser session",
+    }
+    failed_snap = {
+        "ticker": "00700.HK",
+        "as_of": "2026-07-06",
+        "quality": {"usable": False, "cookie_configured": True},
+        "errors": [error],
+    }
+    _fake_cli(monkeypatch, _hk_tool_payload(failed_snap, status="failed", errors=[error]))
+    result = HKConnectAdapter().collect_snapshot(target_id=None, ticker="0700.HK")
+    assert result.status == "failed"
+    err = result.errors[0]
+    assert err["error_code"] == "HK_CONNECT_COLLECT_FAILED"
+    assert err["retryable"] is True
+    assert "EASTMONEY_COOKIE may have expired" in err["suggested_action"]
+    assert result.quality["usable"] is False
+    assert result.quality["cookie_configured"] is True
+
+
+def test_hk_connect_adapter_reports_akshare_missing_as_non_retryable(monkeypatch):
+    error = {
+        "error_code": "AKSHARE_NOT_INSTALLED",
+        "error_message": "fetch hk-connect requires the akshare package (pip install akshare)",
+        "retryable": False,
+    }
+    _fake_cli(monkeypatch, _hk_tool_payload(status="failed", errors=[error]))
     result = HKConnectAdapter().collect_snapshot(target_id=None, ticker="00700.HK")
     assert result.status == "failed"
     assert result.errors[0]["error_code"] == "AKSHARE_NOT_INSTALLED"
     assert result.errors[0]["retryable"] is False
+
+
+def test_hk_connect_adapter_handles_cli_timeout(monkeypatch):
+    def _run(self, cmd):
+        raise subprocess.TimeoutExpired(cmd, timeout=1)
+
+    monkeypatch.setattr(HKConnectAdapter, "_run_cli", _run)
+    result = HKConnectAdapter(timeout_seconds=1).collect_snapshot(target_id=None, ticker="00700.HK")
+    assert result.status == "failed"
+    assert result.errors[0]["error_code"] == "HK_CONNECT_TIMEOUT"
+    assert result.errors[0]["retryable"] is True
+
+
+def test_hk_connect_adapter_handles_missing_cli(monkeypatch):
+    def _run(self, cmd):
+        raise FileNotFoundError("py3: command not found")
+
+    monkeypatch.setattr(HKConnectAdapter, "_run_cli", _run)
+    result = HKConnectAdapter(python_executable="py3").collect_snapshot(target_id=None, ticker="00700.HK")
+    assert result.status == "failed"
+    assert result.errors[0]["error_code"] == "HK_CONNECT_CLI_UNAVAILABLE"
+    assert result.errors[0]["retryable"] is False
+
+
+def test_hk_connect_adapter_reports_nonzero_exit(monkeypatch):
+    _fake_cli(monkeypatch, "boom", returncode=1, stderr="traceback: ValueError")
+    result = HKConnectAdapter().collect_snapshot(target_id=None, ticker="00700.HK")
+    assert result.status == "failed"
+    assert result.errors[0]["error_code"] == "HK_CONNECT_CLI_FAILED"
+    assert result.errors[0]["retryable"] is True
+    assert result.quality["usable"] is False
 
 
 def test_save_hk_connect_snapshot_idempotent_by_ticker_date(tmp_path: Path):

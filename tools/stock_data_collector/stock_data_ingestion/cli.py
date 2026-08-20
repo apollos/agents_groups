@@ -172,6 +172,16 @@ def cmd_fetch_money_flow(args: argparse.Namespace) -> None:
     print(resp.model_dump_json(indent=2))
 
 
+def cmd_fetch_hk_connect(args: argparse.Namespace) -> None:
+    # HK-connect snapshots are research-domain data consumed by the calling agent;
+    # the tool returns structured results only (no tool-side persistence), so this
+    # command does not build the collector/runner stack.
+    from stock_data_ingestion.services.hk_connect_service import collect_hk_connect_snapshots
+
+    payload = collect_hk_connect_snapshots(args.tickers, as_of=args.as_of)
+    print(json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default))
+
+
 def cmd_fetch_trading_status(args: argparse.Namespace) -> None:
     collector = _build_collector(args.config_dir)
     resp = collector.fetch_trading_status(args.tickers, args.start_date, args.end_date, **_provider_args(args))
@@ -559,6 +569,14 @@ def build_parser() -> argparse.ArgumentParser:
     money.add_argument("--start-date", required=False, help="Defaults to configured market_data_lookback_days before --end-date/today.")
     money.add_argument("--end-date", required=False, help="Defaults to today.")
     money.set_defaults(func=cmd_fetch_money_flow)
+
+    hk = fetch_sub.add_parser(
+        "hk-connect",
+        help="HK-connect southbound snapshots (eligibility / holding / 1-5-10d changes) via Eastmoney.",
+    )
+    hk.add_argument("--tickers", nargs="+", required=True, help="HK tickers, e.g. 00700.HK 0700.HK")
+    hk.add_argument("--as-of", required=False, help="Snapshot date (YYYY-MM-DD). Defaults to today; holding stats fall back to the latest published session.")
+    hk.set_defaults(func=cmd_fetch_hk_connect)
 
     status = fetch_sub.add_parser("trading-status")
     _add_provider_args(status)

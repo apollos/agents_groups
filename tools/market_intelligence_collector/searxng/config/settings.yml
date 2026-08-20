@@ -2,7 +2,15 @@
 # Minimal overrides on top of the image defaults. The crucial bits:
 #   - search.formats must include "json" (MIC talks JSON to /search)
 #   - limiter off: this instance is private/local, only MIC calls it
-use_default_settings: true
+# keep_only drops all other default engines (brave/duckduckgo/startpage/...)
+# which are unreachable on this network and only add 10s timeout tails.
+use_default_settings:
+  engines:
+    keep_only:
+      - baidu
+      - bing
+      - google
+      - sogou
 
 server:
   # Replace before first start:
@@ -15,11 +23,33 @@ search:
   formats:
     - html
     - json
+  # After a CAPTCHA, SearXNG suspends the engine (default 24h!), silently
+  # zeroing every later query. 30min is enough for the engine-side flag to
+  # cool down without writing off the whole day.
+  suspended_times:
+    SearxEngineCaptcha: 1800
+    SearxEngineTooManyRequests: 900
+    SearxEngineAccessDenied: 1800
+
+# Default engine timeout is 3s, which the B-test showed is too short on this
+# network (google/brave/startpage all timed out and every query fell back to
+# Tavily). Raise the outgoing timeout and per-engine timeouts to 10s.
+outgoing:
+  request_timeout: 10.0
+  max_request_timeout: 15.0
 
 engines:
   - name: baidu
     disabled: false
+    timeout: 10.0
   - name: google
     disabled: false
+    timeout: 10.0
   - name: bing
     disabled: false
+    timeout: 10.0
+  # Mainland-reachable engine, useful when deploying on Tencent Cloud where
+  # google is unreachable.
+  - name: sogou
+    disabled: false
+    timeout: 10.0

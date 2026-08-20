@@ -15,6 +15,7 @@ import hashlib
 import logging
 import os
 import random
+import time
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -177,7 +178,28 @@ class SearxngProvider(SearchProvider):
         self.engines = cfg.get("engines", [])
         self.language = cfg.get("language", "zh-CN")
         self.hits_per_query = cfg.get("hits_per_query", 10)
+        # Upstream engines (baidu/sogou/...) CAPTCHA-block rapid back-to-back
+        # queries from one IP, which silently turns a batch collect into
+        # zero-hit fallbacks. Space consecutive queries by a random interval
+        # within [lo, hi] seconds (jitter makes the cadence less bot-like).
+        pacing = cfg.get("pacing_seconds", [2.0, 10.0])
+        if isinstance(pacing, (int, float)):
+            pacing = [float(pacing), float(pacing)]
+        self.pacing_seconds = (float(pacing[0]), float(pacing[-1]))
+        self._last_request_at: float | None = None
         self.name = "searxng"
+
+    def _pace(self) -> None:
+        """Sleep so consecutive queries are spaced by a randomized interval."""
+        lo, hi = self.pacing_seconds
+        if hi <= 0:
+            return
+        if self._last_request_at is not None:
+            wait = random.uniform(lo, hi) - (time.monotonic() - self._last_request_at)
+            if wait > 0:
+                logger.debug("searxng_pacing sleep=%.1fs", wait)
+                time.sleep(wait)
+        self._last_request_at = time.monotonic()
 
     def is_available(self) -> bool:
         """Cheap liveness probe so the factory can skip a down instance."""
@@ -189,6 +211,7 @@ class SearxngProvider(SearchProvider):
 
     def search(self, query: str, query_family: str | None = None,
                limit: int = 10) -> list[SearchHit]:
+        self._pace()
         params: dict[str, Any] = {
             "q": query, "format": "json", "language": self.language,
             "categories": "general",

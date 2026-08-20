@@ -58,6 +58,29 @@ def test_searxng_provider_parses_json(monkeypatch):
     assert hits[0].query_family == "operating_update"
 
 
+def test_searxng_provider_paces_consecutive_queries(monkeypatch):
+    """Back-to-back queries must be spaced by a randomized sleep (anti-CAPTCHA);
+    the first query never waits, and pacing_seconds: 0 disables pacing."""
+    sleeps: list[float] = []
+    monkeypatch.setattr(search_mod.time, "sleep", lambda s: sleeps.append(s))
+    monkeypatch.setattr(search_mod.httpx, "get",
+                        lambda url, params=None, timeout=None: _FakeResponse({"results": []}))
+
+    provider = SearxngProvider({"pacing_seconds": [2.0, 10.0]})
+    provider.search("查询一")
+    assert sleeps == []  # first query goes out immediately
+    provider.search("查询二")
+    provider.search("查询三")
+    assert len(sleeps) == 2
+    assert all(0 < s <= 10.0 for s in sleeps)
+
+    disabled = SearxngProvider({"pacing_seconds": 0})
+    sleeps.clear()
+    disabled.search("查询一")
+    disabled.search("查询二")
+    assert sleeps == []
+
+
 def test_tavily_provider_parses_json(monkeypatch):
     payload = {"results": [
         {"url": "https://www.cls.cn/detail/1.html", "title": "宁德时代中标",

@@ -1,26 +1,28 @@
 """HK Connect structured data adapter (V0.8).
 
-Collects the structured southbound / HK-connect fields the research pool needs and that
-text search cannot answer reliably: eligibility, southbound holding and its 1/5/10-day
-changes, turnover and price. Default provider is AKShare (Eastmoney data underneath);
-``akshare`` is imported lazily so the agent runs without it when HK collection is off.
+Thin CLI adapter over ``stock_data_collector``'s ``fetch hk-connect`` command.
+Collection itself (Eastmoney access, EASTMONEY_COOKIE anti-scraping handling,
+DNS/WAF hang deadlines, akshare fallbacks) lives in the tool — agents
+orchestrate and verify, tools collect. The tool loads the cookie from its own
+.env, so the agent runtime needs no Eastmoney credential configuration.
 """
 
 from __future__ import annotations
 
-import logging
-from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+import os
+import subprocess
 from typing import Any
 
 from .common import ToolResult
+from .stock_data_adapter import _parse_json_stdout
+from agent_trade_intel.logging_setup import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger("adapters.hk_connect")
 
-# Snapshot fields the research pool expects a *high-quality* snapshot to fill. Having a row
-# is not the same as having data: completeness lets `eval hk-connect` tell the two apart
-# (V0.8.1). buyback / AH premium / liquidity stay in the schema but are not counted until a
-# data source actually feeds them, so completeness measures achievable fields only.
+# Mirrors the tool-side contract (stock_data_ingestion.services.hk_connect_service):
+# the snapshot fields a high-quality snapshot fills. Kept here so agent-side
+# evaluation and tests can key completeness off the same list without importing
+# the tool package across the CLI boundary.
 HK_REQUIRED_FIELDS = (
     "last_price_hkd",
     "turnover_hkd",
@@ -32,36 +34,6 @@ HK_REQUIRED_FIELDS = (
     "southbound_mv_change_10d",
 )
 
-# Fields defined in the snapshot schema without a wired provider yet. Reported separately so
-# the evaluation layer can see "no source" instead of mistaking them for collection failures.
-HK_UNSOURCED_FIELDS = ("buyback_amount_hkd", "ah_premium_pct", "hk_liquidity_score")
-
-
-def _hk_code(ticker: str) -> str:
-    return str(ticker).split(".")[0].zfill(5)
-
-
-def _date_yyyymmdd(as_of: str | None) -> str:
-    if not as_of:
-        return datetime.now(timezone.utc).strftime("%Y%m%d")
-    return str(as_of)[:10].replace("-", "")
-
-
-def _pick(row: dict[str, Any], *names: str) -> Any:
-    for name in names:
-        if name in row and row[name] is not None:
-            return row[name]
-    return None
-
-
-def _num(value: Any) -> float | None:
-    if value is None or value == "" or value == "-":
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
 
 def calc_ah_premium_pct(*, a_price_cny: float | None, h_price_hkd: float | None, cny_hkd: float | None) -> float | None:
     """A-share premium over H-share: A price converted to HKD vs H price, in percent."""
@@ -70,31 +42,27 @@ def calc_ah_premium_pct(*, a_price_cny: float | None, h_price_hkd: float | None,
     return round((a_price_cny * cny_hkd / h_price_hkd - 1.0) * 100, 4)
 
 
-@dataclass
-class HKConnectSnapshot:
-    ticker: str
-    company_name: str | None
-    as_of: str
-    hk_connect_eligible: bool
-    last_price_hkd: float | None = None
-    turnover_hkd: float | None = None
-    southbound_holding_shares: float | None = None
-    southbound_holding_market_value_hkd: float | None = None
-    southbound_holding_pct: float | None = None
-    southbound_mv_change_1d: float | None = None
-    southbound_mv_change_5d: float | None = None
-    southbound_mv_change_10d: float | None = None
-    buyback_amount_hkd: float | None = None
-    ah_premium_pct: float | None = None
-    hk_liquidity_score: float | None = None
-    source_url: str = "https://data.eastmoney.com/hsgtcg/"
-
-
 class HKConnectAdapter:
+    """Invoke ``stock_data_ingestion.cli fetch hk-connect`` and map the response.
+
+    Mirrors :class:`StockDataCLIAdapter`'s subprocess conventions (same tool
+    package, same config_dir / working_dir / python_executable semantics).
+    """
+
     tool_name = "hk_connect_collector"
 
-    def __init__(self, provider: str = "akshare"):
-        self.provider = provider
+    def __init__(
+        self,
+        *,
+        config_dir: str | None = None,
+        python_executable: str = "python",
+        working_dir: str | None = None,
+        timeout_seconds: int = 300,
+    ):
+        self.config_dir = config_dir
+        self.python_executable = python_executable
+        self.working_dir = working_dir
+        self.timeout_seconds = timeout_seconds
 
     def collect_snapshot(
         self,
@@ -109,86 +77,86 @@ class HKConnectAdapter:
             operation="hk_connect_daily_snapshot",
             request={"target_id": target_id, "ticker": ticker, "company_name": company_name, "as_of": as_of},
         )
+        cmd = [self.python_executable, "-m", "stock_data_ingestion.cli"]
+        if self.config_dir:
+            cmd += ["--config-dir", self.config_dir]
+        cmd += ["fetch", "hk-connect", "--tickers", ticker]
+        if as_of:
+            cmd += ["--as-of", str(as_of)[:10]]
         try:
-            import akshare  # noqa: F401
-        except ImportError:
+            proc = self._run_cli(cmd)
+        except subprocess.TimeoutExpired as exc:
             result.status = "failed"
-            result.errors.append(
-                {
-                    "error_code": "AKSHARE_NOT_INSTALLED",
-                    "error_message": "hk_connect_collector requires the akshare package (pip install akshare)",
-                    "retryable": False,
-                }
-            )
+            result.errors.append({"error_code": "HK_CONNECT_TIMEOUT", "error_message": str(exc), "retryable": True})
             result.quality = {"usable": False}
             return result.finish()
-        try:
-            snapshot = self._collect_akshare(ticker=ticker, company_name=company_name, as_of=as_of)
-            missing_fields = [name for name in HK_REQUIRED_FIELDS if getattr(snapshot, name) is None]
-            filled = len(HK_REQUIRED_FIELDS) - len(missing_fields)
-            result.status = "success"
-            result.result = asdict(snapshot)
-            result.quality = {
-                "usable": True,
-                "source": "eastmoney_via_akshare",
-                "has_holding": snapshot.southbound_holding_shares is not None,
-                "hk_connect_eligible": snapshot.hk_connect_eligible,
-                "missing_fields": missing_fields,
-                "unsourced_fields": [
-                    name for name in HK_UNSOURCED_FIELDS if getattr(snapshot, name) is None
-                ],
-                "field_completeness": {
-                    "required_count": len(HK_REQUIRED_FIELDS),
-                    "filled_count": filled,
-                    "ratio": round(filled / len(HK_REQUIRED_FIELDS), 4),
-                },
-            }
         except Exception as exc:  # noqa: BLE001
             result.status = "failed"
             result.errors.append(
-                {"error_code": "HK_CONNECT_COLLECT_FAILED", "error_message": str(exc), "retryable": True}
+                {"error_code": "HK_CONNECT_CLI_UNAVAILABLE", "error_message": str(exc), "retryable": False}
             )
             result.quality = {"usable": False}
-            logger.warning("hk_connect collect failed for %s: %s", ticker, exc)
+            return result.finish()
+
+        payload = _parse_json_stdout(proc.stdout)
+        if proc.returncode != 0 or not isinstance(payload, dict):
+            result.status = "failed"
+            result.errors.append(
+                {
+                    "error_code": "HK_CONNECT_CLI_FAILED",
+                    "error_message": (proc.stderr or proc.stdout or "")[-1000:],
+                    "retryable": True,
+                }
+            )
+            if isinstance(payload, dict):
+                result.errors.extend(payload.get("errors") or [])
+            result.quality = {"usable": False}
+            logger.warning("hk_connect CLI failed for %s: rc=%s", ticker, proc.returncode)
+            return result.finish()
+
+        snapshots = ((payload.get("data") or {}).get("hk_connect_snapshots")) or []
+        snapshot = snapshots[0] if snapshots else {}
+        quality = dict(snapshot.get("quality") or {})
+        errors = list(snapshot.get("errors") or []) or list(payload.get("errors") or [])
+        data = {k: v for k, v in snapshot.items() if k not in {"quality", "errors"}}
+        if company_name and not data.get("company_name"):
+            data["company_name"] = company_name
+
+        if payload.get("status") in {"success", "partial_success"} and quality.get("usable"):
+            result.status = "success"
+            result.result = data
+            result.quality = quality
+        else:
+            result.status = "failed"
+            result.errors.extend(
+                errors
+                or [
+                    {
+                        "error_code": "HK_CONNECT_COLLECT_FAILED",
+                        "error_message": "tool returned no usable snapshot",
+                        "retryable": True,
+                    }
+                ]
+            )
+            result.quality = quality or {"usable": False}
+            result.quality.setdefault("usable", False)
+            hint = next((e.get("suggested_action") for e in result.errors if e.get("suggested_action")), None)
+            logger.warning(
+                "hk_connect collect failed for %s: %s%s",
+                ticker,
+                (result.errors[0].get("error_message") if result.errors else "unknown"),
+                f" ({hint})" if hint else "",
+            )
         return result.finish()
 
-    def _collect_akshare(self, *, ticker: str, company_name: str | None, as_of: str | None) -> HKConnectSnapshot:
-        import akshare as ak
-
-        code = _hk_code(ticker)
-        date = _date_yyyymmdd(as_of)
-
-        components = ak.stock_hk_ggt_components_em()
-        component_rows = components.to_dict("records")
-        comp = next(
-            (r for r in component_rows if str(_pick(r, "代码", "股票代码", "code")).zfill(5) == code),
-            None,
-        )
-
-        holding = ak.stock_hsgt_stock_statistics_em(symbol="南向持股", start_date=date, end_date=date)
-        holding_rows = holding.to_dict("records")
-        hrow = next(
-            (r for r in holding_rows if str(_pick(r, "股票代码", "代码", "code")).zfill(5) == code),
-            None,
-        )
-
-        return HKConnectSnapshot(
-            ticker=f"{code}.HK",
-            company_name=(
-                company_name
-                or _pick(comp or {}, "名称", "股票简称", "name")
-                or _pick(hrow or {}, "股票简称", "名称", "name")
-            ),
-            as_of=str(as_of)[:10] if as_of else datetime.now(timezone.utc).date().isoformat(),
-            hk_connect_eligible=comp is not None,
-            last_price_hkd=_num(_pick(comp or hrow or {}, "最新价", "当日收盘价", "收盘价")),
-            turnover_hkd=_num(_pick(comp or {}, "成交额")),
-            southbound_holding_shares=_num(_pick(hrow or {}, "持股数量")),
-            southbound_holding_market_value_hkd=_num(_pick(hrow or {}, "持股市值")),
-            southbound_holding_pct=_num(
-                _pick(hrow or {}, "持股数量占发行股百分比", "持股占比", "占发行股百分比")
-            ),
-            southbound_mv_change_1d=_num(_pick(hrow or {}, "持股市值变化-1日")),
-            southbound_mv_change_5d=_num(_pick(hrow or {}, "持股市值变化-5日")),
-            southbound_mv_change_10d=_num(_pick(hrow or {}, "持股市值变化-10日")),
+    def _run_cli(self, cmd: list[str]) -> subprocess.CompletedProcess:
+        """Subprocess boundary, kept separate so tests can fake the tool CLI."""
+        logger.info("running hk-connect CLI: %s", cmd[2:])
+        return subprocess.run(
+            cmd,
+            cwd=self.working_dir,
+            text=True,
+            capture_output=True,
+            timeout=self.timeout_seconds,
+            env=os.environ.copy(),
         )

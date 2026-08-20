@@ -129,20 +129,46 @@ class _FakeDF:
         return self._rows
 
 
-class _FakeAkshareHK:
-    """Component row exists but the southbound-statistics endpoint returns nothing."""
-
-    @staticmethod
-    def stock_hk_ggt_components_em():
-        return _FakeDF([{"代码": "00700", "名称": "腾讯控股", "最新价": 512.0, "成交额": 8.1e9}])
-
-    @staticmethod
-    def stock_hsgt_stock_statistics_em(symbol: str, start_date: str, end_date: str):
-        return _FakeDF([])
-
-
 def test_hk_adapter_reports_field_completeness(monkeypatch):
-    monkeypatch.setitem(sys.modules, "akshare", _FakeAkshareHK())
+    """Collection now lives in stock_data_collector (`fetch hk-connect`); the agent
+    adapter must pass the tool's completeness quality through unchanged so
+    persistence and `eval hk-connect` keep working. The collection scenario itself
+    (components present, holding row absent -> 2/8) is covered by the tool suite."""
+    import json
+    import subprocess
+
+    tool_quality = {
+        "usable": True,
+        "source": "eastmoney_via_akshare",
+        "has_holding": False,
+        "holding_data_date": None,
+        "hk_connect_eligible": True,
+        "missing_fields": [
+            "southbound_holding_shares", "southbound_holding_market_value_hkd",
+            "southbound_holding_pct", "southbound_mv_change_1d",
+            "southbound_mv_change_5d", "southbound_mv_change_10d",
+        ],
+        "unsourced_fields": ["buyback_amount_hkd", "ah_premium_pct", "hk_liquidity_score"],
+        "field_completeness": {
+            "required_count": len(HK_REQUIRED_FIELDS),
+            "filled_count": 2,
+            "ratio": round(2 / len(HK_REQUIRED_FIELDS), 4),
+        },
+    }
+    payload = {
+        "status": "success",
+        "data": {"hk_connect_snapshots": [{
+            "ticker": "00700.HK", "company_name": "腾讯控股", "as_of": "2026-07-06",
+            "hk_connect_eligible": True, "last_price_hkd": 512.0, "turnover_hkd": 8.1e9,
+            "quality": tool_quality, "errors": [],
+        }]},
+        "errors": [],
+    }
+
+    def _run(self, cmd):
+        return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload, ensure_ascii=False), stderr="")
+
+    monkeypatch.setattr(HKConnectAdapter, "_run_cli", _run)
     result = HKConnectAdapter().collect_snapshot(
         target_id="company_hk_00700", ticker="00700.HK", as_of="2026-07-06T16:30:00+08:00"
     )

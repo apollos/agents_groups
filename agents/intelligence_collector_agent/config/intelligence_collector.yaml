@@ -250,10 +250,16 @@ tools:
     working_dir: null
     timeout_seconds: 180
   # Structured HK-connect snapshots for .HK targets (southbound holding / eligibility /
-  # turnover). Requires the optional `akshare` package; disable if it is not installed.
+  # turnover). Collection is delegated to stock_data_collector's `fetch hk-connect`
+  # CLI (same tool package and config_dir/working_dir settings as stock_data_collector
+  # above), which owns the Eastmoney anti-scraping handling: configure EASTMONEY_COOKIE
+  # in the *tool's* .env (tools/stock_data_collector/.env; anonymous browser cookie from
+  # quote.eastmoney.com, no login required). Cookies expire after weeks/months: if HK
+  # snapshot tasks fail with HK_CONNECT_COLLECT_FAILED and the error's suggested_action
+  # mentions the cookie, refresh it there.
   hk_connect_collector:
     enabled: true
-    provider: akshare
+    timeout_seconds: 300
   # Structured market-context snapshots (indices / FX / commodities / rates) for
   # market_context_daily demands. Same optional `akshare` dependency as hk_connect_collector.
   market_context_collector:
