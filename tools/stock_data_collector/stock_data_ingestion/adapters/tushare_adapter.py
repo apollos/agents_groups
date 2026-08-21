@@ -580,16 +580,12 @@ class TushareAdapter(BaseDataAdapter):
             for ticker in request.tickers:
                 ts_code = to_tushare_symbol(ticker)
                 if self._is_hk_ticker(ticker):
-                    if hasattr(self._pro, "hk_adj_factor"):
-                        df = self._pro.hk_adj_factor(ts_code=ts_code, start_date=start, end_date=end)
-                        for row in self._dataframe_to_records(df):
-                            row = dict(row)
-                            row.setdefault("provider_symbol", ts_code)
-                            row.setdefault("normalized_ticker", ts_code)
-                            row.setdefault("exchange", "HK")
-                            row.setdefault("market", "HK")
-                            row.setdefault("currency", "HKD")
-                            records.append(row)
+                    # Tushare has no HK adjustment-factor endpoint: calling
+                    # "hk_adj_factor" returns 40101 请指定正确的接口名 (verified
+                    # 2026-08-21), and the hasattr guard never filtered because
+                    # the pro client fabricates a method for any name. HK
+                    # tickers are a known data gap here, not an error.
+                    logger.warning("adj_factor: skipping HK ticker %s (Tushare has no HK adj-factor API)", ticker)
                     continue
                 df = self._pro.adj_factor(ts_code=ts_code, start_date=start, end_date=end)
                 records.extend(self._dataframe_to_records(df))
