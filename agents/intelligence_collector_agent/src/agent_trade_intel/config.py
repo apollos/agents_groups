@@ -74,6 +74,52 @@ class CollectorConfig:
         return cur
 
 
+def _env_override(name: str) -> str | None:
+    """Return a stripped env value, or None when unset/blank (fall back to yaml)."""
+    value = os.environ.get(name)
+    if value is None:
+        return None
+    stripped = str(value).strip()
+    return stripped or None
+
+
+def _load_dotenv_near_config(cfg_path: Path) -> None:
+    """Load agent .env without overriding already-set shell variables.
+
+    Looks at INTEL_AGENT_ENV_FILE, then <yaml-dir>/../.env (project root when
+    the file lives in config/), then <yaml-dir>/.env. A missing python-dotenv
+    is not an error: we parse KEY=VALUE lines ourselves so the agent stays
+    PyYAML-only.
+    """
+    explicit = _env_override("INTEL_AGENT_ENV_FILE")
+    candidates = []
+    if explicit:
+        candidates.append(Path(explicit).expanduser())
+    candidates.append(cfg_path.parent.parent / ".env")
+    candidates.append(cfg_path.parent / ".env")
+    path = next((p for p in candidates if p.is_file()), None)
+    if path is None:
+        return
+    try:
+        from dotenv import load_dotenv  # type: ignore
+    except ImportError:
+        _load_dotenv_simple(path)
+    else:
+        load_dotenv(path)
+
+
+def _load_dotenv_simple(path: Path) -> None:
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip("'").strip('"')
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
 def _expand_path(value: str | os.PathLike[str], base_dir: Path) -> Path:
     text = os.path.expandvars(os.path.expanduser(str(value)))
     p = Path(text)
@@ -130,6 +176,7 @@ def load_config(path: str | os.PathLike[str]) -> CollectorConfig:
     cfg_path = Path(path).expanduser().resolve()
     if not cfg_path.exists():
         raise ConfigError(f"config file not found: {cfg_path}")
+    _load_dotenv_near_config(cfg_path)
     with cfg_path.open("r", encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
     base_dir = cfg_path.parent
@@ -159,13 +206,18 @@ def load_config(path: str | os.PathLike[str]) -> CollectorConfig:
     reports_dir = _expand_path(raw.get("reports", {}).get("output_dir", "reports"), workspace_root)
 
     model_raw = openclaw_raw.get("model", {}) or {}
-    primary = str(model_raw.get("primary") or "")
+    primary = _env_override("OPENCLAW_AGENT_PRIMARY_MODEL") or str(model_raw.get("primary") or "")
+    fallbacks_env = _env_override("OPENCLAW_AGENT_FALLBACK_MODELS")
+    if fallbacks_env is not None:
+        fallbacks = [part.strip() for part in fallbacks_env.split(",") if part.strip()]
+    else:
+        fallbacks = [str(x) for x in model_raw.get("fallbacks", [])]
     allow_default = bool(model_raw.get("allow_openclaw_default", False))
     _validate_model(primary, allow_default)
 
     model = AgentModelConfig(
         primary=primary,
-        fallbacks=[str(x) for x in model_raw.get("fallbacks", [])],
+        fallbacks=fallbacks,
         require_registered=bool(model_raw.get("require_registered", True)),
         allow_openclaw_default=allow_default,
     )
@@ -187,7 +239,12 @@ def load_config(path: str | os.PathLike[str]) -> CollectorConfig:
         stock_enabled=bool(stock_cfg.get("enabled", True)),
         mic_config_dir=_expand_optional_path(mic_cfg.get("config_dir"), workspace_root),
         stock_config_dir=_expand_optional_path(stock_cfg.get("config_dir"), workspace_root),
-        python_executable=str(tools_raw.get("python_executable") or os.environ.get("PYTHON", "python")),
+        python_executable=(
+            _env_override("INTEL_AGENT_PYTHON")
+            or str(tools_raw.get("python_executable") or "")
+            or _env_override("PYTHON")
+            or "python"
+        ),
         stock_working_dir=_expand_optional_path(stock_cfg.get("working_dir"), workspace_root),
     )
     return CollectorConfig(raw=raw, path=cfg_path, runtime=runtime, model=model, tools=tools)

@@ -53,12 +53,17 @@ model_registry:
     # gateway's /v1/responses API with an x-openclaw-model override - see
     # call_governance.yaml -> vision_extract. Requires
     # gateway.http.endpoints.chatCompletions.enabled=true on the OpenClaw side.
+    # Host/port and the agent-route model name are deployment-specific: set
+    # OPENCLAW_GATEWAY_BASE_URL and OPENCLAW_REQUEST_MODEL in .env (they win
+    # over the yaml fallbacks below) so local vs cloud does not dirty git.
     openclaw_research:
       provider_type: openai_compatible_gateway
       provider: openclaw
-      endpoint: "http://127.0.0.1:18791/v1"
+      endpoint: "http://127.0.0.1:18789/v1"
+      endpoint_env: OPENCLAW_GATEWAY_BASE_URL
       api_key_env: OPENCLAW_GATEWAY_TOKEN
       model: "openclaw/research"
+      model_env: OPENCLAW_REQUEST_MODEL
       enabled: true
       capabilities:
         chat: true

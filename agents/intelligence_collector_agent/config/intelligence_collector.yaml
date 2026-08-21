@@ -5,6 +5,8 @@ agent:
 openclaw:
   # This agent must not silently inherit OpenClaw's default model.
   # Use a model ref already registered in OpenClaw, e.g. openai/gpt-5.5, deepseek/deepseek-reasoner, qwen/qwen3-max.
+  # Host-specific: OPENCLAW_AGENT_PRIMARY_MODEL / OPENCLAW_AGENT_FALLBACK_MODELS in
+  # the agent .env win over these yaml fallbacks (local vs cloud, no git diff).
   model:
     primary: "deepseek/deepseek-v4-flash"
     fallbacks: ["custom-api-siliconflow-cn/Pro/zai-org/GLM-5.1"]
@@ -233,6 +235,8 @@ capability_verification:
 
 tools:
   python_executable: "python"
+  # INTEL_AGENT_PYTHON in .env wins over this value when the OpenClaw worker
+  # must use an explicit venv interpreter.
   market_intelligence_collector:
     enabled: true
     # Optional; MIC itself usually reads its own config/env.

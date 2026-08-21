@@ -164,7 +164,7 @@ PYTHONPATH=src pytest -q
 config/intelligence_collector.yaml
 ```
 
-必须把占位符替换为 OpenClaw 已注册模型：
+必须把占位符替换为 OpenClaw 已注册模型。yaml 里的值是仓库默认；**本机不同的模型名请写在 agent `.env`**（gitignored），避免换环境改 yaml：
 
 ```yaml
 openclaw:
@@ -176,7 +176,14 @@ openclaw:
     allow_openclaw_default: false
 ```
 
-硬规则：
+```bash
+# agents/intelligence_collector_agent/.env
+OPENCLAW_AGENT_PRIMARY_MODEL=deepseek/deepseek-v4-flash
+OPENCLAW_AGENT_FALLBACK_MODELS=custom-api-siliconflow-cn/Pro/zai-org/GLM-5.1
+INTEL_AGENT_PYTHON=/home/yu/.venvs/mydev/bin/python
+```
+
+`.env` 覆盖 yaml。硬规则：
 
 - `allow_openclaw_default: false` 时，`primary` 不能为空。
 - `primary` 不能是 `REPLACE_WITH_REGISTERED_OPENCLAW_MODEL`。
@@ -215,6 +222,7 @@ runtime:
 
 ```yaml
 tools:
+  python_executable: "python"   # INTEL_AGENT_PYTHON in .env wins when set
   stock_data_collector:
     enabled: true
     config_dir: null      # 可填绝对路径；null 表示让 stock_data_collector 自行解析配置/env

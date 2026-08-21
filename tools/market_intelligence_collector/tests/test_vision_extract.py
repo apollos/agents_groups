@@ -5,6 +5,7 @@ import io
 from types import SimpleNamespace
 
 import mic.modeling.vision as vision_mod
+from mic.modeling.adapter import ModelRegistry
 from mic.modeling.vision import VisionExtractor
 from mic.profile import TargetProfile
 from mic.reader import LinkReader
@@ -72,6 +73,22 @@ def test_vision_model_override_env_wins_over_yaml(config, monkeypatch):
     monkeypatch.setenv("OPENCLAW_VISION_MODEL", "vendor/from-env")
     v = VisionExtractor(config)
     assert v.model_override == "vendor/from-env"
+
+
+def test_openclaw_gateway_url_and_request_model_env_win_over_yaml(config, monkeypatch):
+    monkeypatch.setenv("OPENCLAW_GATEWAY_BASE_URL", "http://10.0.0.8:18789/v1/")
+    monkeypatch.setenv("OPENCLAW_REQUEST_MODEL", "openclaw/cloud-research")
+    adapter = ModelRegistry(config).adapters["openclaw_research"]
+    assert adapter.endpoint == "http://10.0.0.8:18789/v1"
+    assert adapter.model == "openclaw/cloud-research"
+    assert VisionExtractor(config).request_model == "openclaw/cloud-research"
+
+
+def test_openclaw_gateway_falls_back_to_yaml_when_env_blank(config):
+    adapter = ModelRegistry(config).adapters["openclaw_research"]
+    assert adapter.endpoint == "http://127.0.0.1:18789/v1"
+    assert adapter.model == "openclaw/research"
+    assert VisionExtractor(config).request_model == "openclaw/research"
 
 
 def test_vision_no_override_header_when_unset(config, monkeypatch):

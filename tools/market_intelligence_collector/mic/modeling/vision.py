@@ -66,9 +66,14 @@ class VisionExtractor:
         # gateway's default (often text-only) model would receive the request
         # and never see the images. OPENCLAW_VISION_MODEL (.env) wins over
         # the yaml value since model names are deployment-specific.
-        self.request_model = vcfg.get("request_model", "openclaw/default")
-        self.model_override = (os.environ.get("OPENCLAW_VISION_MODEL")
-                               or vcfg.get("model_override", ""))
+        self.request_model = (
+            os.environ.get("OPENCLAW_REQUEST_MODEL", "").strip()
+            or vcfg.get("request_model", "openclaw/default")
+        )
+        self.model_override = (
+            os.environ.get("OPENCLAW_VISION_MODEL", "").strip()
+            or vcfg.get("model_override", "")
+        )
         self.timeout = vcfg.get("timeout_seconds", 120)
         self.max_output_tokens = vcfg.get("max_output_tokens", 4096)
         registry = registry or ModelRegistry(config)

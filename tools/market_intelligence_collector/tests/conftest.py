@@ -23,6 +23,8 @@ def _env(tmp_path, monkeypatch):
     monkeypatch.setenv("DASHSCOPE_API_KEY", "")
     monkeypatch.setenv("SILICONFLOW_API_KEY", "")
     monkeypatch.setenv("OPENCLAW_GATEWAY_TOKEN", "")
+    monkeypatch.setenv("OPENCLAW_GATEWAY_BASE_URL", "")
+    monkeypatch.setenv("OPENCLAW_REQUEST_MODEL", "")
     monkeypatch.delenv("OPENCLAW_VISION_MODEL", raising=False)
     # Reset the database singleton so the new URL is honored.
     import mic.store.database as dbmod

@@ -4,6 +4,21 @@
 
 ---
 
+## V0.9.2 — 2026-08-21：环境差异迁入 .env（避免换机改 yaml）
+
+本地 WSL 与云主机的 OpenClaw 模型名、Python 解释器不同，不应再改
+`config/intelligence_collector.yaml`。`load_config` 现在读取 agent 项目根目录
+`.env`（可用 `INTEL_AGENT_ENV_FILE` 指定路径），且 **已设置的 shell 变量优先于 .env 文件**：
+
+- `OPENCLAW_AGENT_PRIMARY_MODEL` / `OPENCLAW_AGENT_FALLBACK_MODELS` 覆盖
+  `openclaw.model.primary` / `fallbacks`
+- `INTEL_AGENT_PYTHON` 覆盖 `tools.python_executable`（OpenClaw worker 未进 venv 时用）
+
+yaml 仍保留可提交的默认值；缺 env 时行为与以前相同。MIC 侧对应改动见
+`OPENCLAW_GATEWAY_BASE_URL` / `OPENCLAW_REQUEST_MODEL`。
+
+---
+
 ## V0.9.1 — 2026-08-20：港股通采集下沉到 stock_data_collector（架构归位）
 
 设计原则归位：**agent 模拟人，负责编排与验收；采集能力属于 tools**。此前

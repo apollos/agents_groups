@@ -388,10 +388,14 @@ class ModelRegistry:
         pricing = self.config.pricing_hints
         for mid, spec in models.items():
             api_key = os.environ.get(spec.get("api_key_env", ""), "")
+            endpoint_env = spec.get("endpoint_env") or ""
+            model_env = spec.get("model_env") or ""
+            endpoint = (os.environ.get(endpoint_env, "") if endpoint_env else "").strip() or spec.get("endpoint", "")
+            model = (os.environ.get(model_env, "") if model_env else "").strip() or spec.get("model", "")
             self.adapters[mid] = ModelAdapter(
                 model_config_id=mid, provider=spec.get("provider", ""),
                 provider_type=spec.get("provider_type", "openai_compatible_direct"),
-                endpoint=spec.get("endpoint", ""), model=spec.get("model", ""),
+                endpoint=endpoint.rstrip("/"), model=model,
                 api_key=api_key, enabled=spec.get("enabled", True),
                 pricing=pricing.get(mid, {}), allow_mock=self.config.allow_mock,
                 json_output=spec.get("capabilities", {}).get("json_output", True),

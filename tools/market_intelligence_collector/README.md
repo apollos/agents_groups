@@ -141,7 +141,11 @@ events = api.get_recent_events("company_300750", since="30d")
 
 ## 接入真实模型与搜索源
 
-1. 在 `.env` 填入密钥（`DEEPSEEK_API_KEY`、`DASHSCOPE_API_KEY`、`SILICONFLOW_API_KEY`、`SERPAPI_API_KEY` 等）。视觉救援（扫描版 PDF / 页面图片转写）还需 `OPENCLAW_GATEWAY_TOKEN` 加 `OPENCLAW_VISION_MODEL`（OpenClaw 侧一个支持图片输入的模型名，如 `custom-api-siliconflow-cn/Pro/moonshotai/Kimi-K2.6`；不配则视觉调用会落到网关默认模型，纯文本模型看不到图片）。
+1. 在 `.env` 填入密钥（`DEEPSEEK_API_KEY`、`DASHSCOPE_API_KEY`、`SILICONFLOW_API_KEY`、`SERPAPI_API_KEY` 等）。视觉救援（扫描版 PDF / 页面图片转写）还需：
+   - `OPENCLAW_GATEWAY_TOKEN`：网关 token
+   - `OPENCLAW_GATEWAY_BASE_URL`：本机 OpenClaw 地址（如 `http://127.0.0.1:18789/v1`），覆盖 `model_registry.yaml` 里的 endpoint，换环境不必改 yaml
+   - `OPENCLAW_REQUEST_MODEL`：发给网关的 agent 路由名（yaml 默认 `openclaw/research`）
+   - `OPENCLAW_VISION_MODEL`：OpenClaw 侧一个支持图片输入的模型名，如 `custom-api-siliconflow-cn/Pro/moonshotai/Kimi-K2.6`；不配则视觉调用会落到网关默认模型，纯文本模型看不到图片。
 2. 在 `config/search_providers.yaml` 把 `active: mock` 改为某个真实引擎，或一个引擎列表以**同时**调用多个引擎并合并去重，例如：
    - `active: serpapi_baidu`（仅百度）
    - `active: [serpapi_baidu, serpapi_bing]`（百度 + Bing）

@@ -354,6 +354,62 @@ def test_tool_paths_resolve_against_workspace_root(tmp_path: Path):
     assert cfg.tools.stock_working_dir == str((tmp_path / "stock_root").resolve())
 
 
+def test_env_overrides_openclaw_models_and_python(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    cfg_file = tmp_path / "intel.yaml"
+    cfg_file.write_text(
+        yaml.safe_dump(
+            {
+                "agent": {"agent_id": "a", "agent_group": "g"},
+                "openclaw": {
+                    "model": {
+                        "primary": "openai/gpt-5.5",
+                        "fallbacks": ["yaml/fallback"],
+                    }
+                },
+                "runtime": {"workspace_root": str(tmp_path)},
+                "tools": {"python_executable": "python"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENCLAW_AGENT_PRIMARY_MODEL", "deepseek/from-env")
+    monkeypatch.setenv("OPENCLAW_AGENT_FALLBACK_MODELS", "cloud/a, cloud/b")
+    monkeypatch.setenv("INTEL_AGENT_PYTHON", "/opt/mydev/bin/python")
+    cfg = load_config(cfg_file)
+    assert cfg.model.primary == "deepseek/from-env"
+    assert cfg.model.fallbacks == ["cloud/a", "cloud/b"]
+    assert cfg.tools.python_executable == "/opt/mydev/bin/python"
+
+
+def test_agent_dotenv_file_overrides_yaml_without_clobbering_shell(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    project = tmp_path / "agent"
+    config_dir = project / "config"
+    config_dir.mkdir(parents=True)
+    cfg_file = config_dir / "intel.yaml"
+    cfg_file.write_text(
+        yaml.safe_dump(
+            {
+                "agent": {"agent_id": "a", "agent_group": "g"},
+                "openclaw": {"model": {"primary": "yaml/primary", "fallbacks": ["yaml/fb"]}},
+                "runtime": {"workspace_root": str(tmp_path)},
+                "tools": {"python_executable": "python"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (project / ".env").write_text(
+        "OPENCLAW_AGENT_PRIMARY_MODEL=dotenv/primary\n"
+        "OPENCLAW_AGENT_FALLBACK_MODELS=dotenv/a,dotenv/b\n"
+        "INTEL_AGENT_PYTHON=/from/dotenv/python\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENCLAW_AGENT_PRIMARY_MODEL", "shell/primary")
+    cfg = load_config(cfg_file)
+    assert cfg.model.primary == "shell/primary"  # already-set shell env wins
+    assert cfg.model.fallbacks == ["dotenv/a", "dotenv/b"]
+    assert cfg.tools.python_executable == "/from/dotenv/python"
+
+
 def test_planner_skips_intraday_snapshot_outside_intraday_phase():
     planner = TaskGraphPlanner({"runtime": {"timezone": "Asia/Shanghai"}, "schedule": {"allow_lunch_break_black_swan": True}})
     tasks = planner.plan(_demand(), request_ticket_id="rt1", as_of="2026-06-11T12:10:00+08:00", market_phase="lunch_break")
