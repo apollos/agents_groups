@@ -55,6 +55,11 @@ class ToolConfig:
     stock_config_dir: str | None
     python_executable: str
     stock_working_dir: str | None
+    # MIC collection execution: "subprocess" (supervised worker, real hard timeout/cancel) or
+    # the legacy "in_process" thread. Runs directory holds per-attempt request/result files.
+    mic_execution_mode: str = "subprocess"
+    mic_runs_dir: str | None = None
+    mic_python_executable: str | None = None
 
 
 @dataclass(frozen=True)
@@ -246,8 +251,18 @@ def load_config(path: str | os.PathLike[str]) -> CollectorConfig:
             or "python"
         ),
         stock_working_dir=_expand_optional_path(stock_cfg.get("working_dir"), workspace_root),
+        mic_execution_mode=_mic_execution_mode(mic_cfg.get("execution_mode", "subprocess")),
+        mic_runs_dir=_expand_optional_path(mic_cfg.get("runs_dir") or "mic_runs", workspace_root),
+        mic_python_executable=_env_override("INTEL_AGENT_MIC_PYTHON") or (str(mic_cfg.get("python_executable")) if mic_cfg.get("python_executable") else None),
     )
     return CollectorConfig(raw=raw, path=cfg_path, runtime=runtime, model=model, tools=tools)
+
+
+def _mic_execution_mode(value: Any) -> str:
+    mode = str(value or "subprocess")
+    if mode not in ("subprocess", "in_process"):
+        raise ConfigError(f"tools.market_intelligence_collector.execution_mode must be 'subprocess' or 'in_process', got {mode!r}")
+    return mode
 
 
 def deep_get(raw: dict[str, Any], dotted: str, default: Any = None) -> Any:

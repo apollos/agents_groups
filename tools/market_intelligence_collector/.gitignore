@@ -24,3 +24,9 @@ mic.db
 # Run logs and e2e artifacts (keep the dir via logs/.gitkeep)
 logs/*
 !logs/.gitkeep
+
+# Local browser route artifacts: Edge profile, credential files, worker run dirs
+# (defaults point outside the repo via MIC_BROWSER_PROFILE_DIR / MIC_BROWSER_CREDENTIAL_DIR).
+# Anchored to the tool root: the source package mic/browser/ must stay tracked.
+/browser/
+/mic_runs/

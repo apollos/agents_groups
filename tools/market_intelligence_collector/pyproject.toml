@@ -28,6 +28,9 @@ dependencies = [
 [project.optional-dependencies]
 model = ["openai>=1.30"]
 postgres = ["psycopg[binary]>=3.1"]
+# Local windowed-Edge search/reader route (docs/design/local_browser_search.md).
+# Playwright drives the system Microsoft Edge (channel=msedge); no browser download needed.
+browser = ["playwright>=1.63"]
 dev = [
     "pytest>=8.0",
     "ruff>=0.4",
@@ -35,6 +38,7 @@ dev = [
 all = [
     "openai>=1.30",
     "psycopg[binary]>=3.1",
+    "playwright>=1.63",
     "pytest>=8.0",
     "ruff>=0.4",
 ]
@@ -43,7 +47,7 @@ all = [
 mic = "mic.cli:app"
 
 [tool.setuptools]
-packages = ["mic", "mic.modeling", "mic.store"]
+packages = ["mic", "mic.browser", "mic.browser.engines", "mic.modeling", "mic.store"]
 include-package-data = true
 
 [tool.pytest.ini_options]

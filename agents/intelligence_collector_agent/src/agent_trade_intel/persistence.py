@@ -89,8 +89,9 @@ class ResultPersister:
                           event_id, target_id, ticker, company_name, event_type, event_date,
                           summary_cn, impact_json, source_refs_json,
                           source_url, source_domain, source_type, published_at, retrieved_at, query_family,
-                          confidence, data_quality, source_run_id, payload_json, idempotency_key
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                          confidence, data_quality, source_run_id, payload_json, idempotency_key,
+                          source_corroboration_status
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             event_id,
@@ -113,6 +114,7 @@ class ResultPersister:
                             report.get("search_run_id"),
                             dumps_json(ev),
                             idem,
+                            ev.get("source_corroboration_status"),
                         ),
                     )
                     counts["events"] += 1

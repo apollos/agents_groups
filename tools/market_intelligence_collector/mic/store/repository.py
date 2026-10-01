@@ -7,6 +7,7 @@ Analyst Agent API. Keeps SQLAlchemy details out of the rest of the codebase.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -112,6 +113,11 @@ class Repository:
     def save_source_link(self, run_id: str, query_id: str, hit: schemas.SearchHit,
                          canonical_url: str, source_type: str) -> str:
         link_id = new_id("link")
+        metadata: dict[str, Any] = {"query_family": hit.query_family}
+        if hit.discovery:
+            # Every discovery (engine/page/rank) is kept even when the same
+            # canonical URL was found by another query/engine (design 12.1).
+            metadata["discovery"] = dict(hit.discovery)
         with self.db.session() as s:
             s.add(m.SourceLink(
                 id=link_id, search_run_id=run_id, query_id=query_id,
@@ -120,9 +126,26 @@ class Repository:
                 domain=hit.domain, source_name=hit.domain, source_type=source_type,
                 publish_time_guess=_to_dt(hit.publish_time_guess),
                 retrieved_at=now(), read_status="pending",
-                metadata_={"query_family": hit.query_family},
+                metadata_=metadata,
             ))
         return link_id
+
+    def update_link_final_url(self, link_id: str, final_url: str, canonical_url: str,
+                              domain: str) -> None:
+        """After a budgeted navigation resolved a pending redirect target."""
+        with self.db.session() as s:
+            row = s.get(m.SourceLink, link_id)
+            if row:
+                meta = dict(row.metadata_ or {})
+                meta["final_url"] = final_url
+                disc = dict(meta.get("discovery") or {})
+                if disc:
+                    disc["url_resolution"] = "resolved_by_navigation"
+                    meta["discovery"] = disc
+                row.metadata_ = meta
+                row.canonical_url = canonical_url
+                row.domain = domain
+                row.source_name = domain
 
     def find_link_by_canonical(self, canonical_url: str) -> m.SourceLink | None:
         with self.db.session() as s:
@@ -237,9 +260,99 @@ class Repository:
                 extracted_publish_time=_to_dt(attempt.get("extracted_publish_time")),
                 content_hash=attempt.get("content_hash"),
                 selected_passage_count=attempt.get("selected_passage_count"),
-                failure_reason=attempt.get("failure_reason"), created_at=now(),
+                failure_reason=attempt.get("failure_reason"),
+                diagnostics=attempt.get("diagnostics"), created_at=now(),
             ))
         return aid
+
+    def read_attempts_for_link(self, link_id: str) -> list[dict[str, Any]]:
+        with self.db.session() as s:
+            rows = s.scalars(select(m.LinkReadAttempt).where(
+                m.LinkReadAttempt.source_link_id == link_id)
+                .order_by(m.LinkReadAttempt.created_at.asc())).all()
+            return [{
+                "id": r.id, "read_status": r.read_status, "http_status": r.http_status,
+                "failure_reason": r.failure_reason, "content_hash": r.content_hash,
+                "selected_passage_count": r.selected_passage_count,
+                "diagnostics": r.diagnostics,
+            } for r in rows]
+
+    # --- Search page attempts (design 12.1) --------------------------------
+
+    def start_search_page_attempt(self, run_id: str, record: dict[str, Any]) -> str:
+        """Insert an ``attempting`` row before navigation; returns its id."""
+        aid = record.get("page_attempt_id") or new_id("spa")
+        with self.db.session() as s:
+            s.add(m.SearchPageAttempt(
+                id=aid, search_run_id=run_id, query_id=record.get("query_id"),
+                engine=record.get("engine"), adapter_version=record.get("adapter_version"),
+                page_index=record.get("page_index"),
+                query_requested=record.get("query_requested"),
+                requested_url=record.get("requested_url"), state="attempting",
+                started_at=now(),
+            ))
+        return aid
+
+    def finish_search_page_attempt(self, aid: str | None, record: dict[str, Any]) -> None:
+        if not aid:
+            return
+        with self.db.session() as s:
+            row = s.get(m.SearchPageAttempt, aid)
+            if row is None:
+                return
+            row.state = "finished"
+            row.status = record.get("status")
+            row.error_code = record.get("error_code")
+            row.query_observed = record.get("query_observed")
+            row.final_url = record.get("final_url")
+            row.result_count = record.get("result_count")
+            row.new_unique_count = record.get("new_unique_count")
+            row.page_fingerprint = record.get("page_fingerprint")
+            row.quality_json = record.get("quality")
+            row.diagnostics_json = record.get("diagnostics")
+            row.finished_at = now()
+
+    def mark_interrupted_page_attempts(self, run_id: str) -> int:
+        """Crash recovery: rows still ``attempting`` for a run become ``interrupted``."""
+        with self.db.session() as s:
+            rows = s.scalars(select(m.SearchPageAttempt).where(
+                m.SearchPageAttempt.search_run_id == run_id,
+                m.SearchPageAttempt.state == "attempting")).all()
+            for r in rows:
+                r.state = "interrupted"
+                r.status = r.status or "browser_closed"
+                r.finished_at = now()
+            return len(rows)
+
+    def search_page_attempts_for_run(self, run_id: str) -> list[dict[str, Any]]:
+        with self.db.session() as s:
+            rows = s.scalars(select(m.SearchPageAttempt).where(
+                m.SearchPageAttempt.search_run_id == run_id)
+                .order_by(m.SearchPageAttempt.started_at.asc())).all()
+            return [{
+                "id": r.id, "query_id": r.query_id, "engine": r.engine,
+                "adapter_version": r.adapter_version, "page_index": r.page_index,
+                "query_requested": r.query_requested, "query_observed": r.query_observed,
+                "requested_url": r.requested_url, "final_url": r.final_url,
+                "status": r.status, "state": r.state, "error_code": r.error_code,
+                "result_count": r.result_count, "new_unique_count": r.new_unique_count,
+                "page_fingerprint": r.page_fingerprint, "quality": r.quality_json,
+                "diagnostics": r.diagnostics_json,
+                "started_at": r.started_at.isoformat() if r.started_at else None,
+                "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+            } for r in rows]
+
+    def search_page_stats_for_run(self, run_id: str) -> dict[str, Any]:
+        """Recompute page-attempt statistics from stored rows (design 12.1)."""
+        rows = self.search_page_attempts_for_run(run_id)
+        by_status: dict[str, int] = {}
+        by_engine: dict[str, int] = {}
+        for r in rows:
+            by_status[r["status"] or "unknown"] = by_status.get(r["status"] or "unknown", 0) + 1
+            by_engine[r["engine"] or "unknown"] = by_engine.get(r["engine"] or "unknown", 0) + 1
+        return {"search_page_attempts": len(rows), "by_status": by_status,
+                "by_engine": by_engine,
+                "interrupted": sum(1 for r in rows if r["state"] == "interrupted")}
 
     # --- Model runs / outputs ---------------------------------------------
 
@@ -301,7 +414,7 @@ class Repository:
                 id=new_id("brief"), merged_analysis_id=merged_id,
                 source_link_id=source_link_id, target_id=target_id,
                 one_sentence=b.one_sentence, what_happened=b.what_happened,
-                why_it_matters=b.why_it_matters,
+                why_it_matters=b.why_it_matters, uncertainty=b.uncertainty,
                 affected_business_lines=b.affected_business_lines,
                 impact_channels=b.impact_channels, time_horizon=b.time_horizon,
                 confidence=bundle.confidence, created_at=now(),
@@ -325,6 +438,7 @@ class Repository:
                     metric_name=metric.metric_name, metric_value=metric.metric_value,
                     unit=metric.unit, period=metric.period, scope=metric.scope,
                     comparison=metric.comparison, interpretation=metric.interpretation,
+                    evidence_locator=metric.evidence_locator.model_dump(),
                     impact_channels=metric.impact_channels, confidence=metric.confidence,
                     created_at=now(),
                 ))
@@ -336,6 +450,7 @@ class Repository:
                     event_type=event.event_type, event_date=_to_dt(event.event_date),
                     summary=event.summary, entities=event.entities, metrics=event.metrics,
                     impact=event.impact.model_dump(),
+                    evidence_locator=event.evidence_locator.model_dump(),
                     tracking_variables=[tv.model_dump() for tv in event.tracking_variables],
                     source_corroboration_status=event.source_corroboration_status,
                     confidence=event.confidence, created_at=now(),
@@ -483,7 +598,7 @@ class Repository:
                     id=new_id("brief"), merged_analysis_id=new_merged_id,
                     source_link_id=new_source_link_id, target_id=target_id,
                     one_sentence=brief.one_sentence, what_happened=brief.what_happened,
-                    why_it_matters=brief.why_it_matters,
+                    why_it_matters=brief.why_it_matters, uncertainty=brief.uncertainty,
                     affected_business_lines=brief.affected_business_lines,
                     impact_channels=brief.impact_channels, time_horizon=brief.time_horizon,
                     confidence=brief.confidence, created_at=now(),
@@ -510,6 +625,7 @@ class Repository:
                     metric_name=metric.metric_name, metric_value=metric.metric_value,
                     unit=metric.unit, period=metric.period, scope=metric.scope,
                     comparison=metric.comparison, interpretation=metric.interpretation,
+                    evidence_locator=metric.evidence_locator,
                     impact_channels=metric.impact_channels,
                     confidence=metric.confidence, created_at=now(),
                 ))
@@ -522,7 +638,7 @@ class Repository:
                     source_link_id=new_source_link_id, target_id=target_id,
                     event_type=event.event_type, event_date=event.event_date,
                     summary=event.summary, entities=event.entities, metrics=event.metrics,
-                    impact=event.impact,
+                    impact=event.impact, evidence_locator=event.evidence_locator,
                     tracking_variables=event.tracking_variables,
                     source_corroboration_status=event.source_corroboration_status,
                     confidence=event.confidence, created_at=now(),
@@ -535,6 +651,11 @@ class Repository:
                     "impact_channels": (event.impact or {}).get("channels", []),
                     "confidence": event.confidence,
                     "source_link_id": new_source_link_id,
+                    "evidence_locator": deepcopy(event.evidence_locator),
+                    "entities": deepcopy(event.entities),
+                    "metrics": deepcopy(event.metrics),
+                    "impact": deepcopy(event.impact),
+                    "source_corroboration_status": event.source_corroboration_status,
                     # Keep confirmed variable coverage on cache/reuse (V0.8.1): without this
                     # the agent can only re-derive keyword candidates for cloned events.
                     "tracking_variables": event.tracking_variables or [],
@@ -721,6 +842,7 @@ class Repository:
                 "metric_id": r.id, "metric_name": r.metric_name,
                 "metric_value": r.metric_value, "unit": r.unit, "period": r.period,
                 "scope": r.scope, "comparison": r.comparison,
+                "evidence_locator": r.evidence_locator,
                 "interpretation": r.interpretation, "impact_channels": r.impact_channels,
                 "confidence": r.confidence, "source_link_id": r.source_link_id,
             } for r in rows]
@@ -776,6 +898,7 @@ class Repository:
                 "fact_id": r.id, "fact_type": r.fact_type,
                 "fact_statement": r.fact_statement, "entities": r.entities,
                 "metrics": r.metrics, "period": r.period, "direction": r.direction,
+                "evidence_locator": r.evidence_locator,
                 "confidence": r.confidence, "source_link_id": r.source_link_id,
             } for r in rows]
             if query:
@@ -881,6 +1004,8 @@ class Repository:
             return {
                 "source_links": count(m.SourceLink, m.SourceLink.search_run_id == run_id),
                 "queries": count(m.SearchQuery, m.SearchQuery.search_run_id == run_id),
+                "search_page_attempts": count(
+                    m.SearchPageAttempt, m.SearchPageAttempt.search_run_id == run_id),
                 "read_attempts": by_link(m.LinkReadAttempt),
                 "model_runs": by_link(m.ModelRun),
                 "model_outputs": by_link(m.ModelOutput),
@@ -920,6 +1045,8 @@ class Repository:
             link = s.get(m.SourceLink, source_link_id)
             merged = s.scalars(select(m.MergedAnalysis).where(
                 m.MergedAnalysis.source_link_id == source_link_id)).first()
+            brief = s.scalars(select(m.AnalysisBrief).where(
+                m.AnalysisBrief.merged_analysis_id == merged.id)).first() if merged else None
             facts = s.scalars(select(m.FactItemRow).where(
                 m.FactItemRow.source_link_id == source_link_id)).all()
             metrics = s.scalars(select(m.MetricObservationRow).where(
@@ -949,6 +1076,7 @@ class Repository:
                 "triage_decision": link.triage_decision if link else None,
                 "models_used": [r.model_config_id for r in runs],
                 "merged_decision": merged.decision if merged else None,
+                "uncertainty": brief.uncertainty if brief else None,
                 "facts": [f.fact_statement for f in facts],
                 "metrics": [{"name": x.metric_name, "value": x.metric_value} for x in metrics],
                 "events": [e.summary for e in events],
@@ -966,7 +1094,7 @@ class Repository:
             "event_id": r.id, "event_type": r.event_type,
             "event_date": r.event_date.isoformat() if r.event_date else None,
             "summary": r.summary, "entities": r.entities, "metrics": r.metrics,
-            "impact": r.impact,
+            "impact": r.impact, "evidence_locator": r.evidence_locator,
             "tracking_variables": r.tracking_variables or [],
             "source_corroboration_status": r.source_corroboration_status,
             "confidence": r.confidence, "source_link_id": r.source_link_id,

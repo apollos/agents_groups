@@ -1,0 +1,67 @@
+# Local browser runtime for the `browser` search provider and browser body
+# fetching (design: docs/design/local_browser_search.md, section 13.2).
+#
+# Shipped DISABLED so existing SearXNG/API deployments behave exactly as
+# before. To enable the browser route in a deployment:
+#   1. set enabled: true here,
+#   2. set search_providers.active: browser_local and fallback: [],
+#   3. export MIC_BROWSER_PROFILE_DIR=<workspace>/browser/profiles/mic-edge,
+#   4. run `mic browser doctor` (then `mic browser doctor --launch`) on the GUI desktop.
+#
+# `limits` are the deployment ceiling for one run; a task budget_profile can
+# only tighten them. Unknown fields, wrong types and out-of-range values make
+# config loading fail (no silent defaults).
+browser_runtime:
+  version: 1
+  enabled: false
+  channel: msedge
+  headless: false
+  profile_dir_env: MIC_BROWSER_PROFILE_DIR
+  credential_dir_env: MIC_BROWSER_CREDENTIAL_DIR
+  interaction_mode: unattended      # unattended | interactive (desktop debugging)
+  human_wait_seconds: 60
+  browser_start_timeout_seconds: 20
+  page_timeout_seconds: 25
+  cleanup_grace_seconds: 5
+  max_open_pages: 2
+  chromium_sandbox: true
+  accept_downloads: false
+
+  # User-authorised cookie / session fallback (section 10.2). Off by default.
+  # Values are never stored here: cookie_sources point to env vars naming a
+  # local, user-owned JSON file (format playwright_cookies_json_v1).
+  session_fallback:
+    enabled: false
+    allowed_origins: []
+    cookie_sources: {}
+    default_max_age_seconds: 7200
+    apply_to_http_client: false
+    save_authenticated_page_artifacts: false
+
+  artifacts:
+    save_screenshots: on_error        # never | on_error | always
+    save_full_dom: false
+    retention_days: 7
+
+  limits:
+    max_queries: 2
+    max_search_pages_per_query: 3     # all engines + paging + explicit retries per query
+    max_search_pages_per_run: 6
+    max_engines_per_query: 2
+    results_per_page_cap: 10
+    max_hits_per_query: 30
+    max_search_hits: 60
+    max_links_to_read: 2              # unique candidate URLs selected for body fetch
+    max_http_read_attempts: 2
+    max_browser_read_attempts: 2
+    max_authenticated_retries_per_origin: 1
+    max_authenticated_retries_per_run: 1
+    max_model_calls: 3
+    max_gateway_requests: 3           # actual MIC -> gateway HTTP sends
+    max_run_seconds: 300
+    max_page_seconds: 25
+    min_engine_interval_seconds: 3
+    max_retries_per_page: 0
+
+  cache:
+    reuse_analysis: false             # browser acceptance runs never reuse old analyses

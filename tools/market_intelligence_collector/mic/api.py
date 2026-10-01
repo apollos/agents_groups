@@ -23,11 +23,15 @@ class AnalystAPI:
     # 20.1
     def collect_intelligence(self, target_id: str, task_profile: dict[str, Any],
                             model_policy_version: str | None = None,
-                            query_plan_version: str | None = None) -> dict:
+                            query_plan_version: str | None = None,
+                            run_options: dict[str, Any] | None = None) -> dict:
+        """``run_options`` (deadline_seconds, cancel_check, attempt_id, ...) are
+        documented on :meth:`mic.pipeline.Pipeline.collect_intelligence`."""
         return self.pipeline.collect_intelligence(
             target_id, task_profile,
             model_policy_version=model_policy_version,
-            query_plan_version=query_plan_version)
+            query_plan_version=query_plan_version,
+            run_options=run_options)
 
     # 20.2
     def get_recent_events(self, target_id: str, since: str = "30d",

@@ -242,8 +242,18 @@ tools:
     # Optional; MIC itself usually reads its own config/env.
     config_dir: null
     # Hard wall-clock timeout for one MIC deep collect. On timeout the task fails with a
-    # retryable MIC_TIMEOUT error instead of blocking the worker indefinitely.
+    # retryable MIC_TIMEOUT error instead of blocking the worker indefinitely. The effective
+    # deadline is min(timeout_seconds, MIC deployment max_run_seconds, task budget).
     timeout_seconds: 900
+    # subprocess: one supervised MIC worker process per attempt (TERM -> 5s grace -> KILL of
+    # its process group; cancelled on lease loss). Required for the browser search route.
+    # in_process: legacy thread; its timeout only stops waiting and cannot stop the run.
+    execution_mode: subprocess
+    # Per-attempt request/result/log files (0700). Relative to workspace_root.
+    runs_dir: mic_runs
+    # Interpreter that can import `mic` for the worker; null = the agent's own interpreter.
+    # INTEL_AGENT_MIC_PYTHON overrides.
+    python_executable: null
   stock_data_collector:
     enabled: true
     # Use an absolute path, or leave null to let stock_data_collector resolve its own config/env.

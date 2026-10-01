@@ -8,9 +8,13 @@ Orchestrates the full run:
 
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from mic.browser.contracts import SearchBatch, SearchRequest
+from mic.budget import DEFAULT_LIMITS, BudgetExceeded, RunBudget, merge_limits
 from mic.config import MICConfig, load_config
 from mic.logging_utils import get_logger, setup_logging
 from mic.merge import ModelContribution, MultiModelMerger
@@ -20,14 +24,23 @@ from mic.modeling.vision import VisionExtractor
 from mic.planner import QueryPlanner
 from mic.profile import TargetProfile
 from mic.reader import LinkReader
+from mic.run_context import RunContext, TargetIdentity, config_fingerprint
 from mic.schemas import CoverageGap, SearchHit
 from mic.search import build_search_provider
 from mic.store import Repository, get_database
 from mic.triage import SearchHitTriage
-from mic.utils import canonicalize_url, domain_of
+from mic.utils import canonicalize_url, domain_of, new_id
 from mic.validate import BundleValidator
 
 logger = get_logger("pipeline")
+
+
+class RunCancelled(RuntimeError):
+    """Raised inside the run loop when the caller cancelled or the deadline passed."""
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
 
 
 @dataclass
@@ -35,6 +48,21 @@ class RunStats:
     queries_generated: int = 0
     queries_executed: int = 0
     queries_skipped_by_hit_budget: int = 0
+    # Design 9/15: explicit attempt counters (legacy ``queries_executed`` kept).
+    queries_attempted: int = 0
+    queries_completed: int = 0
+    search_page_attempts: int = 0
+    search_api_requests: int = 0
+    http_read_attempts: int = 0
+    browser_read_attempts: int = 0
+    authenticated_retries: int = 0
+    gateway_requests_sent: int = 0
+    links_selected_for_read: int = 0
+    search_outcomes: dict[str, int] = field(default_factory=dict)
+    search_errors: list[dict] = field(default_factory=list)
+    read_failures: dict[str, int] = field(default_factory=dict)
+    stop_reason: str | None = None
+    execution_status: str = "completed"
     search_hits: int = 0
     unique_source_links: int = 0
     deduplicated_links: int = 0
@@ -81,12 +109,23 @@ class Pipeline:
         # hits_per_query limit.
         self._hits_per_query = (self.config.search_providers or {}).get(
             "max_hits_per_query", 12)
+        self._cancel_check: Callable[[], bool] | None = None
 
     # --- public ------------------------------------------------------------
 
     def collect_intelligence(self, target_id: str, task_profile: dict[str, Any],
                              model_policy_version: str | None = None,
-                             query_plan_version: str | None = None) -> dict:
+                             query_plan_version: str | None = None,
+                             run_options: dict[str, Any] | None = None) -> dict:
+        """Run one collection.
+
+        ``run_options`` (all optional, design 8/9): ``deadline_seconds`` (shared
+        deadline, combined with the configured ``max_run_seconds`` by min),
+        ``cancel_check`` (callable returning True to stop), ``attempt_id``,
+        ``task_key``, ``artifact_dir``, ``clock`` (monotonic clock for tests),
+        ``browser_factory`` (test double for the browser session).
+        """
+        run_options = dict(run_options or {})
         profile_cfg = self.config.get_target_profile(target_id)
         if profile_cfg is None:
             raise ValueError(f"Unknown target_id: {target_id}")
@@ -126,39 +165,152 @@ class Pipeline:
             self.query_plan_version, self.policy_version)
         _, log_path = setup_logging(run_id, console=False)
         stats = RunStats(log_file=str(log_path) if log_path else None)
+        context = self._build_context(run_id, profile, budget_profile, run_calls, run_options)
+        self.registry.set_budget(context.budget)
 
-        logger.info("collect_start run_id=%s target_id=%s", run_id, target_id)
+        logger.info("collect_start run_id=%s target_id=%s attempt_id=%s browser=%s",
+                    run_id, target_id, context.attempt_id, self._browser_run)
+        cleanup: dict[str, Any] = {}
         try:
-            self._execute(run_id, profile, task_profile, call_planner, stats)
-            summary = self._summary(run_id, target_id, task_profile, stats)
-            self.repo.finish_search_run(run_id, "completed", summary)
-            logger.info("collect_completed run_id=%s summary=%s",
-                        run_id, summary.get("summary", {}))
+            try:
+                self._execute(run_id, profile, task_profile, call_planner, stats, context)
+            except RunCancelled as exc:
+                stats.execution_status = "timed_out" if exc.reason == "run_deadline" else "cancelled"
+                stats.stop_reason = exc.reason
+                logger.warning("collect_stopped run_id=%s reason=%s", run_id, exc.reason)
+            finally:
+                cleanup = self._close_context(context)
+                self.registry.set_budget(None)
+            summary = self._summary(run_id, target_id, task_profile, stats, context, cleanup)
+            status = "completed" if stats.execution_status == "completed" else stats.execution_status
+            self.repo.finish_search_run(run_id, status, summary)
+            logger.info("collect_%s run_id=%s summary=%s", status, run_id, summary.get("summary", {}))
             return summary
         except Exception as exc:  # noqa: BLE001
             logger.exception("collect_failed run_id=%s target_id=%s", run_id, target_id)
+            if not cleanup:
+                cleanup = self._close_context(context)
+                self.registry.set_budget(None)
             self.repo.finish_search_run(
-                run_id, "failed", {"error": str(exc), "log_file": stats.log_file})
+                run_id, "failed", {"error": str(exc), "log_file": stats.log_file,
+                                   "collection_diagnostics": {
+                                       "execution_status": "failed",
+                                       "error_code": getattr(exc, "code", type(exc).__name__),
+                                       "budget_used": context.budget.used_summary(),
+                                       "cleanup": cleanup}})
             raise
+
+    # --- run context -----------------------------------------------------------
+
+    @property
+    def _browser_run(self) -> bool:
+        return bool(getattr(self.search, "browser_backed", False))
+
+    def _build_context(self, run_id: str, profile: TargetProfile, budget_profile: dict,
+                       run_calls: int, run_options: dict[str, Any]) -> RunContext:
+        clock: Callable[[], float] = run_options.get("clock") or time.monotonic
+        runtime = self.config.browser_runtime
+        if self._browser_run:
+            limits = merge_limits(runtime.get("limits") or {}, budget_profile)
+        else:
+            # Legacy (API) providers keep their historical budget semantics; the
+            # RunBudget only tracks model/gateway counts and the deadline.
+            big = 10 ** 9
+            limits = {**{k: big for k in DEFAULT_LIMITS}, "max_search_pages_per_run": 0,
+                      "max_browser_read_attempts": 0, "max_authenticated_retries_per_run": 0,
+                      "max_model_calls": run_calls,
+                      "max_gateway_requests": int(budget_profile.get("max_gateway_requests", big)),
+                      "max_run_seconds": int(budget_profile.get("max_run_seconds",
+                                                                DEFAULT_LIMITS["max_run_seconds"] * 24)),
+                      "max_page_seconds": DEFAULT_LIMITS["max_page_seconds"]}
+        deadline = run_options.get("deadline_seconds")
+        run_seconds = float(limits["max_run_seconds"])
+        if deadline is not None:
+            run_seconds = min(run_seconds, float(deadline))
+        budget = RunBudget(limits=limits, clock=clock, deadline_at=clock() + run_seconds)
+        session_store = None
+        if self._browser_run and (runtime.get("session_fallback") or {}).get("enabled"):
+            try:
+                from mic.browser.session_fallback import SessionStore
+                session_store = SessionStore.from_runtime(runtime)
+            except Exception as exc:  # noqa: BLE001 - fallback is optional
+                logger.warning("session_store_unavailable error=%s", exc)
+        context = RunContext(
+            run_id=run_id, attempt_id=run_options.get("attempt_id") or new_id("attempt"),
+            config_fingerprint=config_fingerprint(
+                self.config.search_providers.get("active"), runtime.get("limits"),
+                (self.config.output_schema or {}).get("limits", {}).get("strict_evidence_review")),
+            artifact_dir=run_options.get("artifact_dir"),
+            identity=TargetIdentity.from_profile(profile), budget=budget,
+            browser_runtime=runtime, interaction_mode=runtime.get("interaction_mode", "unattended"),
+            session_store=session_store, clock=clock,
+        )
+        if run_options.get("browser_factory") is not None:
+            context.set_browser_factory(run_options["browser_factory"])
+        cancel_check = run_options.get("cancel_check")
+        self._cancel_check: Callable[[], bool] | None = cancel_check if callable(cancel_check) else None
+        context.recorder.bind(
+            lambda rec: self.repo.start_search_page_attempt(run_id, rec),
+            lambda handle, rec: self.repo.finish_search_page_attempt(handle, rec))
+        return context
+
+    def _close_context(self, context: RunContext) -> dict[str, Any]:
+        try:
+            return context.close()
+        except Exception as exc:  # noqa: BLE001 - report, never mask the run result
+            logger.exception("browser_close_failed run_id=%s", context.run_id)
+            return {"browser_started": True, "cleanup": "cleanup_incomplete", "error": str(exc)[:200]}
+        finally:
+            try:
+                self.search.close()
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                self.repo.mark_interrupted_page_attempts(context.run_id)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _check_alive(self, context: RunContext) -> None:
+        if self._cancel_check is not None and self._cancel_check():
+            context.cancel("cancelled")
+        try:
+            context.check_alive()
+        except BudgetExceeded as exc:
+            raise RunCancelled("run_deadline" if exc.counter == "max_run_seconds" else exc.counter) from exc
 
     # --- core --------------------------------------------------------------
 
     def _execute(self, run_id: str, profile: TargetProfile, task_profile: dict,
-                 call_planner: ModelCallPlanner, stats: RunStats) -> None:
+                 call_planner: ModelCallPlanner, stats: RunStats, context: RunContext) -> None:
         self.vision.reset_run()
         budget_profile = task_profile.get("budget_profile", {})
-        max_queries = budget_profile.get("max_queries", 80)
-        max_hits = budget_profile.get("max_search_hits")
-        if max_hits is None:
-            # Derive a coherent default from the rest of the budget so multi-
-            # engine setups don't silently starve the query plan: every planned
-            # query gets room for a full SERP from every active engine.
-            max_hits = self._default_max_hits(max_queries)
-            logger.info("max_search_hits_derived run_id=%s value=%s", run_id, max_hits)
-        max_links_to_read = budget_profile.get("max_links_to_read", 100)
+        browser_run = self._browser_run
+        limits = context.budget.limits
+        if browser_run:
+            max_queries = limits["max_queries"]
+            max_hits = limits["max_search_hits"]
+            max_links_to_read = limits["max_links_to_read"]
+            hits_per_query = min(self._hits_per_query, limits["max_hits_per_query"])
+        else:
+            max_queries = budget_profile.get("max_queries", 80)
+            max_hits = budget_profile.get("max_search_hits")
+            if max_hits is None:
+                # Derive a coherent default from the rest of the budget so multi-
+                # engine setups don't silently starve the query plan: every planned
+                # query gets room for a full SERP from every active engine.
+                max_hits = self._default_max_hits(max_queries)
+                logger.info("max_search_hits_derived run_id=%s value=%s", run_id, max_hits)
+            max_links_to_read = budget_profile.get("max_links_to_read", 100)
+            hits_per_query = self._hits_per_query
+        # Cross-run analysis reuse is disabled for browser runs until the cache
+        # is isolated by auth context / scope version (design 12.3).
+        reuse_enabled = (not browser_run) or bool(
+            (context.browser_runtime.get("cache") or {}).get("reuse_analysis"))
 
         planned = self.planner.plan(profile, task_profile,
                                     family_feedback=self._family_feedback)
+        if browser_run and len(planned) > max_queries:
+            planned = planned[:max_queries]
         stats.queries_generated = len(planned)
 
         seen_canonical: set[str] = set()
@@ -166,6 +318,7 @@ class Pipeline:
         triaged: list[tuple[str, SearchHit, Any]] = []  # (link_id, hit, triage)
 
         for qi, pq in enumerate(planned):
+            self._check_alive(context)
             if stats.search_hits >= max_hits:
                 # Queries are priority-ordered, so the budget drops the lowest-
                 # value tail - but never silently.
@@ -176,14 +329,47 @@ class Pipeline:
                     stats.queries_executed, stats.queries_skipped_by_hit_budget)
                 break
             query_id = self.repo.save_query(run_id, {**pq.to_record(), "executed": True})
+            request = SearchRequest(query=pq.query_text, query_family=pq.query_family,
+                                    query_id=query_id, limit=hits_per_query)
+            stats.queries_attempted += 1
+            context.budget.record("queries_attempted")
             try:
-                hits = self.search.search(pq.query_text, pq.query_family,
-                                          limit=self._hits_per_query)
+                batch: SearchBatch = self.search.search_with_context(request, context)
+            except BudgetExceeded as exc:
+                stats.search_errors.append({"query": pq.query_text, "error": "budget_exhausted",
+                                            "counter": exc.counter})
+                stats.stop_reason = stats.stop_reason or exc.counter
+                if exc.counter in ("cancelled", "max_run_seconds"):
+                    raise RunCancelled("run_deadline" if exc.counter == "max_run_seconds"
+                                       else "cancelled") from exc
+                logger.warning("search_budget_exhausted run_id=%s counter=%s", run_id, exc.counter)
+                stats.queries_skipped_by_hit_budget = len(planned) - qi
+                break
             except Exception as exc:  # noqa: BLE001 - one bad query shouldn't kill the run
+                code = getattr(exc, "code", None)
+                stats.search_errors.append({"query": pq.query_text, "error": type(exc).__name__,
+                                            "code": code, "message": str(exc)[:200]})
                 logger.warning("search_query_failed run_id=%s query=%r error=%s",
                                run_id, pq.query_text, exc)
+                if code in ("gui_unavailable", "dependency_missing", "browser_missing",
+                            "browser_launch_failed", "profile_busy"):
+                    # Environment faults are not per-query noise: stop searching
+                    # and surface the code (design 15 fail-fast table).
+                    stats.stop_reason = code
+                    stats.execution_status = "failed"
+                    stats.search_outcomes[code] = stats.search_outcomes.get(code, 0) + 1
+                    break
                 continue
             stats.queries_executed += 1
+            stats.queries_completed += 1
+            context.budget.record("queries_completed")
+            stats.search_page_attempts += batch.pages_opened
+            stats.search_api_requests += batch.api_requests
+            stats.search_outcomes[batch.outcome] = stats.search_outcomes.get(batch.outcome, 0) + 1
+            if batch.stop_reason and batch.outcome in ("blocked", "failed", "budget_exhausted"):
+                stats.search_errors.append({"query": pq.query_text, "outcome": batch.outcome,
+                                            "stop_reason": batch.stop_reason})
+            hits = batch.hits
             for hit in hits:
                 if stats.search_hits >= max_hits:
                     break
@@ -211,8 +397,10 @@ class Pipeline:
                 # Cross-run reuse (spec 15.1): this canonical URL was already
                 # analyzed for the same target -> clone the structured result
                 # instead of re-reading and re-calling models.
-                prior = self.repo.find_analyzed_link_by_canonical(
-                    canonical, profile.target_id, exclude_run_id=run_id)
+                prior = None
+                if reuse_enabled:
+                    prior = self.repo.find_analyzed_link_by_canonical(
+                        canonical, profile.target_id, exclude_run_id=run_id)
                 if prior is not None:
                     stats.cached_or_reused_results += 1
                     self.repo.update_link_triage(
@@ -242,9 +430,23 @@ class Pipeline:
                       if t.triage_decision == "read"]
         read_queue.sort(key=lambda x: x[2].read_priority, reverse=True)
         read_queue = read_queue[:max_links_to_read]
+        stats.links_selected_for_read = len(read_queue)
+        context.budget.record("links_selected_for_read", len(read_queue))
+        seen_final_canonical: set[str] = set()
 
         for link_id, hit, tri in read_queue:
-            read = self.reader.read(link_id, hit.url, profile)
+            self._check_alive(context)
+            read = self.reader.read(link_id, hit.url, profile, context=context)
+            # Pending redirects / browser navigations may land on another URL:
+            # update canonical identity and never analyse the same body twice.
+            final_canonical = canonicalize_url(read.final_url or hit.url)
+            if read.final_url and read.final_url != hit.url:
+                self.repo.update_link_final_url(link_id, read.final_url, final_canonical,
+                                                domain_of(read.final_url))
+                hit.url, hit.domain = read.final_url, domain_of(read.final_url)
+            if read.read_status == "read" and final_canonical in seen_final_canonical:
+                read.read_status, read.failure_reason = "failed", "duplicate_final_url"
+            seen_final_canonical.add(final_canonical)
             self.repo.save_read_attempt({
                 "source_link_id": link_id, "access_profile_id": self.reader.access_profile_id,
                 "read_status": read.read_status, "http_status": read.http_status,
@@ -253,8 +455,11 @@ class Pipeline:
                 "content_hash": read.content_hash,
                 "selected_passage_count": len(read.passages),
                 "failure_reason": read.failure_reason,
+                "diagnostics": self._read_diagnostics(read),
             })
             if read.read_status != "read":
+                stats.read_failures[read.failure_reason or "unknown"] = \
+                    stats.read_failures.get(read.failure_reason or "unknown", 0) + 1
                 self.repo.update_link_read(
                     link_id, "failed", None, None,
                     document_type=read.document_type,
@@ -272,8 +477,10 @@ class Pipeline:
                 continue
             # Cross-run content-hash reuse: identical body already analyzed for
             # this target in a prior run -> clone instead of calling models.
-            prior_body = self.repo.find_analyzed_link_by_content_hash(
-                read.content_hash, profile.target_id, exclude_link_id=link_id)
+            prior_body = None
+            if reuse_enabled:
+                prior_body = self.repo.find_analyzed_link_by_content_hash(
+                    read.content_hash, profile.target_id, exclude_link_id=link_id)
             if prior_body is not None:
                 stats.cached_or_reused_results += 1
                 self.repo.update_link_triage(
@@ -367,9 +574,38 @@ class Pipeline:
         # Persist run-level coverage gaps that weren't tied to a saved link.
         self.repo.save_coverage_gaps(run_id, profile.target_id, self._run_gaps(stats))
         stats.model_calls = call_planner.budget.calls_used
+        # Model calls are gated by the call planner's own budget (max_model_calls_per_run) and
+        # every real HTTP send by ``gateway_requests_sent``; mirror the count into the run budget
+        # so ``collection_diagnostics.budget_used`` is one consistent view (observed live: the
+        # counter stayed 0 while two gateway requests had been sent).
+        already = context.budget.used.get("model_calls", 0)
+        if stats.model_calls > already:
+            context.budget.record("model_calls", stats.model_calls - already)
         stats.vision_calls = self.vision.calls_used
         stats.estimated_model_cost = self._cost_from_runs(stats) + \
             round(self.vision.estimated_cost, 6)
+        self._fold_budget(stats, context)
+
+    @staticmethod
+    def _fold_budget(stats: RunStats, context: RunContext) -> None:
+        used = context.budget.used_summary()
+        stats.http_read_attempts = used.get("http_read_attempts", 0)
+        stats.browser_read_attempts = used.get("browser_read_attempts", 0)
+        stats.authenticated_retries = used.get("authenticated_retries", 0)
+        stats.gateway_requests_sent = used.get("gateway_requests_sent", 0)
+        stats.search_page_attempts = max(stats.search_page_attempts, used.get("search_page_attempts", 0))
+
+    @staticmethod
+    def _read_diagnostics(read) -> dict[str, Any]:
+        """Persisted per-attempt diagnostics (design 12.2); never page content."""
+        return {
+            "transport": read.transport, "final_url": read.final_url,
+            "body_scope": dict(read.body_scope or {}),
+            "parser_version": (read.fetch_diagnostics or {}).get("parser_version", "article_scope_v1"),
+            "fetch": read.fetch_diagnostics or {},
+            "selected_passage_ids": [p.passage_id for p in read.passages],
+            "content_hash": read.content_hash, "document_type": read.document_type,
+        }
 
     def _default_max_hits(self, max_queries: int, cap: int = 800) -> int:
         """Budget-coherent default for max_search_hits.
@@ -480,12 +716,13 @@ class Pipeline:
         s["analyst_questions"] += len(bundle.analyst_questions)
         s["coverage_gaps"] += len(bundle.coverage_gaps)
         for e in bundle.events:
-            entry = {
-                "summary": e.summary, "event_type": e.event_type,
-                "event_date": e.event_date, "impact_channels": e.impact.channels,
-                "confidence": e.confidence, "source_link_id": bundle.source_link_id,
-                # Model-attributed research variable coverage (V0.8 research loop).
-                "tracking_variables": [tv.model_dump() for tv in e.tracking_variables]}
+            # Export the reviewed event in full. Metrics and entities also hold
+            # pending-review candidates; dropping them would remove qualifications
+            # before the downstream Agent persists its event payload.
+            entry = e.model_dump(mode="json")
+            entry["source_link_id"] = bundle.source_link_id
+            # Keep the flat field consumed by older report readers.
+            entry["impact_channels"] = list(e.impact.channels)
             # Evidence fields for downstream consumers (agent structured_events).
             if source_metadata:
                 entry["source"] = {
@@ -537,20 +774,113 @@ class Pipeline:
     def _cost_from_runs(self, stats: RunStats) -> float:
         return round(stats.estimated_model_cost, 6)
 
+    def _collection_diagnostics(self, run_id: str, stats: RunStats, context: RunContext,
+                                cleanup: dict[str, Any]) -> dict[str, Any]:
+        """Design 15: answer each acceptance question separately."""
+        self._fold_budget(stats, context)
+        browser_run = self._browser_run
+        if stats.execution_status != "completed":
+            execution_status = stats.execution_status
+        else:
+            execution_status = "completed"
+        # search
+        if stats.queries_attempted == 0:
+            search_status, search_reason = "not_run", stats.stop_reason
+        elif stats.search_hits > 0:
+            blocked = sum(v for k, v in stats.search_outcomes.items() if k in ("blocked", "failed"))
+            search_status = "partial" if (blocked or stats.search_errors) else "ok"
+            search_reason = stats.stop_reason or (stats.search_errors[0].get("stop_reason")
+                                                  if stats.search_errors else None)
+        else:
+            outcomes = stats.search_outcomes
+            if outcomes.get("blocked"):
+                search_status, search_reason = "blocked", "engine_blocked"
+            elif outcomes.get("failed") or stats.search_errors:
+                search_status = "failed"
+                search_reason = stats.stop_reason or (stats.search_errors[0].get("stop_reason")
+                                                      or stats.search_errors[0].get("code")
+                                                      or stats.search_errors[0].get("error"))
+            else:
+                search_status, search_reason = "empty", "no_candidates"
+        # read
+        if stats.links_selected_for_read == 0:
+            read_status = "not_run"
+        elif stats.links_read == stats.links_selected_for_read:
+            read_status = "ok"
+        elif stats.links_read > 0:
+            read_status = "partial"
+        else:
+            read_status = "failed"
+        # output
+        structured_total = stats.structured.get("events", 0) + stats.structured.get("facts", 0) + \
+            stats.structured.get("metrics", 0) + stats.structured.get("relations", 0)
+        if stats.links_model_analyzed == 0:
+            output_status = "no_model_call" if stats.links_read == 0 else "no_structured_output"
+        elif structured_total == 0:
+            output_status = "no_structured_output"
+        else:
+            output_status = "ok"
+        usable = (execution_status == "completed" and search_status in ("ok", "partial")
+                  and read_status in ("ok", "partial") and output_status == "ok")
+        page_stats: dict[str, Any] = {}
+        if browser_run:
+            try:
+                page_stats = self.repo.search_page_stats_for_run(run_id)
+            except Exception:  # noqa: BLE001
+                page_stats = {}
+        diag = {
+            "execution_status": execution_status,
+            "search_status": search_status,
+            "search_reason": search_reason,
+            "read_status": read_status,
+            "read_failures": dict(stats.read_failures),
+            "output_status": output_status,
+            "usable": usable,
+            "stop_reason": stats.stop_reason,
+            "budget_used": context.budget.used_summary(),
+            "budget_limits": {k: v for k, v in context.budget.limits.items() if v < 10 ** 9},
+            "elapsed_seconds": round(context.budget.elapsed_seconds(), 2),
+            "search_outcomes": dict(stats.search_outcomes),
+            "search_errors": stats.search_errors[:10],
+            "provider": getattr(self.search, "name", None),
+            "browser_run": browser_run,
+            "attempt_id": context.attempt_id,
+            "config_fingerprint": context.config_fingerprint,
+            "cleanup": cleanup,
+        }
+        if browser_run:
+            diag["page_attempts"] = page_stats
+            diag["auth_context"] = context.auth_context()
+            diag["reuse_analysis"] = bool((context.browser_runtime.get("cache") or {}).get("reuse_analysis"))
+        return diag
+
     def _summary(self, run_id: str, target_id: str, task_profile: dict,
-                 stats: RunStats) -> dict:
+                 stats: RunStats, context: RunContext | None = None,
+                 cleanup: dict[str, Any] | None = None) -> dict:
         stats.top_events.sort(key=lambda x: x.get("confidence", 0), reverse=True)
         stats.top_relations.sort(key=lambda x: x.get("confidence", 0), reverse=True)
         profile = self.config.get_target_profile(target_id) or {}
+        diagnostics = (self._collection_diagnostics(run_id, stats, context, cleanup or {})
+                       if context is not None else None)
         return {
             "search_run_id": run_id,
             "target": profile.get("canonical_name", target_id),
             "time_window": task_profile.get("time_window", ""),
             "log_file": stats.log_file,
+            "collection_diagnostics": diagnostics,
             "summary": {
                 "queries_generated": stats.queries_generated,
                 "queries_executed": stats.queries_executed,
+                "queries_attempted": stats.queries_attempted,
+                "queries_completed": stats.queries_completed,
                 "queries_skipped_by_hit_budget": stats.queries_skipped_by_hit_budget,
+                "search_page_attempts": stats.search_page_attempts,
+                "search_api_requests": stats.search_api_requests,
+                "http_read_attempts": stats.http_read_attempts,
+                "browser_read_attempts": stats.browser_read_attempts,
+                "authenticated_retries": stats.authenticated_retries,
+                "gateway_requests_sent": stats.gateway_requests_sent,
+                "links_selected_for_read": stats.links_selected_for_read,
                 "search_hits": stats.search_hits,
                 "unique_source_links": stats.unique_source_links,
                 "links_read": stats.links_read,

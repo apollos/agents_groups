@@ -268,6 +268,12 @@ class SearchHit(BaseModel):
     provider: str = ""
     publish_time_guess: str | None = None
     query_family: str | None = None
+    # Optional discovery metadata (browser search providers). Stable keys:
+    # engine, page_index, rank_in_page, page_attempt_id, adapter_version,
+    # retrieved_at, raw_href, url_resolution (direct|decoded|pending),
+    # display_url, date_text, result_kind (organic). Legacy providers leave it
+    # None; required fields above never change meaning.
+    discovery: dict[str, Any] | None = None
 
 
 class Passage(BaseModel):

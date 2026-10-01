@@ -116,13 +116,77 @@ class OpenClawArtifactRenderer:
 5. Token、Cookie、API Key 不得写入回复、日志或 Memory。
 """
 
+    def mic_search_provider(self) -> dict[str, Any]:
+        """Best-effort view of MIC's active search provider for the Skill text.
+
+        Reads MIC's own config (no network, no model call). When MIC is not importable or its
+        config does not load, the Skill keeps both preflight branches and says so.
+        """
+        try:
+            from mic.config import load_config  # type: ignore
+
+            cfg = load_config(self.config.tools.mic_config_dir)
+            providers = cfg.search_providers or {}
+            active = providers.get("active")
+            ptype = ((providers.get("providers") or {}).get(active) or {}).get("type")
+            return {"status": "ok", "active": active, "type": ptype,
+                    "browser_enabled": bool(getattr(cfg, "browser_enabled", False))}
+        except Exception as exc:  # noqa: BLE001 - rendering must not fail on a tool fault
+            return {"status": "unknown", "reason": f"{type(exc).__name__}: {exc}"[:200]}
+
     def skill_md(self) -> str:
+        provider = self.mic_search_provider()
+        if provider.get("status") == "ok":
+            provider_line = (f"当前 MIC 配置：`search_providers.active = {provider.get('active')}`"
+                             f"（type `{provider.get('type')}`，browser_runtime.enabled = {provider.get('browser_enabled')}）。")
+        else:
+            provider_line = ("渲染时无法读取 MIC 配置（" + str(provider.get("reason")) +
+                             "），执行前请先确认 `search_providers.active` 再选择分支。")
+        mic_dir = self.config.tools.mic_config_dir or "<MIC 项目目录>"
         return f"""---
 name: intelligence-collector
 description: A股情报收集员 Agent 的 CLI 工作流。用于注册 Demand、运行 Agent、验证工具能力、读取状态和生成日报。
 ---
 
 # 情报收集员 Skill
+
+## 采集前服务检查（按任务需要分支）
+
+{provider_line}
+
+### 1. browser 搜索路线（`type: browser`，本机窗口化 Edge）
+
+在 Ubuntu 图形桌面会话中执行采集前运行确定性预检（不请求外网、不调用模型）：
+
+    mic browser doctor
+    # 首次或排障时额外执行一次生命周期检查：
+    mic browser doctor --launch
+
+- `doctor` 退出码 0 才继续；它检查 Playwright/Edge 可执行文件/桌面会话/profile 目录与锁/配置。
+- `gui_unavailable`：SSH/systemd 会话没有显示器。停止采集并报告，不得改为 headless 后宣称与已验收路径相同。
+- `profile_busy`：另一轮 MIC 正在使用 profile。等待或由队列重排，不得杀其他进程或删除锁文件。
+- `dependency_missing` / `browser_missing` / `config_error`：按提示修复依赖或配置，不自动换 provider、不启用 mock。
+- 需要人工登录或处理同意页时使用 `mic browser setup --engine bing`（或允许清单内的 `--url`），结束后窗口正常关闭；不得编写临时浏览器脚本、提高预算或删除锁。
+- 浏览器路线重启后不依赖 Docker/SearXNG。Edge profile 与 Cookie 文件位于仓库外，不进入日志、回复、Memory 或 Git。
+
+### 2. searxng 搜索路线（`type: searxng`）
+
+    timeout --kill-after=5s 120s "{self.config.runtime.workspace_root}/bin/ensure-search"
+
+- 检查正常退出后才继续采集；服务停止时由脚本按需启动。
+- 将 ensure-search 部署到 workspace_root/bin，并按本机环境配置 Compose 路径和健康检查地址。
+- 脚本缺失或检查失败时停止采集，报告依赖故障，不得当成“没有相关信息”。
+
+### 3. 需要模型的任务
+
+- 确认 OpenClaw Gateway 已就绪（`openclaw models list --plain` 或现有健康检查），不要为健康检查发送真实模型请求。
+- Gateway 仍按现有人工方式启动；本功能不另起第二个 Gateway。
+
+### 4. 离线回放 / 数据库只读
+
+- 不要求上述在线服务。
+
+通用规则：服务就绪和搜索结果有效必须分别验收；页面打开、HTTP 200、模型 HTTP 200、队列 processed 都不单独代表采集验收通过。结果中的 `collection_diagnostics`（execution_status / search_status / read_status / output_status / usable / budget_used）是判断依据。MIC 配置目录：`{mic_dir}`。
 
 ## 常用命令
 

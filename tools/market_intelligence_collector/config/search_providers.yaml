@@ -32,6 +32,31 @@ search_providers:
       type: mock
       hits_per_query: 6
 
+    # Local windowed Edge driven by Playwright on the Ubuntu desktop
+    # (docs/design/local_browser_search.md). Requires browser_runtime.yaml
+    # enabled: true, MIC_BROWSER_PROFILE_DIR, and `fallback: []` (the provider
+    # schedules engines/pages internally; no outer fallback layer is allowed).
+    # Only engines that passed real on-machine acceptance go in enabled_engines;
+    # engine_order is just the preference order among enabled ones.
+    #   bing   - verified 2026-10 (cn.bing.com / www.bing.com)
+    #   baidu  - verified 2026-10 (www.baidu.com; destination taken from the card's `mu`
+    #            attribute, redirect wrappers without `mu` stay pending until the fetch)
+    #   google - verified 2026-10 (www.google.com, hl=zh-CN). Result links are `/goto?url=<token>`
+    #            wrappers whose destination is not in the DOM: hits stay `pending_redirect` and the
+    #            reader learns the real URL by following the wrapper (HTTP 302 without cookies; the
+    #            browser resolves it as well). A fresh profile is challenged on first access: solve
+    #            it once with `mic browser setup --engine google --url "<search url>"` (the window
+    #            closes the setup when you close it), then confirm with `mic search probe --engine google`.
+    browser_local:
+      type: browser
+      engine_order: [bing, baidu, google]
+      enabled_engines: [bing, baidu, google]
+      results_per_page_cap: 10
+      desired_relevant_articles: 2
+      max_retries_per_page: 0
+      min_engine_interval_seconds: 3
+      query_rewrite: false
+
     # Self-hosted SearXNG metasearch: one query fans out to baidu/google/bing
     # on the instance side and returns merged JSON. Free, no API key needed.
     # Start a local instance with:  cd searxng && docker compose up -d

@@ -223,6 +223,13 @@ runtime:
 ```yaml
 tools:
   python_executable: "python"   # INTEL_AGENT_PYTHON in .env wins when set
+  market_intelligence_collector:
+    enabled: true
+    config_dir: null             # MIC 配置目录；null = 已安装 mic 包自带 config/
+    timeout_seconds: 900         # 硬超时；实际期限 = min(此值, MIC max_run_seconds, 任务预算)
+    execution_mode: subprocess   # subprocess（受监督 worker，browser 路线必需）| in_process（旧线程方式）
+    runs_dir: mic_runs           # 每次 attempt 的 request/result/日志目录（0700），相对 workspace_root
+    python_executable: null      # 能 import mic 的解释器；null = Agent 自身解释器；INTEL_AGENT_MIC_PYTHON 覆盖
   stock_data_collector:
     enabled: true
     config_dir: null      # 可填绝对路径；null 表示让 stock_data_collector 自行解析配置/env

@@ -28,12 +28,25 @@ class Database:
         create_all only creates missing tables; databases created by earlier versions
         need the new columns added in place (no data backfill required).
         """
-        inspector = inspect(self.engine)
-        if "event_card" in inspector.get_table_names():
-            columns = {c["name"] for c in inspector.get_columns("event_card")}
-            if "tracking_variables" not in columns:
-                with self.engine.begin() as con:
-                    con.execute(text("ALTER TABLE event_card ADD COLUMN tracking_variables JSON"))
+        # Add nullable columns only: legacy rows keep unknown evidence as NULL.
+        additions = {
+            "event_card": {"tracking_variables": "JSON", "evidence_locator": "JSON"},
+            "metric_observation": {"evidence_locator": "JSON"},
+            "analysis_brief": {"uncertainty": "TEXT"},
+            # Browser-route fetch/scope diagnostics; legacy rows stay NULL.
+            "link_read_attempt": {"diagnostics": "JSON"},
+        }
+        with self.engine.begin() as con:
+            inspector = inspect(con)
+            tables = set(inspector.get_table_names())
+            for table, fields in additions.items():
+                if table not in tables:
+                    continue
+                existing = {c["name"] for c in inspector.get_columns(table)}
+                for name, sql_type in fields.items():
+                    if name not in existing:
+                        # All identifiers and types are fixed constants above.
+                        con.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}"))
 
     def drop_all(self) -> None:
         Base.metadata.drop_all(self.engine)

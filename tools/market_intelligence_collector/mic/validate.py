@@ -13,6 +13,9 @@ from dataclasses import dataclass, field
 from pydantic import ValidationError
 
 from mic.schemas import BundleExtraction, Passage
+from mic.money import cny_amount_supported, normalize_bundle_amounts
+from mic.relation_evidence import quarantine_relations
+from mic.evidence_review import EvidenceReview, date_supported, quantity_supported
 
 # Inverse pairs used to normalize relation direction.
 _INVERSE = {
@@ -29,6 +32,8 @@ class ValidationReport:
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     bundle: BundleExtraction | None = None
+    relation_reviews: list[dict] = field(default_factory=list)
+    quality_reviews: list[dict] = field(default_factory=list)
 
 
 class BundleValidator:
@@ -43,14 +48,26 @@ class BundleValidator:
         except ValidationError as exc:
             return ValidationReport(False, errors=[f"schema: {e['msg']}" for e in exc.errors()])
 
+        strict = self.limits.get("strict_evidence_review") is True
+        if strict:
+            bundle = bundle.model_copy(deep=True)
         self._enforce_limits(bundle, warnings)
+        self._normalize_relations(bundle, warnings)
+        relation_reviews = quarantine_relations(bundle, passages, warnings)
         passage_text = {p.passage_id: p.text for p in passages}
         valid_pids = set(passage_text)
         self._check_evidence(bundle, valid_pids, warnings)
+        review = EvidenceReview(bundle, passages, warnings) if strict else None
+        if review:
+            review.separate_prices()
+        normalize_bundle_amounts(bundle, passage_text, warnings)
+        quality_reviews = review.apply() if review else []
+        if strict:
+            warnings[:] = [w.replace("; unchanged", "; held for review") for w in warnings]
         self._check_evidence_support(bundle, passage_text, warnings)
-        self._normalize_relations(bundle, warnings)
-
-        return ValidationReport(True, errors=errors, warnings=warnings, bundle=bundle)
+        return ValidationReport(True, errors=errors, warnings=warnings,
+                                bundle=bundle, relation_reviews=relation_reviews,
+                                quality_reviews=quality_reviews)
 
     def _enforce_limits(self, bundle: BundleExtraction, warnings: list[str]) -> None:
         caps = {
@@ -129,16 +146,20 @@ class BundleValidator:
 
         for f in bundle.facts:
             amt = (f.metrics or {}).get("amount")
-            if unsupported(f, amt):
+            if unsupported(f, amt) and not cny_amount_supported(f.metrics, text_for(f) or ""):
                 discount(f, f"fact amount {amt} not found in cited passage")
         for mtr in bundle.metrics:
-            if unsupported(mtr, mtr.metric_value):
+            derived_supported = self.limits.get("strict_evidence_review") is True and quantity_supported(
+                text_for(mtr) or "", mtr.metric_value, mtr.unit)
+            if unsupported(mtr, mtr.metric_value) and not derived_supported:
                 discount(mtr, f"metric value {mtr.metric_value} not found in cited passage")
         for e in bundle.events:
             cp = (e.entities or {}).get("counterparty")
             if cp and unsupported(e, cp):
                 discount(e, f"event counterparty '{cp}' not found in cited passage")
-            if e.event_date and unsupported(e, e.event_date):
+            date_verified = self.limits.get("strict_evidence_review") is True and date_supported(
+                text_for(e) or "", e.event_date)
+            if e.event_date and unsupported(e, e.event_date) and not date_verified:
                 discount(e, f"event_date '{e.event_date}' not found in cited passage")
         for r in bundle.relations:
             obj = r.object_entity.name if r.object_entity else None
@@ -167,3 +188,4 @@ class BundleValidator:
                 "project_participant_of", "product_of", "facility_of", "brand_of",
             ):
                 warnings.append(f"relation_type '{rel.relation_type}' not in enum")
+

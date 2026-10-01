@@ -61,10 +61,26 @@ class ModelAdapter:
     json_output: bool = True
     max_output_tokens: int = 4096
     _client: Any = field(default=None, repr=False, compare=False)
+    # Optional run budget hook (design 9): ``gateway_requests_sent`` is counted
+    # at the moment an HTTP request is actually sent, success or failure.
+    _budget: Any = field(default=None, repr=False, compare=False)
 
     @property
     def usable(self) -> bool:
         return self.enabled and (bool(self.api_key) or self.allow_mock)
+
+    def set_budget(self, budget: Any) -> None:
+        self._budget = budget
+
+    def _reserve_gateway_request(self) -> str | None:
+        """Reserve one gateway request; returns an error string when refused."""
+        if self._budget is None:
+            return None
+        try:
+            self._budget.reserve("gateway_requests_sent")
+        except Exception as exc:  # noqa: BLE001 - BudgetExceeded / cancelled / deadline
+            return f"{type(exc).__name__}: {exc}"
+        return None
 
     def complete(self, messages: list[dict], max_tokens: int | None = None,
                  json_mode: bool | None = None) -> ModelCallResult:
@@ -89,7 +105,9 @@ class ModelAdapter:
     def _api_complete(self, messages: list[dict], max_tokens: int,
                      input_chars: int, json_mode: bool | None = None) -> ModelCallResult:
         if self._client is None:
-            self._client = OpenAI(api_key=self.api_key, base_url=self.endpoint)
+            # SDK-level retries are disabled so every HTTP request is one counted
+            # gateway request (design 9: no hidden second sends).
+            self._client = OpenAI(api_key=self.api_key, base_url=self.endpoint, max_retries=0)
         client = self._client
         start = time.time()
         want_json = self.json_output if json_mode is None else json_mode
@@ -97,6 +115,14 @@ class ModelAdapter:
                                   "max_tokens": max_tokens, "temperature": 0.2}
         if want_json:
             kwargs["response_format"] = {"type": "json_object"}
+        refused = self._reserve_gateway_request()
+        if refused is not None:
+            return ModelCallResult(
+                model_config_id=self.model_config_id, provider=self.provider,
+                provider_type=self.provider_type, model_name=self.model,
+                status="request_failed", input_chars=input_chars,
+                error_type="budget_exhausted", error_message=refused[:500],
+            )
         try:
             resp = client.chat.completions.create(**kwargs)
         except Exception as exc:  # noqa: BLE001 - surface as failure for fallback
@@ -401,6 +427,11 @@ class ModelRegistry:
                 json_output=spec.get("capabilities", {}).get("json_output", True),
                 max_output_tokens=spec.get("max_output_tokens", default_max_out),
             )
+
+    def set_budget(self, budget: Any) -> None:
+        """Attach (or detach with None) the run budget to every adapter."""
+        for adapter in self.adapters.values():
+            adapter.set_budget(budget)
 
     def get(self, model_config_id: str) -> ModelAdapter | None:
         return self.adapters.get(model_config_id)

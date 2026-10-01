@@ -17,26 +17,48 @@ import os
 import random
 import time
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from mic.schemas import SearchHit
 from mic.utils import domain_of
 
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from mic.browser.contracts import SearchBatch, SearchRequest
+
 logger = logging.getLogger(__name__)
 
 
 class SearchProvider(ABC):
     name: str = "base"
+    #: True for providers that open browser pages (and therefore consume
+    #: ``search_page_attempts`` from the run budget).
+    browser_backed: bool = False
 
     @abstractmethod
     def search(self, query: str, query_family: str | None = None,
                limit: int = 10) -> list[SearchHit]:
         ...
 
+    def search_with_context(self, request: SearchRequest, context: Any) -> SearchBatch:
+        """Budget-aware entry point (design 5.2).
+
+        Default: delegate to ``search()`` and report one external API request.
+        Legacy providers never produce browser page attempts.
+        """
+        from mic.browser.contracts import SearchBatch
+
+        hits = self.search(request.query, request.query_family, limit=request.limit)
+        return SearchBatch(query=request.query, query_family=request.query_family, provider=self.name,
+                           hits=hits, outcome="completed" if hits else "empty", api_requests=1)
+
     def page_body(self, url: str) -> str | None:
         """Optional: providers backed by synthetic data can serve page bodies."""
+        return None
+
+    def close(self) -> None:  # pragma: no cover - default no-op
+        """Release provider resources at the end of a run (browser providers)."""
         return None
 
 
@@ -214,10 +236,11 @@ class SearxngProvider(SearchProvider):
         self._pace()
         params: dict[str, Any] = {
             "q": query, "format": "json", "language": self.language,
-            "categories": "general",
         }
         if self.engines:
             params["engines"] = ",".join(self.engines)
+        else:
+            params["categories"] = "general"
         resp = httpx.get(f"{self.base_url}/search", params=params, timeout=20)
         resp.raise_for_status()
         data = resp.json()
@@ -388,6 +411,11 @@ def _build_one(name: str, providers: dict[str, Any]) -> SearchProvider | None:
     if ptype == "tavily":
         tavily = TavilyProvider(pcfg)
         return tavily if tavily.api_key else None
+    if ptype == "browser":
+        # Construction validates config only; no browser, network or model is
+        # opened here (design 5.4). Runtime readiness is `mic browser doctor`.
+        from mic.browser_search import BrowserSearchProvider
+        return BrowserSearchProvider(pcfg, provider_name=name)
 
     logger.warning("unknown_search_provider name=%s type=%s", name, ptype)
     return None

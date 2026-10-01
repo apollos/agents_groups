@@ -4,6 +4,41 @@
 
 ---
 
+## V0.10.0 — 2026-10-01：MIC 采集改为受监督子进程；接入本地浏览器搜索路线（设计 C5b）
+
+对应 MIC 设计 `tools/market_intelligence_collector/docs/design/local_browser_search.md` 第 8、14、15 节。
+
+- **`MICAdapter` 默认 `execution_mode: subprocess`**：一次采集 = 一个 `mic.browser.runner.RunSupervisor`
+  监督的 `python -m mic.browser.worker` 子进程（独立进程组）。超时/取消先写 cancel 文件协作停止，再 TERM，
+  5 秒宽限后 KILL；回收后才返回。`MIC_TIMEOUT` 现在是真实硬超时，并如实报告 `gateway_requests_sent`
+  （已发送请求的响应状态未知）。`in_process` 保留为显式退回选项（线程超时只停止等待，不能停止运行）。
+- **租约丢失即取消**：`extend_lease` 返回是否仍持有租约；丢失时设置 cancel 事件停止 worker，
+  本轮结果不再 ack/nack（归新持有者），`run_once` 返回 `lease_lost`，被撤销的 attempt 不落库、不导出事件。
+- **`collection_attempt` 表（schema v8，老库自动迁移）**：`task_key / attempt_id / owner_token / worker_pid /
+  state / heartbeat_at / deadline_at / result_path`，按 `task_key` 的唯一活动约束。重复投递遇到活动 attempt
+  → `MIC_ATTEMPT_ACTIVE`（retry，不启动第二个 worker）；心跳过期且超过 deadline 的旧 attempt 自动关闭为 `interrupted`；
+  `cleanup_incomplete` 且 worker 进程经 `/proc` 校验仍属于该 attempt → `MIC_CLEANUP_INCOMPLETE` 阻止新一轮，进程消失后自愈。
+- **错误分类**：`MIC_CONFIG_ERROR / MIC_GUI_UNAVAILABLE / MIC_DEPENDENCY_MISSING / MIC_BROWSER_LAUNCH_FAILED /
+  MIC_CLEANUP_INCOMPLETE` 不重试并产生 FAULT_TICKET；`MIC_PROFILE_BUSY / MIC_TIMEOUT / MIC_CANCELLED /
+  MIC_WORKER_CRASHED / MIC_ATTEMPT_ACTIVE` 由队列有界重试（每次新 attempt）。调度性结果不计入 circuit breaker。
+- **质量门**：读取 MIC `collection_diagnostics`，分别判断 `execution_status / search_status / read_status / output_status`；
+  未完成的运行即使带结构化输出也判 `reject`；空搜索、正文全部失败、清理不完整单独列为 issue。结构化输出门槛不变。
+- **Skill 预检按 provider 分支**：browser 路线 → `mic browser doctor`（`gui_unavailable` / `profile_busy` 的处置规则）；
+  searxng → `ensure-search`；需要模型 → Gateway 就绪检查；离线/只读不要求在线服务。
+- 配置新增 `tools.market_intelligence_collector.execution_mode | runs_dir | python_executable`
+  （`INTEL_AGENT_MIC_PYTHON` 覆盖）。
+- 测试：`tests/test_mic_supervised_adapter.py`（桩 worker 子进程：完成/超时回收/取消/崩溃/错误分类、租约丢失、
+  重复投递、过期 attempt、cleanup_incomplete 阻塞与自愈、schema v8、Skill 分支）。
+- 2026-10-02 本机端到端验收（设计 16.2 第三步）通过：新库 + 正式 `intel-agent` 队列入口，浏览器路线 `browser:bing`
+  2 查询 / 3 结果页 / 2 正文候选 / 2 次 Gateway 请求，模型输出 74 分入库、严格证据审查隔离 20 条待核查项，
+  MIC 与 Agent 事件数一致，重复投递不重复采集，无遗留进程。记录见 MIC README「本机验收记录」。
+  子进程 MIC 日志现默认写到 attempt 运行目录 `logs/`（`MIC_LOG_DIR` 未设置时），不再落到工具源码树。
+- 2026-10-02 MIC 浏览器路线三个引擎全部在本机真实 DOM 上验证并启用（`enabled_engines: [bing, baidu, google]`）。
+  Google 需用 `mic browser setup --engine google --url <搜索页>` 人工通过一次 /sorry/ 验证（setup 现随窗口关闭而结束）；
+  其结果链接是 `/goto` 跳转包装，命中按 `pending_redirect` 保留、读取阶段解析最终 URL。详见 MIC README「引擎适配状态」。
+
+---
+
 ## V0.9.2 — 2026-08-21：环境差异迁入 .env（避免换机改 yaml）
 
 本地 WSL 与云主机的 OpenClaw 模型名、Python 解释器不同，不应再改

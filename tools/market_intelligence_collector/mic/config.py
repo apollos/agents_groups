@@ -28,6 +28,7 @@ CONFIG_FILES = [
     "call_governance",
     "output_schema",
     "storage_policy",
+    "browser_runtime",
 ]
 
 
@@ -48,6 +49,7 @@ class MICConfig:
 
     raw: dict[str, Any] = field(default_factory=dict)
     config_dir: Path = field(default_factory=lambda: _project_root() / "config")
+    _browser_runtime_cache: dict[str, Any] | None = field(default=None, repr=False)
 
     # Convenience accessors -------------------------------------------------
     @property
@@ -114,6 +116,30 @@ class MICConfig:
     def access_profiles(self) -> dict[str, Any]:
         return self.raw.get("access_profiles", {})
 
+    @property
+    def browser_runtime(self) -> dict[str, Any]:
+        """Validated browser runtime block (defaults with enabled=False when absent)."""
+        if self._browser_runtime_cache is None:
+            from mic.browser.config import validate_browser_runtime
+            self._browser_runtime_cache = validate_browser_runtime(
+                self.raw.get("browser_runtime"))
+        return self._browser_runtime_cache
+
+    def set_browser_runtime(self, block: dict[str, Any] | None) -> None:
+        """Replace the browser block and re-validate (tests / probes)."""
+        self.raw["browser_runtime"] = block
+        self._browser_runtime_cache = None
+        self.browser_runtime  # noqa: B018 - validate now
+
+    @property
+    def browser_enabled(self) -> bool:
+        return bool(self.browser_runtime.get("enabled"))
+
+    @property
+    def browser_fetch(self) -> dict[str, Any]:
+        """``access_profiles.browser_fetch`` block (reader fetch strategy)."""
+        return self.access_profiles.get("browser_fetch", {}) or {}
+
     # Runtime ---------------------------------------------------------------
     @property
     def database_url(self) -> str:
@@ -130,7 +156,12 @@ class MICConfig:
 def load_config(config_dir: str | Path | None = None) -> MICConfig:
     """Load all config files and environment variables."""
     load_dotenv(_project_root() / ".env")
-    cfg_dir = Path(config_dir) if config_dir else _project_root() / "config"
+    # Explicit argument (Agent adapter / tests) > MIC_CONFIG_DIR (lets the `mic` CLI operate a
+    # deployment config dir outside the source tree) > repo config/.
+    env_dir = os.environ.get("MIC_CONFIG_DIR", "").strip()
+    cfg_dir = Path(config_dir) if config_dir else (Path(env_dir) if env_dir else _project_root() / "config")
+    if not cfg_dir.is_dir():
+        raise FileNotFoundError(f"MIC config dir not found: {cfg_dir}")
     raw: dict[str, Any] = {}
     for name in CONFIG_FILES:
         data = _read_yaml(cfg_dir / f"{name}.yaml")
@@ -142,4 +173,47 @@ def load_config(config_dir: str | Path | None = None) -> MICConfig:
         for extra_key, extra_val in data.items():
             if extra_key != name:
                 raw[extra_key] = extra_val
-    return MICConfig(raw=raw, config_dir=cfg_dir)
+    cfg = MICConfig(raw=raw, config_dir=cfg_dir)
+    # Fail fast on a mistyped browser block instead of silently running with
+    # defaults (design 13.4). Validation never opens a browser or the network.
+    cfg.browser_runtime  # noqa: B018 - property call validates and caches
+    validate_search_provider_config(cfg)
+    return cfg
+
+
+def validate_search_provider_config(cfg: MICConfig) -> None:
+    """Cross-file checks for the browser search provider (design 5.4).
+
+    The browser provider has its own internal engine scheduler; wrapping it in
+    the legacy composite/fallback chain would double-count budget, so that
+    combination is rejected at load time.
+    """
+    from mic.browser.config import ConfigError
+
+    sp = cfg.search_providers or {}
+    providers = sp.get("providers", {}) or {}
+    active = sp.get("active", "mock")
+    names = [active] if isinstance(active, str) else list(active or [])
+    browser_names = [n for n in names if (providers.get(n, {}) or {}).get("type") == "browser"]
+    if not browser_names:
+        return
+    if len(names) > 1:
+        raise ConfigError(
+            "search_providers.active: a browser provider cannot be combined with other "
+            "active providers (internal engine scheduling replaces the composite chain)")
+    fallback = sp.get("fallback")
+    if fallback not in (None, [], ""):
+        raise ConfigError(
+            "search_providers.fallback must be empty when the active provider is of type "
+            "browser (no double fallback layers)")
+    pcfg = providers.get(browser_names[0], {}) or {}
+    from mic.browser_search import validate_browser_provider_config
+
+    try:
+        validate_browser_provider_config(pcfg)
+    except ConfigError as exc:
+        raise ConfigError(f"search_providers.providers.{browser_names[0]}: {exc}") from exc
+    if not cfg.browser_enabled:
+        raise ConfigError(
+            "search_providers.active selects a browser provider but browser_runtime.enabled "
+            "is false; enable browser_runtime.yaml or choose another provider")

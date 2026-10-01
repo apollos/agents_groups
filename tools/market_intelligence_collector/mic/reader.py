@@ -48,6 +48,7 @@ _IMG_MAX_BYTES = 5_000_000
 # "百度安全验证" page). Matched against the page title and a short body.
 _ANTI_BOT_MARKERS = (
     "安全验证", "百度安全验证", "请输入验证码", "人机验证", "拖动滑块",
+    "滑动验证", "滑块验证",
     "访问异常", "异常访问", "访问验证", "网络环境异常",
     "Just a moment", "Access Denied", "Attention Required",
     "Verifying you are human", "captcha", "CAPTCHA",
@@ -69,6 +70,20 @@ class ReadResult:
     document_type: str = "html"  # html | pdf (spec 13.1)
     passages: list[Passage] = field(default_factory=list)
     failure_reason: str | None = None
+    body_scope: dict = field(default_factory=dict)
+    # Design 11: transport-level diagnostics (no page content). Legacy callers
+    # may ignore these; the pipeline persists them on link_read_attempt.
+    transport: str | None = None
+    final_url: str | None = None
+    fetch_diagnostics: dict = field(default_factory=dict)
+
+
+# Parse failures after which a browser attempt may still rescue the page.
+_BROWSER_RESCUE_REASONS = {"anti_bot_page", "rendering_required", "article_body_empty"}
+# Parse failures that only a `allow_scope_retry` site rule may rescue.
+_SCOPE_RETRY_REASONS = {"article_scope_unresolved"}
+# Fetch outcomes where a second transport is pointless.
+_NO_RETRY_FETCH = {"http_status", "unsupported_content", "rejected"}
 
 
 class LinkReader:
@@ -84,13 +99,217 @@ class LinkReader:
         gov = (config.call_governance or {}).get("budgets", {})
         self.max_passages = gov.get("max_selected_passages_per_link", 8)
         self.max_chars = gov.get("max_input_chars_per_model_call", 8000)
+        self.browser_fetch_cfg = dict(getattr(config, "browser_fetch", {}) or {})
+        self.article_scope_version = "article_scope_v1"
 
-    def read(self, source_link_id: str, url: str, profile: TargetProfile) -> ReadResult:
+    # --- public entry ---------------------------------------------------------
+
+    def read(self, source_link_id: str, url: str, profile: TargetProfile,
+             context=None, strategy: str | None = None) -> ReadResult:
+        """Fetch + parse one link.
+
+        Without ``context`` (legacy callers / tests) this is the HTTP-only path
+        with the original behaviour. With a ``RunContext`` the fetch strategy
+        (``http_then_browser`` / ``browser_first`` / ``http_only``) is applied
+        with budget reservations and the browser session from the context.
+        """
+        if context is None or not context.browser_runtime.get("enabled"):
+            if context is not None:
+                context.budget.record("http_read_attempts")
+            fetched = self._fetch_http_result(url)
+            result = self._parse_fetch(source_link_id, fetched, profile)
+            result.fetch_diagnostics = {"strategy": "http_only", "attempts": [fetched.diagnostics()],
+                                        "parser_version": self.article_scope_version}
+            return result
+        return self._read_with_strategy(source_link_id, url, profile, context, strategy)
+
+    def _plan(self, url: str, strategy: str | None) -> tuple[list[str], dict]:
+        from urllib.parse import urlparse
+
+        cfg = self.browser_fetch_cfg
+        host = (urlparse(url).hostname or "").lower()
+        rule = dict((cfg.get("site_rules") or {}).get(host) or {})
+        mode = strategy or rule.get("mode") or cfg.get("default_mode") or "http_then_browser"
+        if mode == "browser_first":
+            order = ["browser", "http"]
+        elif mode == "http_only":
+            order = ["http"]
+        elif mode == "browser_only":
+            order = ["browser"]
+        else:
+            mode, order = "http_then_browser", ["http", "browser"]
+        return order, {"mode": mode, "host": host, "allow_scope_retry": bool(rule.get("allow_scope_retry")),
+                       "fallback_reasons": list(cfg.get("fallback_reasons") or ["anti_bot_page", "rendering_required"])}
+
+    def _read_with_strategy(self, source_link_id: str, url: str, profile: TargetProfile,
+                            context, strategy: str | None) -> ReadResult:
+        from mic.budget import BudgetExceeded
+
+        order, plan = self._plan(url, strategy)
+        attempts: list[dict] = []
+        last: ReadResult | None = None
+        budget = context.budget
+        for idx, transport in enumerate(order):
+            counter = "http_read_attempts" if transport == "http" else "browser_read_attempts"
+            try:
+                budget.reserve(counter)
+            except BudgetExceeded as exc:
+                attempts.append({"transport": transport, "skipped": str(exc.counter), "reason": "budget"})
+                break
+            if transport == "http":
+                fetched = self._fetch_http_result(url)
+            else:
+                fetched = self._fetch_browser_result(url, context)
+            attempts.append(fetched.diagnostics())
+            result = self._parse_fetch(source_link_id, fetched, profile)
+            if result.read_status == "read":
+                result.fetch_diagnostics = self._diag(plan, attempts)
+                return result
+            last = result
+            reason = result.failure_reason or fetched.blocked_reason or "fetch_failed"
+            # Authenticated retry for a blocked browser page (design 10.3).
+            if transport == "browser" and reason in ("anti_bot_page", "login_required", "captcha"):
+                retried = self._authenticated_retry(source_link_id, url, profile, context, fetched, attempts)
+                if retried is not None:
+                    if retried.read_status == "read":
+                        retried.fetch_diagnostics = self._diag(plan, attempts)
+                        return retried
+                    last = retried
+            if idx == len(order) - 1:
+                break
+            if not self._may_try_next(transport, fetched, result, plan):
+                attempts.append({"transport": order[idx + 1], "skipped": "not_applicable", "reason": reason})
+                break
+        if last is None:
+            last = ReadResult(source_link_id=source_link_id, read_status="failed",
+                              failure_reason="fetch_failed")
+        last.fetch_diagnostics = self._diag(plan, attempts)
+        return last
+
+    @staticmethod
+    def _diag(plan: dict, attempts: list[dict]) -> dict:
+        return {"strategy": plan["mode"], "host": plan["host"], "allow_scope_retry": plan["allow_scope_retry"],
+                "attempts": attempts, "parser_version": "article_scope_v1"}
+
+    def _may_try_next(self, transport: str, fetched, result: ReadResult, plan: dict) -> bool:
+        if fetched.blocked_reason in _NO_RETRY_FETCH:
+            return False  # 404/410/unsupported: no pointless retry
+        if fetched.blocked_reason in ("timeout", "network_error") and transport == "http":
+            return True
+        reason = result.failure_reason
+        if reason in _SCOPE_RETRY_REASONS:
+            return transport == "http" and plan["allow_scope_retry"]
+        if reason in _BROWSER_RESCUE_REASONS:
+            return transport == "http" and (
+                reason in plan["fallback_reasons"] or "rendering_required" in plan["fallback_reasons"]
+                and reason == "article_body_empty")
+        if transport == "browser" and reason in ("browser_closed", "gui_unavailable"):
+            return True  # browser unavailable -> plain HTTP still worth one try
+        if transport == "browser" and plan["mode"] == "browser_first":
+            return fetched.blocked_reason in ("timeout", "network_error", "browser_closed")
+        return False
+
+    def _authenticated_retry(self, source_link_id: str, url: str, profile: TargetProfile, context,
+                             blocked, attempts: list[dict]) -> ReadResult | None:
+        from mic.budget import BudgetExceeded
+
+        store = context.session_store
+        if store is None:
+            return None
+        origin = store.origin_of(url)
+        ok, reason = context.budget.can_authenticated_retry(origin)
+        if not ok:
+            attempts.append({"transport": "browser", "skipped": "authenticated_retry", "reason": reason})
+            return None
+        exclude = {blocked.auth_context_id} if blocked.auth_mode == "imported_cookie" else set()
+        cred = store.credential_for(origin, exclude_versions=exclude)
+        if cred is None:
+            attempts.append({"transport": "browser", "skipped": "authenticated_retry", "reason": "no_credential"})
+            return None
+        try:
+            context.budget.reserve_authenticated_retry(origin)
+            context.budget.reserve("browser_read_attempts")
+            context.browser().add_cookies(cred["cookies"], cred["credential_id"], cred["version"])
+        except (BudgetExceeded, Exception) as exc:  # noqa: BLE001
+            attempts.append({"transport": "browser", "skipped": "authenticated_retry",
+                             "reason": f"{type(exc).__name__}"})
+            return None
+        finally:
+            cred["cookies"] = None
+        fetched = self._fetch_browser_result(url, context)
+        fetched.authenticated_retry = True
+        attempts.append(fetched.diagnostics())
+        # Same FetchResult contract, same full body checks.
+        return self._parse_fetch(source_link_id, fetched, profile)
+
+    # --- fetch adapters -------------------------------------------------------
+
+    def _fetch_http_result(self, url: str):
+        from mic.browser.contracts import FetchResult
+
+        if self.search_provider is not None:
+            body = self.search_provider.page_body(url)
+            if body is not None:
+                return FetchResult(transport="mock", requested_url=url, final_url=url, http_status=200,
+                                   content_type="text/html", html=body, counted_as="http_read_attempts")
         raw, http_status, ctype = self._fetch(url)
         if raw is None:
+            blocked = "http_status" if http_status is not None else "network_error"
+            return FetchResult(transport="http", requested_url=url, http_status=http_status,
+                               content_type=ctype, blocked_reason=blocked, counted_as="http_read_attempts")
+        if isinstance(raw, bytes):
+            return FetchResult(transport="http", requested_url=url, final_url=url, http_status=http_status,
+                               content_type=ctype, content=raw, counted_as="http_read_attempts")
+        return FetchResult(transport="http", requested_url=url, final_url=url, http_status=http_status,
+                           content_type=ctype, html=raw, counted_as="http_read_attempts")
+
+    def _fetch_browser_result(self, url: str, context):
+        from mic.browser.contracts import FetchResult
+        from mic.browser.fetch import BrowserFetcher
+        from mic.browser.session import BrowserUnavailable
+
+        try:
+            session = context.browser()
+        except BrowserUnavailable as exc:
+            return FetchResult(transport="browser", requested_url=url, blocked_reason=exc.code,
+                               error=str(exc)[:200], counted_as="browser_read_attempts")
+        except Exception as exc:  # noqa: BLE001
+            return FetchResult(transport="browser", requested_url=url, blocked_reason="browser_launch_failed",
+                               error=f"{type(exc).__name__}: {str(exc)[:160]}",
+                               counted_as="browser_read_attempts")
+        fetcher = BrowserFetcher(session, clock=context.clock)
+        try:
+            return fetcher.fetch(url, context.budget.page_timeout_seconds())
+        except Exception as exc:  # noqa: BLE001
+            return FetchResult(transport="browser", requested_url=url, blocked_reason="browser_closed",
+                               error=f"{type(exc).__name__}: {str(exc)[:160]}",
+                               counted_as="browser_read_attempts")
+
+    # --- unified parse chain (HTML / PDF / anti-bot / strict scope) -------------
+
+    def _parse_fetch(self, source_link_id: str, fetched, profile: TargetProfile) -> ReadResult:
+        base = {"transport": fetched.transport, "final_url": fetched.final_url}
+        if fetched.blocked_reason is not None or (fetched.html is None and fetched.content is None):
+            reason = "fetch_failed"
+            if fetched.blocked_reason in ("captcha", "login_required"):
+                reason = fetched.blocked_reason
+            elif fetched.blocked_reason == "unsupported_content":
+                reason = "unsupported_content"
             return ReadResult(source_link_id=source_link_id, read_status="failed",
-                              http_status=http_status, failure_reason="fetch_failed")
+                              http_status=fetched.http_status, content_type=fetched.content_type,
+                              failure_reason=reason, **base)
+        raw = fetched.content if fetched.content is not None else fetched.html
+        result = self._parse_raw(source_link_id, raw, fetched.http_status, fetched.content_type, profile,
+                                 page_url=fetched.final_url or fetched.requested_url)
+        result.transport = fetched.transport
+        result.final_url = fetched.final_url
+        return result
+
+    def _parse_raw(self, source_link_id: str, raw, http_status: int | None, ctype: str | None,
+                   profile: TargetProfile, page_url: str = "") -> ReadResult:
+        url = page_url
         image_texts: list[str] = []
+        body_scope: dict = {}
         if isinstance(raw, bytes):
             document_type = "pdf"
             title, publish_time, body = self._extract_pdf(raw)
@@ -110,12 +329,25 @@ class LinkReader:
                     document_type="pdf", failure_reason="pdf_extract_failed")
         else:
             document_type = "html"
-            title, publish_time, body, tables, image_urls = self._extract(raw)
-            if self._is_anti_bot_page(title, body):
+            strict_scope = (self.config.output_schema or {}).get("limits", {}).get("strict_evidence_review") is True
+            if strict_scope:
+                from mic.article_scope import extract_article
+                article = extract_article(raw, self)
+                title, publish_time, body = article.title, article.publish_time, article.body
+                tables, image_urls, body_scope = article.tables, article.image_urls, article.report
+            else:
+                title, publish_time, body, tables, image_urls = self._extract(raw)
+            challenge_text = body_scope.pop("challenge_excerpt", "")
+            if self._is_anti_bot_page(title, body or challenge_text, raw_html=raw):
                 return ReadResult(
                     source_link_id=source_link_id, read_status="failed",
                     http_status=http_status, content_type=ctype, title=title,
-                    document_type="html", failure_reason="anti_bot_page")
+                    document_type="html", failure_reason="anti_bot_page", body_scope=body_scope)
+            if strict_scope and body_scope.get("status") != "scoped":
+                return ReadResult(
+                    source_link_id=source_link_id, read_status="failed",
+                    http_status=http_status, content_type=ctype, title=title,
+                    document_type="html", failure_reason="article_scope_unresolved", body_scope=body_scope)
             # Vision rescue: thin body + embedded images ("公告截图 + 一句话")
             # -> transcribe the main images (off by default; see config).
             if (self.vision is not None and self.vision.html_images_enabled
@@ -126,6 +358,11 @@ class LinkReader:
                            if images else None)
                 if rescued:
                     image_texts.append(rescued)
+            if strict_scope and not (body.strip() or tables or image_texts):
+                return ReadResult(
+                    source_link_id=source_link_id, read_status="failed",
+                    http_status=http_status, content_type=ctype, title=title,
+                    document_type="html", failure_reason="article_body_empty", body_scope=body_scope)
         chash = content_hash(body)
         shash = simhash(body)
         passages = self._select_passages(title, body, tables, profile,
@@ -134,18 +371,17 @@ class LinkReader:
             source_link_id=source_link_id, read_status="read", http_status=http_status,
             content_type=ctype, content_length=len(body), title=title,
             publish_time=publish_time, content_hash=chash, simhash=shash,
-            document_type=document_type, passages=passages,
+            document_type=document_type, passages=passages, body_scope=body_scope,
         )
 
     # --- fetch -------------------------------------------------------------
 
     def _fetch(self, url: str) -> tuple[str | bytes | None, int | None, str | None]:
-        """Returns str for HTML, bytes for PDF, None on failure."""
-        # Offline/mock support: synthetic providers can serve bodies directly.
-        if self.search_provider is not None:
-            body = self.search_provider.page_body(url)
-            if body is not None:
-                return body, 200, "text/html"
+        """Returns str for HTML, bytes for PDF, None on failure.
+
+        Mock/synthetic bodies are served earlier by ``_fetch_http_result``; this
+        method is the plain HTTP transport only.
+        """
         try:
             resp = httpx.get(url, timeout=self.timeout, follow_redirects=True,
                              headers={"User-Agent": self.user_agent})
@@ -165,7 +401,7 @@ class LinkReader:
     # --- anti-bot detection --------------------------------------------------
 
     @staticmethod
-    def _is_anti_bot_page(title: str, body: str) -> bool:
+    def _is_anti_bot_page(title: str, body: str, raw_html: str = "") -> bool:
         """True for CAPTCHA/anti-bot interstitials served with HTTP 200.
 
         Requires the body to be short so long real articles that merely
@@ -174,7 +410,17 @@ class LinkReader:
         if len(body) > _ANTI_BOT_BODY_MAX_CHARS:
             return False
         text = f"{title} {body}"
-        return any(marker in text for marker in _ANTI_BOT_MARKERS)
+        if any(marker in text for marker in _ANTI_BOT_MARKERS):
+            return True
+        # Challenge scripts may disappear during HTML text extraction.
+        # Use the combined signature only for short, titleless pages.
+        source = f"{body} {raw_html}".casefold()
+        return (
+            not title.strip()
+            and "cf_app_waf" in source
+            and re.search(r"\bvar\s+ac_opt\s*=", source) is not None
+            and re.search(r"\bvar\s+requestinfo\s*=", source) is not None
+        )
 
     # --- extraction --------------------------------------------------------
 

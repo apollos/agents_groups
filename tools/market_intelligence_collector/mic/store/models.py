@@ -108,7 +108,43 @@ class LinkReadAttempt(Base):
     content_hash: Mapped[str | None] = mapped_column(String)
     selected_passage_count: Mapped[int | None] = mapped_column(Integer)
     failure_reason: Mapped[str | None] = mapped_column(Text)
+    # Fetch/scope diagnostics (design 12.2): transport, final_url, body_scope,
+    # parser_version, browser wait/blocked state, artifact refs, passage ids,
+    # content hash. Nullable: rows from earlier versions stay NULL (unknown).
+    diagnostics: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+
+class SearchPageAttempt(Base):
+    """One search results page navigation (design 12.1).
+
+    Created as ``attempting`` before navigation and updated on completion;
+    rows left in ``attempting`` by a crash are marked ``interrupted`` and never
+    get fabricated results.
+    """
+
+    __tablename__ = "search_page_attempt"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    search_run_id: Mapped[str | None] = mapped_column(String, ForeignKey("search_run.id"))
+    query_id: Mapped[str | None] = mapped_column(String)
+    engine: Mapped[str | None] = mapped_column(String)
+    adapter_version: Mapped[str | None] = mapped_column(String)
+    page_index: Mapped[int | None] = mapped_column(Integer)
+    query_requested: Mapped[str | None] = mapped_column(Text)
+    query_observed: Mapped[str | None] = mapped_column(Text)
+    requested_url: Mapped[str | None] = mapped_column(Text)
+    final_url: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str | None] = mapped_column(String)
+    state: Mapped[str | None] = mapped_column(String)  # attempting | finished | interrupted
+    error_code: Mapped[str | None] = mapped_column(String)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime)
+    result_count: Mapped[int | None] = mapped_column(Integer)
+    new_unique_count: Mapped[int | None] = mapped_column(Integer)
+    page_fingerprint: Mapped[str | None] = mapped_column(String)
+    quality_json: Mapped[dict | None] = mapped_column(JSON)
+    diagnostics_json: Mapped[dict | None] = mapped_column(JSON)
 
 
 class ModelRun(Base):
@@ -183,6 +219,7 @@ class AnalysisBrief(Base):
     affected_business_lines: Mapped[dict | None] = mapped_column(JSON)
     impact_channels: Mapped[dict | None] = mapped_column(JSON)
     time_horizon: Mapped[str | None] = mapped_column(String)
+    uncertainty: Mapped[str | None] = mapped_column(Text)
     confidence: Mapped[float | None] = mapped_column(Float)
     created_at: Mapped[datetime | None] = mapped_column(DateTime)
 
@@ -220,6 +257,7 @@ class MetricObservationRow(Base):
     comparison: Mapped[dict | None] = mapped_column(JSON)
     interpretation: Mapped[str | None] = mapped_column(Text)
     impact_channels: Mapped[dict | None] = mapped_column(JSON)
+    evidence_locator: Mapped[dict | None] = mapped_column(JSON)
     confidence: Mapped[float | None] = mapped_column(Float)
     created_at: Mapped[datetime | None] = mapped_column(DateTime)
 
@@ -241,6 +279,7 @@ class EventCardRow(Base):
     # clones keep confirmed coverage instead of degrading to keyword candidates.
     tracking_variables: Mapped[dict | None] = mapped_column(JSON)
     source_corroboration_status: Mapped[str | None] = mapped_column(String)
+    evidence_locator: Mapped[dict | None] = mapped_column(JSON)
     confidence: Mapped[float | None] = mapped_column(Float)
     created_at: Mapped[datetime | None] = mapped_column(DateTime)
 

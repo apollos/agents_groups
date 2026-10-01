@@ -197,6 +197,95 @@ curl 'http://localhost:8888/search?q=test&format=json' | head                   
 所有模型供应商均为 OpenAI 兼容接口，在 `config/model_registry.yaml` 注册；
 任务级调用策略在 `config/model_policies.yaml` 配置。
 
+### 本地浏览器搜索路线（`browser_local`，可选）
+
+设计文档：[`docs/design/local_browser_search.md`](docs/design/local_browser_search.md)。
+在 Ubuntu 图形桌面上用**独立、有窗口的 Microsoft Edge**（Playwright `channel=msedge`，
+`headless=false`）打开正常搜索页，解析自然结果，再走现有的筛选 → 正文读取 → 模型抽取 →
+证据审查链路。仓库默认 **关闭**（`browser_runtime.enabled: false`，`search_providers.active: searxng`），
+现有 SearXNG/API 部署行为不变。
+
+依赖与环境：
+
+```bash
+pip install -e ".[browser]"            # playwright>=1.63，驱动系统 Edge，无需下载浏览器
+which microsoft-edge                   # 需已安装 Edge（或在 browser_runtime.executable_path 指定）
+export MIC_BROWSER_PROFILE_DIR=<workspace>/browser/profiles/mic-edge   # 仓库外，目录 0700
+# 仅在启用 Cookie 回退时：
+export MIC_BROWSER_CREDENTIAL_DIR=<workspace>/browser/credentials     # 仓库外，文件 0600
+```
+
+启用（部署配置，不要提交含本机路径/凭据的改动）：
+
+1. `config/browser_runtime.yaml`：`enabled: true`；按需收紧 `limits`（部署上限，任务 `budget_profile` 只能更小）。
+2. `config/search_providers.yaml`：`active: browser_local`，`fallback: []`（不自动换 provider，不启用 mock）。
+3. 正文读取策略在 `config/access_profiles.yaml` 的 `browser_fetch`（`http_then_browser` / `browser_first` / `http_only` / `browser_only` 与站点规则）。
+
+运维命令（确定性工具；Skill 只调用这些，不写临时浏览器脚本、不提高预算、不删锁）：
+
+```bash
+mic browser doctor [--json]            # Python/Playwright/Edge/GUI/profile 与锁/配置检查；不访问外网、不调模型
+mic browser doctor --launch            # 打开专用 profile 的空白页并关闭，检查生命周期与清理
+mic browser setup --engine bing        # 桌面交互：人工登录/处理同意页，结束后正常关闭并保留会话
+mic browser setup --url https://...    # 仅允许清单内主机（引擎 + session_fallback.allowed_origins + setup_allowed_hosts）
+mic browser cookies import --origin https://example.com --file ~/private/cookies.json   # 仅登记元数据，不打印值
+mic browser cookies status | mic browser cookies remove <credential_id>
+mic search probe --engine bing --query "宁德时代 中标" --pages 1 [--target-id company_300750]   # 只搜索，不读正文、不调模型
+mic reader probe --url https://... --transport http|browser|http_then_browser [--target-id ...]  # 单页范围检查，不调模型
+```
+
+退出码：`0` 正常；`2` 配置/依赖/GUI 等需修复的故障（`config_error`、`dependency_missing`、`gui_unavailable`…）；
+`3` `profile_busy`（另一轮正在使用 profile，等待或由队列重排；不要杀其他进程或删除 Singleton 锁）。
+
+运行语义与报告：
+
+- 一次采集 = 一个受监督子进程（`mic.browser.runner.RunSupervisor` → `python -m mic.browser.worker`），
+  总时限取 Agent 超时、部署 `max_run_seconds` 和任务预算的最小值；超时/取消先协作停止，再 TERM，5 秒后 KILL 本轮进程组。
+  本轮产物（`request.json` / `result.json` / 心跳 / `logs/run_<id>.log`）都在 0700 的 attempt 运行目录下；
+  未显式设置 `MIC_LOG_DIR` 时，子进程日志不会写进源码树的 `logs/`。
+- 每条命中的 `provider` 标为 `browser:bing` / `browser:baidu` / `browser:google`（命中所在引擎），`source_link.metadata.discovery`
+  记录结果页、页内序号、`url_resolution` 与相关性判定。
+- 所有对外操作（搜索页、HTTP/浏览器正文、模型发送）在发送前预占同一个 `RunBudget`，失败也计数；
+  报告中的 `collection_diagnostics` 分别回答 `execution_status` / `search_status` / `read_status` / `output_status` / `usable`，
+  并给出 `budget_used`（含 `gateway_requests_sent`：进程被终止后已发送请求的响应状态未知）。
+- 验证码/登录/同意页 → `blocked`（无限重试被禁止）；SSH/systemd 无显示器 → `gui_unavailable`，不会悄悄改 headless。
+- 浏览器路线默认不复用历史分析（`cache.reuse_analysis: false`），避免把旧结果当作本次验收。
+- Cookie 值、profile 内容、凭据文件绝不进入日志、CLI 输出、异常、模型提示词、业务 SQLite、运行报告或 Git。
+
+引擎适配状态（`enabled_engines: [bing, baidu, google]`）：
+- **Bing**：选择器已在本机真实 DOM 上验证（`bing-dom-20261001`）。
+- **百度**：选择器已在本机真实 DOM 上验证（`baidu-dom-20261002`）。自然结果取 `#content_left > div.result.c-container`，
+  排除 `result-op`（百科、寻标宝等百度自营模块）；目标 URL 取卡片 `mu` 属性（`url_resolution: engine_declared`，
+  读取后由真实抓取的最终 URL 校正），没有 `mu` 的卡片保持 `pending_redirect`。在线 probe：第一页 10 卡片 / 9 自然结果 /
+  8 相关；同一 profile 连续翻页或英文查询容易触发 `wappass` 验证码（按 `blocked` 处理、不重试，本轮记为 `partial`），
+  所以百度主要承担第一页补充，而不是深翻页。
+- **Google**：选择器已在本机真实 DOM 上验证（`google-dom-20261002`，`hl=zh-CN`）。自然结果取 `#rso` 下含
+  `a[href] > h3` 的最内层 `div[data-hveid]` 卡片；结果链接全部是 `/goto?url=<不透明 token>` 跳转包装，**真实目标 URL 不在
+  DOM 里**（只有 `cite` 显示路径与 `span.VuuXrf` 来源名），因此命中按 `pending_redirect` 保留绝对包装 URL，读取阶段跟随
+  跳转后才记录最终 URL（不带 Cookie 的 HTTP 即返回 302 到目标站；浏览器导航同样可解析）。摘要前缀日期（`2025年2月8日 —`）
+  拆到 `date_text`；翻页 `a#pnnext`（`start=10`）。在线 probe：2 页均 `ok`、查询回显 `exact`、19 命中 / 18 相关。
+  新 profile 首次访问会被重定向到 `/sorry/` 验证码页：先运行
+  `mic browser setup --engine google --url "https://www.google.com/search?q=<查询>&hl=zh-CN"`，在弹出的 Edge 窗口里
+  人工通过验证并看到正常结果后关闭窗口（setup 会随窗口关闭结束），再用 `mic search probe --engine google` 确认。
+  验证状态保存在 MIC 专用 profile 中，不涉及日常浏览器。
+  运维提示：若本机 IPv6 路由不通（`curl -6 https://www.google.com` 失败而 `-4` 成功），`httpx` 会对 `www.google.com` 的每个
+  AAAA 地址各等满 `timeout_seconds` 才回落到 IPv4，`/goto` 的 HTTP 解析会非常慢；可在部署的 `access_profiles.yaml`
+  `browser_fetch.site_rules` 中为 `www.google.com` 设 `mode: browser_first`（占用 `browser_read_attempts` 预算），或修复系统 IPv6。
+
+本机验收记录（设计 16.2 第三步，2026-10-02，Playwright 1.63 / 系统 Edge / Python 3.12，新建库，正式 `intel-agent`
+队列入口，无进程内 monkeypatch）：2 条查询 → Bing 3 张结果页全部 `ok`（第一条查询第 1 页 0 条相关、第 2 页 3 条相关，
+相关性规则正确触发翻页；第二条查询第 1 页即满足）→ 29 命中 / 25 唯一链接，全部 `browser:bing`，未请求 SearXNG/API；
+2 个正文候选 HTTP 读取（搜狐文章 `scoped` 8 段，头条 `article_scope_unresolved` 如实记为失败）；2 次 Gateway 请求
+（1 次批量 triage + 1 次 bundle 抽取，`max_gateway_requests: 3` 内）；模型输出 74 分 ≥ 70 → `save_structured`，
+严格证据审查把未获正文支持的日期、未字面出现的关系主体、催化剂与风险判断隔离为 20 条 `coverage_gap`（含 review_id），
+金额字段保留 `amount_evidence` 原文引用；MIC 5 条事件 ↔ Agent `structured_events` 5 条、来源 URL 一致；用时 84 s，
+结束后无遗留 worker / Edge 窗口 / profile 锁；对同一任务工单重复投递一次消息 → 0.17 s 内按既有结果 ack，
+未重新采集。同样查询在 SearXNG 路线的对照（10-01）为 20 命中、0 正文、0 模型调用、无结构化产出。
+一次在线成功只证明该样本链路工作，不证明引擎长期可用。
+
+回滚：把 `browser_runtime.enabled` 改回 `false`、`search_providers.active` 改回原引擎即可；数据库迁移（`search_page_attempt`
+表、`link_read_attempt.diagnostics`、`source_link` 发现元数据）向后兼容，旧记录不受影响。
+
 ---
 
 ## 分析员 Agent API（`mic/api.py`，对应 spec §20）
@@ -323,6 +412,10 @@ pytest -q
 覆盖：搜索计划打分与预算、端到端采集、API 回读、预算上限、批量初筛省调用、
 领域信号产出、新增 focus family、关系方向冲突触发仲裁、cascade/arbitration 执行、
 任务拆分、反馈调权、跨 run 复用克隆、入选溯源元数据、"不持久化原始内容"存储策略等。
+
+浏览器路线的用例（`tests/test_browser_*.py`，设计 16.1 的 T01–T22）全部离线：合成搜索页 fixture
+（`tests/fixtures/search_pages/`）、可注入时钟、测试替身浏览器会话与桩 worker 子进程；不依赖 Edge、显示器或外网。
+在线验收（`mic browser doctor --launch`、`mic search probe`、小预算真实采集）按设计 16.2 在本机图形桌面手动执行，不进入 CI。
 
 **端到端验证工具**（离线 mock，无需任何 Key）：
 

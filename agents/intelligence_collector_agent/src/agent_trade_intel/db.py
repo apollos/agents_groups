@@ -78,6 +78,10 @@ def _apply_migrations(con: sqlite3.Connection) -> None:
     # latest recall without reading arbitrary file paths at request time. The table is
     # created via CREATE TABLE IF NOT EXISTS in SCHEMA_SQL; only stamp the version.
     con.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (7)")
+    # v8: collection_attempt control records for supervised MIC worker runs (browser search
+    # design 8.3): stable task_key, attempt token, worker pid, heartbeat, deadline, result path,
+    # and a unique *active* attempt per task_key. CREATE TABLE/INDEX IF NOT EXISTS in SCHEMA_SQL.
+    con.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (8)")
 
 
 def dumps_json(value: Any) -> str:
@@ -502,6 +506,32 @@ CREATE TABLE IF NOT EXISTS tool_capabilities (
   notes TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_tool_capabilities_tool ON tool_capabilities(tool_name, checked_at);
+
+-- Supervised MIC collection attempts (one child process per attempt). States:
+-- starting | running | cancelling | completed | failed | cancelled | interrupted | cleanup_incomplete.
+-- Only one attempt per task_key may be active (starting/running/cancelling) at a time.
+CREATE TABLE IF NOT EXISTS collection_attempt (
+  attempt_id TEXT PRIMARY KEY,
+  task_key TEXT NOT NULL,
+  task_id TEXT,
+  ticket_id TEXT,
+  message_id TEXT,
+  owner_token TEXT NOT NULL,
+  worker_pid INTEGER,
+  worker_started_at TEXT,
+  state TEXT NOT NULL,
+  heartbeat_at TEXT,
+  deadline_at TEXT,
+  result_path TEXT,
+  error_code TEXT,
+  cleanup TEXT,
+  budget_used_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_collection_attempt_active
+  ON collection_attempt(task_key) WHERE state IN ('starting', 'running', 'cancelling');
+CREATE INDEX IF NOT EXISTS idx_collection_attempt_state ON collection_attempt(state, updated_at);
 
 INSERT OR IGNORE INTO schema_migrations(version) VALUES (1);
 """

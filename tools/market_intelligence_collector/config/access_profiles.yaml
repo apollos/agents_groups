@@ -17,3 +17,18 @@ access_profiles:
     user_agent: "Mozilla/5.0 (compatible; MIC/0.3; +https://example.com/mic)"
     follow_redirects: true
     respect_robots: true
+
+  # Body fetch strategy when the browser runtime is enabled (design 11.2).
+  # Coexists with `default`; does not change timeouts/passage caps/user-agent.
+  #   default_mode: http_then_browser | browser_first | http_only
+  #   fallback_reasons: HTTP outcomes that may trigger one browser attempt.
+  #   site_rules: exact-host overrides. allow_scope_retry lets a browser
+  #   attempt rescue `article_scope_unresolved` once; otherwise that failure
+  #   is final (never fall back to whole-page text).
+  browser_fetch:
+    default_mode: http_then_browser
+    fallback_reasons: [anti_bot_page, rendering_required]
+    site_rules:
+      news.bjx.com.cn:
+        mode: browser_first
+        allow_scope_retry: true

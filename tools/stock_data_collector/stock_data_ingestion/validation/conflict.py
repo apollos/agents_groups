@@ -19,7 +19,7 @@ DEFAULT_TOLERANCES: dict[str, dict[str, float]] = {
     "financial_ratio": {"absolute": 0.01, "relative": 0.01},
 }
 
-PRICE_FIELDS = {"open", "high", "low", "close", "pre_close", "change", "limit_up_price", "limit_down_price", "latest_price", "bid1_price", "ask1_price"}
+PRICE_FIELDS = {"vwap", "open", "high", "low", "close", "pre_close", "change", "limit_up_price", "limit_down_price", "latest_price", "bid1_price", "ask1_price"}
 VOLUME_FIELDS = {"volume", "bid1_volume", "ask1_volume"}
 AMOUNT_FIELDS = {"amount", "operating_revenue", "operating_profit", "net_profit", "parent_net_profit", "total_assets", "total_liabilities", "parent_equity", "operating_cash_flow"}
 TURNOVER_FIELDS = {"turnover_rate", "turnover_rate_free_float"}

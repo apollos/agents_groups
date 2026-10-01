@@ -69,7 +69,9 @@ class MessageQueue(ABC):
     def nack(self, message_id: str, error: dict[str, Any], *, retryable: bool = True, retry_delay_seconds: int = 60) -> None: ...
 
     @abstractmethod
-    def extend_lease(self, message_id: str, worker_id: str, lease_seconds: int) -> None: ...
+    def extend_lease(self, message_id: str, worker_id: str, lease_seconds: int) -> bool:
+        """Extend the lease; return False when this worker no longer owns the message."""
+        ...
 
     @abstractmethod
     def move_to_dead_letter(self, message_id: str, reason: str) -> None: ...
@@ -261,7 +263,7 @@ class SQLiteMessageQueue(MessageQueue):
     def fail(self, message_id: str, error: dict[str, Any], *, retry_delay_seconds: int = 60) -> None:
         self.nack(message_id, error, retryable=True, retry_delay_seconds=retry_delay_seconds)
 
-    def extend_lease(self, message_id: str, worker_id: str, lease_seconds: int) -> None:
+    def extend_lease(self, message_id: str, worker_id: str, lease_seconds: int) -> bool:
         lease_until = (datetime.now(timezone.utc) + timedelta(seconds=lease_seconds)).isoformat(timespec="seconds")
         with self.store.session() as con:
             cur = con.execute(
@@ -274,6 +276,9 @@ class SQLiteMessageQueue(MessageQueue):
             )
         if cur.rowcount:
             logger.debug("extended lease of %s to %s", message_id, lease_until)
+            return True
+        logger.warning("lease of %s is no longer owned by %s (expired or re-leased)", message_id, worker_id)
+        return False
 
     def move_to_dead_letter(self, message_id: str, reason: str) -> None:
         with self.store.session() as con:

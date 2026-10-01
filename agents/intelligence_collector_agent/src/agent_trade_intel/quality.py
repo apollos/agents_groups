@@ -5,6 +5,58 @@ from typing import Any
 from .adapters.common import ToolResult
 
 
+MIC_STRUCTURED_FIELDS = (
+    "facts", "metrics", "events", "relations", "risks", "catalysts",
+    "customer_supplier_signals", "price_cost_margin_signals", "policy_signals",
+)
+
+
+def mic_output_summary(report: dict[str, Any]) -> dict[str, Any]:
+    """Describe actual structured output, independent of tool execution success.
+
+    Briefs, questions, search hits and coverage gaps alone are not usable structured
+    intelligence. Facts/metrics-only and cache-only runs can still produce output.
+    This is an output-presence check, not semantic verification of the claims.
+    """
+    declared = report.get("structured_outputs") or {}
+    declared = declared if isinstance(declared, dict) else {}
+    counts = {}
+    for key in MIC_STRUCTURED_FIELDS:
+        value = declared.get(key, 0)
+        try:
+            counts[key] = max(0, int(value)) if not isinstance(value, bool) else 0
+        except (TypeError, ValueError, OverflowError):
+            counts[key] = 0
+    events = report.get("all_events") or report.get("top_events") or report.get("events") or []
+    relations = report.get("top_relations") or []
+    counts["events"] = max(counts["events"], len(events) if isinstance(events, list) else 0)
+    counts["relations"] = max(counts["relations"], len(relations) if isinstance(relations, list) else 0)
+    total = sum(counts.values())
+    return {"output_status": "structured_output" if total else "no_structured_output",
+            "structured_output_count": total, "structured_counts": counts}
+
+
+_DIAG_KEYS = ("execution_status", "search_status", "search_reason", "read_status", "output_status", "usable",
+              "stop_reason", "budget_used", "elapsed_seconds", "provider", "browser_run", "attempt_id",
+              "search_outcomes", "read_failures", "page_attempts", "auth_context", "cleanup")
+
+_DIAG_FAULT_CODES = {
+    "gui_unavailable": "MIC_GUI_UNAVAILABLE", "dependency_missing": "MIC_DEPENDENCY_MISSING",
+    "browser_missing": "MIC_DEPENDENCY_MISSING", "browser_launch_failed": "MIC_BROWSER_LAUNCH_FAILED",
+    "profile_busy": "MIC_PROFILE_BUSY", "run_deadline": "MIC_TIMEOUT", "cancelled": "MIC_CANCELLED",
+}
+
+
+def _diag_summary(diag: dict[str, Any]) -> dict[str, Any]:
+    """Compact, log-safe copy of MIC collection_diagnostics (no cookie values ever appear here)."""
+    return {k: diag.get(k) for k in _DIAG_KEYS if k in diag}
+
+
+def _diag_error_code(diag: dict[str, Any]) -> str | None:
+    reason = diag.get("stop_reason") or diag.get("error_code")
+    return _DIAG_FAULT_CODES.get(str(reason), None) if reason else None
+
+
 class QualityGate:
     def __init__(self, config: dict[str, Any]):
         self.config = config
@@ -75,26 +127,68 @@ class QualityGate:
         return {"decision": "reject", "severity": "P1", "usable": False, "issues": issues or errors, "data_quality": quality_score}
 
     def _mic_quality(self, result: ToolResult, context: dict[str, Any]) -> dict[str, Any]:
+        diag = (result.quality or {}).get("collection_diagnostics")
+        if not isinstance(diag, dict):
+            diag = (result.result or {}).get("collection_diagnostics") if isinstance(result.result, dict) else None
+        diag = diag if isinstance(diag, dict) else {}
         if result.status != "success":
-            return {"decision": "reject", "severity": "P1", "usable": False, "issues": result.errors}
+            out = {"decision": "reject", "severity": "P1", "usable": False,
+                   "execution_status": str(diag.get("execution_status") or "failed"),
+                   "output_status": str(diag.get("output_status") or "unknown"), "issues": list(result.errors)}
+            if diag:
+                out["collection_diagnostics"] = _diag_summary(diag)
+            return out
         report = result.result if isinstance(result.result, dict) else {}
         summary = report.get("summary", {}) or {}
+        output = mic_output_summary(report)
+        usable = output["structured_output_count"] > 0
         links_read = int(summary.get("links_read") or 0)
         model_calls = int(summary.get("model_calls") or 0)
+        cached = int(summary.get("cached_or_reused_results") or 0)
         issues: list[dict[str, Any]] = []
-        if links_read == 0 and model_calls == 0:
+        if not usable:
+            issues.append({"issue_type": "no_structured_output", "severity": "medium",
+                           "detail": "tool completed but produced no structured facts, metrics, events or signals"})
+        if result.operation == "collect_intelligence" and links_read == 0 and model_calls == 0 and not (cached and usable):
             issues.append({"issue_type": "no_links_or_model_calls", "severity": "medium"})
         if summary.get("queries_skipped_by_hit_budget", 0):
             issues.append({"issue_type": "budget_tight", "severity": "medium"})
+        # Design 15: each acceptance question is answered separately by MIC's diagnostics.
+        execution_status = "completed"
+        if diag:
+            execution_status = str(diag.get("execution_status") or "completed")
+            if execution_status != "completed":
+                usable = False
+                issues.append({"issue_type": f"execution_{execution_status}", "severity": "high",
+                               "error_code": _diag_error_code(diag),
+                               "detail": f"MIC run did not complete: {diag.get('stop_reason')}"})
+            search_status = diag.get("search_status")
+            if search_status in ("blocked", "failed"):
+                issues.append({"issue_type": f"search_{search_status}", "severity": "medium",
+                               "detail": str(diag.get("search_reason") or "")})
+            elif search_status == "empty":
+                issues.append({"issue_type": "search_no_candidates", "severity": "medium",
+                               "detail": "search completed but produced no relevant candidates"})
+            if diag.get("read_status") == "failed":
+                issues.append({"issue_type": "read_failed", "severity": "medium",
+                               "detail": f"no selected link passed fetch + scope check: {diag.get('read_failures')}"})
+            if diag.get("output_status") == "no_model_call" and usable and not cached:
+                issues.append({"issue_type": "output_without_model_call", "severity": "medium"})
+            if diag.get("cleanup") and (diag["cleanup"].get("cleanup") not in (None, "complete")):
+                issues.append({"issue_type": "cleanup_incomplete", "severity": "high",
+                               "detail": str(diag["cleanup"].get("problems"))})
         issues.extend(self._mic_research_issues(report, context))
-        # Low-severity issues (e.g. partial variable coverage) are reported but do not
-        # degrade the run decision; only medium+ issues do.
         significant = [i for i in issues if i.get("severity") != "low"]
-        if significant:
-            return {"decision": "accept_degraded", "severity": "P2", "usable": True, "issues": issues}
-        if issues:
-            return {"decision": "accept", "severity": "P3", "usable": True, "issues": issues}
-        return {"decision": "accept", "severity": "P3", "usable": True, "issues": []}
+        if execution_status != "completed":
+            decision, severity = "reject", "P1"
+        else:
+            decision = "accept_degraded" if significant else "accept"
+            severity = "P2" if significant else "P3"
+        out = {"decision": decision, "severity": severity, "usable": usable,
+               "execution_status": execution_status, **output, "issues": issues}
+        if diag:
+            out["collection_diagnostics"] = _diag_summary(diag)
+        return out
 
     def _mic_research_issues(self, report: dict[str, Any], context: dict[str, Any]) -> list[dict[str, Any]]:
         """Research-quality checks beyond "did the tool run": event coverage and evidence.

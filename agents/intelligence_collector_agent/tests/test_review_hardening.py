@@ -151,7 +151,9 @@ def test_mic_adapter_hard_timeout_returns_retryable_mic_timeout():
             time.sleep(5)
             return {}
 
-    adapter = MICAdapter(timeout_seconds=1)
+    # Legacy in-process mode (explicit opt-out); the supervised subprocess mode is covered in
+    # tests/test_mic_supervised_adapter.py with a stub worker.
+    adapter = MICAdapter(timeout_seconds=1, execution_mode="in_process")
     adapter._api = lambda: SlowAPI()  # noqa: SLF001 - test seam, avoids importing real mic
     result = adapter.collect(target_id="industry_ai_semi", task_profile={})
     assert result.status == "failed"
@@ -385,9 +387,12 @@ def test_quality_gate_flags_high_priority_zero_events():
     assert q["decision"] == "accept_degraded"
     assert q["severity"] == "P2"
     assert any(i["issue_type"] == "high_priority_zero_events" for i in q["issues"])
-    # normal priority with zero events is not flagged
+    # Completion without structured output is visible at every priority.
     q2 = gate.evaluate(_mic_result([]), context={"priority": "normal"})
-    assert q2["decision"] == "accept"
+    assert q2["decision"] == "accept_degraded"
+    assert q2["usable"] is False
+    assert q2["output_status"] == "no_structured_output"
+    assert any(i["issue_type"] == "no_structured_output" for i in q2["issues"])
 
 
 def test_quality_gate_flags_missing_source_url_and_weak_sources():

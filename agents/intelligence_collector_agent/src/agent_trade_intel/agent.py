@@ -9,12 +9,14 @@ from typing import Any, Callable, Iterator
 from .adapters.hk_connect_adapter import HKConnectAdapter
 from .adapters.market_context_adapter import MarketContextAdapter
 from .adapters.mic_adapter import MICAdapter
+from .adapters.common import ToolResult
 from .adapters.stock_data_adapter import StockDataCLIAdapter
+from .attempts import CollectionAttemptRepository
 from .capabilities import ToolCapabilityVerifier
 from .checkpoint import CheckpointManager
 from .circuit_breaker import CircuitBreaker
 from .config import CollectorConfig
-from .db import dumps_json
+from .db import dumps_json, loads_json
 from .demand import DemandRegistry
 from .errors import QueueEmpty
 from .heartbeat import HeartbeatRecorder
@@ -100,7 +102,12 @@ class IntelligenceCollectorAgent:
         self.mic = MICAdapter(
             config.tools.mic_config_dir,
             timeout_seconds=int(config.get("tools.market_intelligence_collector.timeout_seconds", 900)),
+            execution_mode=config.tools.mic_execution_mode,
+            runs_root=config.tools.mic_runs_dir,
+            python_executable=config.tools.mic_python_executable,
         )
+        self.attempts = CollectionAttemptRepository(
+            self.data_store, stale_after_seconds=max(60, int(config.get("queue.lease_seconds", 300))))
         self.stock = StockDataCLIAdapter(
             config_dir=config.tools.stock_config_dir,
             python_executable=config.tools.python_executable,
@@ -121,6 +128,8 @@ class IntelligenceCollectorAgent:
         self.lease_seconds = int(config.get("queue.lease_seconds", 300))
         self.retry_delay_seconds = int(config.get("queue.retry_delay_seconds", 60))
         self._current_lease: tuple[str, str] | None = None  # (message_id, worker_id)
+        self._cancel_event: Event | None = None  # set when the lease is lost mid-collection
+        self._lease_lost = False
         self._current_session_id: str | None = None
         self._startup_capability_checked = False
 
@@ -145,12 +154,24 @@ class IntelligenceCollectorAgent:
             self._checkpoint(session_id=session_id, state="idle", checkpoint={"reason": "queue_empty"})
             return {"status": "idle", "reason": "queue_empty"}
         self._current_lease = (msg.message_id, worker_id)
+        self._lease_lost = False
         ticket_id = msg.payload.get("ticket_id")
         self.heartbeats.beat(state="processing", worker_id=worker_id, session_id=session_id, message_id=msg.message_id, ticket_id=ticket_id)
         logger.info("processing message %s ticket=%s", msg.message_id, ticket_id)
         try:
             result = self._handle_message(msg, session_id=session_id)
             action = result.get("_message_action", "ack") if isinstance(result, dict) else "ack"
+            if self._lease_lost:
+                # The message was re-leased (or expired) while we worked: it is no longer ours to
+                # ack or nack. Our attempt was cancelled; the new owner's attempt decides the message.
+                logger.warning("message %s finished after lease loss; leaving delivery to the new owner", msg.message_id)
+                self._checkpoint(
+                    session_id=session_id,
+                    state="lease_lost",
+                    checkpoint={"last_message_id": msg.message_id, "result": _public_result(result)},
+                    current_ticket_id=ticket_id,
+                )
+                return {"status": "lease_lost", "message_id": msg.message_id, "result": _public_result(result)}
             if action == "retry":
                 error = result.get("_retry_error") or {"error_code": "RETRYABLE_TOOL_FAILURE", "error_message": "retryable tool failure"}
                 self.queue.nack(msg.message_id, error, retryable=True, retry_delay_seconds=self.retry_delay_seconds)
@@ -203,7 +224,14 @@ class IntelligenceCollectorAgent:
         """
         if self._current_lease:
             message_id, worker_id = self._current_lease
-            self.queue.extend_lease(message_id, worker_id, self.lease_seconds)
+            owned = self.queue.extend_lease(message_id, worker_id, self.lease_seconds)
+            if owned is False:
+                # Another worker may already own this message: stop our collection instead of
+                # letting two workers run the same task on the same browser profile.
+                self._lease_lost = True
+                if self._cancel_event is not None:
+                    self._cancel_event.set()
+                logger.warning("lease lost for message %s; cancelling in-flight collection", message_id)
             self.heartbeats.beat(state="processing", worker_id=worker_id, session_id=self._current_session_id, message_id=message_id)
 
     def run_until_idle(self, *, max_messages: int = 100) -> dict[str, Any]:
@@ -358,20 +386,95 @@ class IntelligenceCollectorAgent:
         # the persisted run instead of spending MIC budget twice.
         existing_run = self._successful_mic_run(task)
         if existing_run:
-            self.tickets.update_status(ticket["ticket_id"], "done", "MIC task already completed by earlier run")
-            self._publish_collection_result(ticket, status="success", run_ids=[existing_run], usable=True)
-            return {"status": "success", "run_id": existing_run, "reused": True}
+            previous = self._mic_result_for_run(existing_run)
+            q = self.quality.evaluate(previous, context={"priority": ticket.get("priority"), "target": target})
+            previous.quality.update(q)
+            with self.data_store.session() as con:
+                con.execute("UPDATE collection_runs SET quality_json=? WHERE run_id=?",
+                            (dumps_json(previous.quality), existing_run))
+            completed_empty = q.get("output_status") == "no_structured_output"
+            self.tickets.update_status(ticket["ticket_id"], "done" if q["usable"] or completed_empty else "failed",
+                                       "MIC task reused; output quality re-evaluated", q)
+            self._publish_collection_result(ticket, status=previous.status,
+                run_ids=[existing_run], usable=bool(q["usable"]), output_status=q.get("output_status"))
+            return {"status": previous.status, "run_id": existing_run, "reused": True,
+                    "quality": q, "usable": bool(q["usable"]), "output_status": q.get("output_status")}
         task_profile = _mic_task_profile(task, self.config.raw, default_focus=target.get("focus"))
+        # One supervised attempt per delivery (design 8.3): a stable task key, an attempt token
+        # and a unique active attempt per task. A verified-live leftover worker from a run whose
+        # cleanup failed blocks new runs on the shared browser profile.
+        task_key = _mic_task_key(task, target_id)
+        message_id = self._current_lease[0] if self._current_lease else None
+        blocker = self.attempts.blocking_cleanup_incomplete()
+        if blocker is not None:
+            result = _blocked_mic_result(
+                self.mic.tool_name, target_id, task_profile,
+                code="MIC_CLEANUP_INCOMPLETE",
+                message=(f"previous attempt {blocker['attempt_id']} (pid {blocker.get('worker_pid')}) was not "
+                         "reaped and is still alive; resolve it before starting another collection"),
+                retryable=False, details={"blocking_attempt_id": blocker["attempt_id"]})
+            return self._finish_mic_task(ticket, task, target, result, attempt_id=None, run_dir=None)
+        attempt_id, active = self.attempts.start(
+            task_key=task_key, owner_token=new_id("owner"), deadline_seconds=self.mic.timeout_seconds,
+            task_id=task.get("task_id"), ticket_id=ticket["ticket_id"], message_id=message_id)
+        if attempt_id is None:
+            # Duplicate delivery while another attempt is alive: defer, never start a second worker.
+            result = _blocked_mic_result(
+                self.mic.tool_name, target_id, task_profile,
+                code="MIC_ATTEMPT_ACTIVE",
+                message=f"attempt {active['attempt_id'] if active else '?'} for the same task is still running",
+                retryable=True, details={"active_attempt_id": active["attempt_id"] if active else None})
+            return self._finish_mic_task(ticket, task, target, result, attempt_id=None, run_dir=None)
         # MIC deep collect is one long blocking call; renew the lease on a background thread so
-        # the message is not requeued (and double-executed) while MIC is still running.
+        # the message is not requeued (and double-executed) while MIC is still running. Losing
+        # the lease sets the cancel event, which stops the worker process.
+        cancel_event = Event()
+        self._cancel_event = cancel_event
         heartbeat_interval = max(30, self.lease_seconds // 3)
-        with lease_heartbeat(self._keepalive, heartbeat_interval):
-            result = self.mic.collect(target_id=target_id, task_profile=task_profile)
-        self._record_breaker(self.mic.tool_name, result.status)
-        run_id = self.persister.save_run(task=task, ticket_id=ticket["ticket_id"], result=result, demand_id=task.get("demand_id"))
+
+        def _attempt_keepalive() -> None:
+            self._keepalive()
+            if not self.attempts.heartbeat(attempt_id, state="running"):
+                # Attempt revoked externally (operator / stale-cleanup by another worker).
+                cancel_event.set()
+
+        try:
+            with lease_heartbeat(_attempt_keepalive, heartbeat_interval):
+                self.attempts.mark_running(attempt_id)
+                result = self.mic.collect(target_id=target_id, task_profile=task_profile, task_key=task_key,
+                                          attempt_id=attempt_id, cancel_event=cancel_event)
+        finally:
+            self._cancel_event = None
+        outcome = self.mic.last_outcome or {}
+        self.attempts.finish(
+            attempt_id, state=_attempt_state(result, outcome, lease_lost=self._lease_lost),
+            error_code=(result.errors[0].get("error_code") if result.errors else None),
+            cleanup=outcome.get("cleanup"), result_path=outcome.get("run_dir"),
+            budget_used=outcome.get("budget_used") or ((result.quality or {}).get("collection_diagnostics") or {}).get("budget_used"),
+            worker_pid=outcome.get("worker_pid"))
+        if self._lease_lost:
+            # Revoked attempt: do not persist or export anything from it (design 8.3).
+            return {"status": "cancelled", "reason": "lease_lost", "attempt_id": attempt_id,
+                    "usable": False, "_message_action": "none"}
+        return self._finish_mic_task(ticket, task, target, result, attempt_id=attempt_id, run_dir=outcome.get("run_dir"))
+
+    def _finish_mic_task(self, ticket: dict[str, Any], task: dict[str, Any], target: dict[str, Any],
+                         result: ToolResult, *, attempt_id: str | None, run_dir: str | None) -> dict[str, Any]:
+        codes = {e.get("error_code") for e in result.errors}
+        if not codes & {"MIC_ATTEMPT_ACTIVE", "MIC_PROFILE_BUSY", "MIC_CANCELLED"}:
+            # Deferrals/cancellations are scheduling outcomes, not tool health signals.
+            self._record_breaker(self.mic.tool_name, result.status)
         q = self.quality.evaluate(result, context={"priority": ticket.get("priority"), "target": target})
+        result.quality.update(q)
+        run_id = self.persister.save_run(task=task, ticket_id=ticket["ticket_id"], result=result, demand_id=task.get("demand_id"))
+        env_fault = [e for e in result.errors if e.get("error_code") in MIC_FAULT_ERROR_CODES]
+        if env_fault:
+            # Config/GUI/dependency/cleanup faults need an operator, not a retry (design 15).
+            self._emit_fault({**env_fault[0], "tool_name": self.mic.tool_name, "run_id": run_id,
+                              "attempt_id": attempt_id, "run_dir": run_dir},
+                             parent_ticket_id=ticket["ticket_id"], correlation_id=ticket.get("correlation_id"))
         saved = self.persister.save_mic_structures(task=task, result=result) if result.status == "success" else {"events": 0, "coverage_gaps": 0}
-        if q["severity"] in {"P0", "P1"}:
+        if q["severity"] in {"P0", "P1", "P2"}:
             self._emit_data_quality(
                 severity=q["severity"],
                 issue_type="mic_quality",
@@ -394,13 +497,42 @@ class IntelligenceCollectorAgent:
         if action == "retry":
             self.tickets.update_status(ticket["ticket_id"], "open", "MIC task scheduled for retry", retry_error)
         else:
-            self.tickets.update_status(ticket["ticket_id"], "done" if q["usable"] else "failed", "MIC task completed")
-            self._publish_collection_result(ticket, status=result.status, run_ids=[run_id], usable=bool(q["usable"]))
-        out = {"status": result.status, "run_id": run_id, "quality": q, "saved": saved}
+            completed_empty = q.get("output_status") == "no_structured_output"
+            self.tickets.update_status(ticket["ticket_id"], "done" if q["usable"] or completed_empty else "failed",
+                                       "MIC task completed without structured output" if completed_empty else "MIC task completed", q)
+            self._publish_collection_result(ticket, status=result.status,
+                run_ids=[run_id], usable=bool(q["usable"]), output_status=q.get("output_status"))
+        out = {"status": result.status, "run_id": run_id, "quality": q, "saved": saved,
+               "usable": bool(q["usable"]), "output_status": q.get("output_status"),
+               "attempt_id": attempt_id}
         if action == "retry":
             out["_message_action"] = "retry"
             out["_retry_error"] = retry_error
         return out
+
+    def _mic_result_for_run(self, run_id: str) -> ToolResult:
+        """Reassess saved output without repeating network/model work."""
+        with self.data_store.session() as con:
+            row = con.execute("SELECT * FROM collection_runs WHERE run_id=?", (run_id,)).fetchone()
+        result = ToolResult(tool_name=self.mic.tool_name, operation="collect_intelligence", request={})
+        try:
+            if row is None:
+                raise ValueError("saved MIC run is missing")
+            report = loads_json(row["result_json"], {})
+            if not isinstance(report, dict):
+                raise ValueError("saved MIC report is not an object")
+            result.status = str(row["status"])
+            result.result = report
+            result.quality = loads_json(row["quality_json"], {}) or {}
+            result.errors = loads_json(row["errors_json"], []) or []
+            if not isinstance(result.quality, dict) or not isinstance(result.errors, list):
+                raise ValueError("invalid saved MIC quality or errors")
+        except (ValueError, TypeError):
+            result.status = "failed"
+            result.quality = {}
+            result.errors = [{"error_code": "INVALID_CACHED_MIC_RESULT",
+                              "error_message": "saved MIC report requires inspection", "retryable": False}]
+        return result.finish()
 
     def _successful_mic_run(self, task: dict[str, Any]) -> str | None:
         """run_id of an earlier successful MIC run for the same task idempotency key, if any."""
@@ -723,7 +855,7 @@ class IntelligenceCollectorAgent:
             logger.warning("same-bucket history enrichment query failed for %s", ticker, exc_info=True)
         return daily_result, history_result
 
-    def _publish_collection_result(self, ticket: dict[str, Any], *, status: str, run_ids: list[str], usable: bool) -> str:
+    def _publish_collection_result(self, ticket: dict[str, Any], *, status: str, run_ids: list[str], usable: bool, output_status: str | None = None) -> str:
         """collection.result message for Runtime / report builder consumers (design §5.2)."""
         return self.queue.publish(
             "collection.result",
@@ -734,6 +866,7 @@ class IntelligenceCollectorAgent:
                 "status": status,
                 "usable": usable,
                 "run_ids": run_ids,
+                **({"output_status": output_status} if output_status is not None else {}),
             },
             priority=priority_to_int("normal"),
             correlation_id=ticket.get("correlation_id"),
@@ -1034,6 +1167,15 @@ def _preferred_intraday_frequency(capability: dict[str, Any] | None, config: dic
     # If no verification exists yet, use conservative configured default.
     return config.get("capability_verification", {}).get("stock_data_collector", {}).get("unverified_default_frequency", "15m")
 
+# MIC environment faults that need an operator (design 15): no provider/mock fallback, no retry.
+MIC_FAULT_ERROR_CODES = {
+    "MIC_CONFIG_ERROR",
+    "MIC_GUI_UNAVAILABLE",
+    "MIC_DEPENDENCY_MISSING",
+    "MIC_BROWSER_LAUNCH_FAILED",
+    "MIC_CLEANUP_INCOMPLETE",
+}
+
 NON_RETRYABLE_ERROR_CODES = {
     "TOKEN_MISSING",
     "AUTH_FAILED",
@@ -1045,6 +1187,7 @@ NON_RETRYABLE_ERROR_CODES = {
     "INVALID_DATE_RANGE",
     "EMPTY_RESULT",
     "EASTMONEY_COOKIE_INVALID",
+    *MIC_FAULT_ERROR_CODES,
 }
 
 RETRYABLE_ERROR_CODES = {
@@ -1056,7 +1199,44 @@ RETRYABLE_ERROR_CODES = {
     "STOCK_DATA_ADAPTER_ERROR",
     "MIC_TOOL_FAILED",
     "MIC_READ_FAILED",
+    # Bounded queue retries with a fresh attempt each time; never the same attempt again.
+    "MIC_TIMEOUT",
+    "MIC_PROFILE_BUSY",
+    "MIC_ATTEMPT_ACTIVE",
+    "MIC_CANCELLED",
+    "MIC_WORKER_CRASHED",
 }
+
+
+def _mic_task_key(task: dict[str, Any], target_id: str) -> str:
+    """Stable key identifying *the task*, shared by every attempt/delivery of it."""
+    if task.get("idempotency_key"):
+        return f"mic:{task['idempotency_key']}"
+    return "mic:" + stable_hash({"task_id": task.get("task_id"), "target_id": target_id,
+                                 "task_type": task.get("task_type"), "time_window": task.get("time_window")}, 24)
+
+
+def _blocked_mic_result(tool_name: str, target_id: str, task_profile: dict[str, Any], *, code: str,
+                        message: str, retryable: bool, details: dict[str, Any] | None = None) -> ToolResult:
+    result = ToolResult(tool_name=tool_name, operation="collect_intelligence",
+                        request={"target_id": target_id, "task_profile": task_profile})
+    result.status = "failed"
+    result.errors.append({"error_code": code, "error_message": message, "retryable": retryable, **(details or {})})
+    result.quality = {"usable": False}
+    return result.finish()
+
+
+def _attempt_state(result: ToolResult, outcome: dict[str, Any], *, lease_lost: bool) -> str:
+    if lease_lost:
+        return "cancelled"
+    status = str(outcome.get("status") or "")
+    if status == "cleanup_incomplete":
+        return "cleanup_incomplete"
+    if status in ("cancelled", "timed_out"):
+        return "cancelled" if status == "cancelled" else "interrupted"
+    if result.status == "success":
+        return "completed"
+    return "failed"
 
 
 def _tool_message_action(quality: dict[str, Any], errors: list[dict[str, Any]]) -> tuple[str, dict[str, Any] | None]:

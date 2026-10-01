@@ -17,3 +17,6 @@ mic.db
 *.sqlite-wal
 *.sqlite-shm
 .env
+
+# Supervised MIC worker run dirs (per-attempt request/result/logs; local only)
+mic_runs/
