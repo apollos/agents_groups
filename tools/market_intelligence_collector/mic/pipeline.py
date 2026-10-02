@@ -25,7 +25,7 @@ from mic.planner import QueryPlanner
 from mic.profile import TargetProfile
 from mic.reader import LinkReader
 from mic.run_context import RunContext, TargetIdentity, config_fingerprint
-from mic.schemas import CoverageGap, SearchHit
+from mic.schemas import CoverageGap, SearchHit, TriageResult
 from mic.search import build_search_provider
 from mic.store import Repository, get_database
 from mic.triage import SearchHitTriage
@@ -33,6 +33,10 @@ from mic.utils import canonicalize_url, domain_of, new_id
 from mic.validate import BundleValidator
 
 logger = get_logger("pipeline")
+
+# Browser route read gate signals (see ``CollectionPipeline._apply_read_gate``).
+READ_GATE_SIGNAL_PREFIX = "read_gate:"
+RELATED_ONLY_SIGNAL = "related_entity_only"
 
 
 class RunCancelled(RuntimeError):
@@ -58,6 +62,10 @@ class RunStats:
     authenticated_retries: int = 0
     gateway_requests_sent: int = 0
     links_selected_for_read: int = 0
+    # Browser route read gate (design 6.3): read candidates demoted by the page relevance
+    # rules, keyed by reason, plus candidates kept only as related-company information.
+    read_gate_demoted: dict[str, int] = field(default_factory=dict)
+    read_gate_related_only: int = 0
     search_outcomes: dict[str, int] = field(default_factory=dict)
     search_errors: list[dict] = field(default_factory=list)
     read_failures: dict[str, int] = field(default_factory=dict)
@@ -152,13 +160,6 @@ class Pipeline:
         budget_profile = task_profile.get("budget_profile", {})
         gov = (self.config.call_governance or {}).get("budgets", {})
         run_calls = budget_profile.get("max_model_calls", gov.get("max_model_calls_per_run", 30))
-        call_budget = CallBudget(
-            max_model_calls_per_run=run_calls,
-            max_model_calls_per_source_link=gov.get("max_model_calls_per_source_link", 3),
-            max_parallel_model_groups_per_run=gov.get("max_parallel_model_groups_per_run", 5),
-            max_batch_triage_calls=gov.get("max_batch_triage_calls", max(1, run_calls // 6)),
-        )
-        call_planner = ModelCallPlanner(self.config, self.registry, call_budget)
 
         run_id = self.repo.create_search_run(
             target_id, task_profile, budget_profile,
@@ -167,6 +168,17 @@ class Pipeline:
         stats = RunStats(log_file=str(log_path) if log_path else None)
         context = self._build_context(run_id, profile, budget_profile, run_calls, run_options)
         self.registry.set_budget(context.budget)
+        # The call planner is created from the *effective* limits (deployment ceiling and
+        # task request merged by min) - review: building it from the task value alone let a
+        # task asking for 3 calls run 3 against a deployment max_model_calls of 1.
+        run_calls = int(context.budget.limits.get("max_model_calls", run_calls))
+        call_budget = CallBudget(
+            max_model_calls_per_run=run_calls,
+            max_model_calls_per_source_link=gov.get("max_model_calls_per_source_link", 3),
+            max_parallel_model_groups_per_run=gov.get("max_parallel_model_groups_per_run", 5),
+            max_batch_triage_calls=gov.get("max_batch_triage_calls", max(1, run_calls // 6)),
+        )
+        call_planner = ModelCallPlanner(self.config, self.registry, call_budget)
 
         logger.info("collect_start run_id=%s target_id=%s attempt_id=%s browser=%s",
                     run_id, target_id, context.attempt_id, self._browser_run)
@@ -249,6 +261,8 @@ class Pipeline:
             context.set_browser_factory(run_options["browser_factory"])
         cancel_check = run_options.get("cancel_check")
         self._cancel_check: Callable[[], bool] | None = cancel_check if callable(cancel_check) else None
+        # Every budget gate (search page, read attempt, gateway send) polls the same signal.
+        budget.cancel_check = self._cancel_check
         context.recorder.bind(
             lambda rec: self.repo.start_search_page_attempt(run_id, rec),
             lambda handle, rec: self.repo.finish_search_page_attempt(handle, rec))
@@ -270,11 +284,51 @@ class Pipeline:
             except Exception:  # noqa: BLE001
                 pass
 
+    @staticmethod
+    def _apply_read_gate(hit: SearchHit, tri: TriageResult, stats: RunStats) -> TriageResult:
+        """Browser route read gate (design 6.3 + review R7).
+
+        The page relevance rules already classified the hit (``discovery.relevance``); here they
+        only *demote* ``read`` candidates, never promote them, and never change the triage score:
+
+        * ``site_ok`` / ``content_form_ok`` false -> ``link_record_only`` (wrong site or a
+          non-article form such as a search listing / tag page);
+        * ``target_match`` false and the legacy triage saw no entity at all -> ``link_record_only``;
+        * ``target_match`` false but a related company (customer / supplier / competitor from the
+          target profile) is named -> stays readable, tagged ``related_entity_only`` so it is
+          ordered behind target-identity candidates in the read queue.
+        """
+        if tri.triage_decision != "read":
+            return tri
+        rel = (hit.discovery or {}).get("relevance")
+        if not isinstance(rel, dict):
+            return tri
+        demote_reason: str | None = None
+        if rel.get("site_ok") is False:
+            demote_reason = "site_rule"
+        elif rel.get("content_form_ok") is False:
+            demote_reason = "content_form"
+        elif rel.get("target_match") is False and "target_entity_match" not in tri.matched_signals:
+            demote_reason = "no_target_or_related_entity"
+        if demote_reason is not None:
+            stats.read_gate_demoted[demote_reason] = stats.read_gate_demoted.get(demote_reason, 0) + 1
+            return tri.model_copy(update={
+                "triage_decision": "link_record_only",
+                "need_model": False,
+                "matched_signals": [*tri.matched_signals, f"{READ_GATE_SIGNAL_PREFIX}{demote_reason}"],
+                "reason": f"{tri.reason}; read gate: {demote_reason}".strip("; "),
+            })
+        if rel.get("target_match") is False:
+            stats.read_gate_related_only += 1
+            return tri.model_copy(update={
+                "matched_signals": [*tri.matched_signals, RELATED_ONLY_SIGNAL],
+                "reason": f"{tri.reason}; related company only (target not named)".strip("; "),
+            })
+        return tri
+
     def _check_alive(self, context: RunContext) -> None:
-        if self._cancel_check is not None and self._cancel_check():
-            context.cancel("cancelled")
         try:
-            context.check_alive()
+            context.check_alive()  # polls the external cancel signal, then the deadline
         except BudgetExceeded as exc:
             raise RunCancelled("run_deadline" if exc.counter == "max_run_seconds" else exc.counter) from exc
 
@@ -388,6 +442,8 @@ class Pipeline:
                     stats.unique_source_links += 1
 
                 tri = self.triage.triage(hit, link_id, is_duplicate=is_dup)
+                if browser_run and not is_dup:
+                    tri = self._apply_read_gate(hit, tri, stats)
                 if is_dup:
                     self.repo.update_link_triage(
                         link_id, tri.read_priority, tri.triage_decision,
@@ -417,7 +473,9 @@ class Pipeline:
 
         # Model-based SERP batch triage for borderline-score hits (spec 11.1 /
         # 15.2 D): one model call decides many hits, instead of one call per hit.
+        self._check_alive(context)
         self._batch_triage(call_planner, triaged, stats)
+        self._check_alive(context)
 
         for link_id, _hit, tri in triaged:
             self.repo.update_link_triage(
@@ -426,9 +484,12 @@ class Pipeline:
                 need_model=tri.need_model)
 
         # Build read queue from final decisions, sort by priority, cap by budget.
+        # Browser route: candidates that match the target identity come first; candidates kept
+        # only as related-company information (customer / supplier / competitor named, target
+        # not) fill remaining slots and never displace a target-identity candidate.
         read_queue = [(lid, h, t) for lid, h, t in triaged
                       if t.triage_decision == "read"]
-        read_queue.sort(key=lambda x: x[2].read_priority, reverse=True)
+        read_queue.sort(key=lambda x: (RELATED_ONLY_SIGNAL in x[2].matched_signals, -x[2].read_priority))
         read_queue = read_queue[:max_links_to_read]
         stats.links_selected_for_read = len(read_queue)
         context.budget.record("links_selected_for_read", len(read_queue))
@@ -515,8 +576,13 @@ class Pipeline:
                 "query_family": hit.query_family,
             }
             materiality = tri.read_priority
+            self._check_alive(context)  # before any model request for this link
             link_result = call_planner.run_for_link(
                 profile, read, source_metadata, tri, source_type, materiality)
+            # After the request(s) returned and before anything is persisted: a cancel that
+            # arrived meanwhile, or a response that landed past the deadline, ends the run
+            # as cancelled / timed_out instead of "completed" (review R3).
+            self._check_alive(context)
 
             if link_result.call_mode == "no_model" or not link_result.outputs:
                 continue
@@ -544,8 +610,10 @@ class Pipeline:
             # Arbitration on field/relation-direction conflict (spec 11.3 / 14).
             if ModelCallPlanner.arbitration_triggered(merge_result.field_conflicts,
                                                       self.config):
+                self._check_alive(context)
                 arb_outputs = call_planner.arbitrate(
                     profile, read, source_metadata, merge_result.field_conflicts)
+                self._check_alive(context)
                 if arb_outputs:
                     stats.arbitration_calls += 1
                     arb_result = LinkModelResult(
@@ -562,6 +630,7 @@ class Pipeline:
             bundle = merge_result.bundle
 
             if bundle.decision in ("save_structured", "link_only"):
+                self._check_alive(context)  # never persist after cancel / past the deadline
                 self.repo.save_merged_analysis(
                     profile.target_id, link_id, bundle, {
                         "disagreement_level": merge_result.disagreement_level,
@@ -851,6 +920,7 @@ class Pipeline:
         if browser_run:
             diag["page_attempts"] = page_stats
             diag["auth_context"] = context.auth_context()
+            diag["credential_sweep"] = context.credential_sweep
             diag["reuse_analysis"] = bool((context.browser_runtime.get("cache") or {}).get("reuse_analysis"))
         return diag
 
@@ -881,6 +951,8 @@ class Pipeline:
                 "authenticated_retries": stats.authenticated_retries,
                 "gateway_requests_sent": stats.gateway_requests_sent,
                 "links_selected_for_read": stats.links_selected_for_read,
+                "read_gate_demoted": dict(stats.read_gate_demoted),
+                "read_gate_related_only": stats.read_gate_related_only,
                 "search_hits": stats.search_hits,
                 "unique_source_links": stats.unique_source_links,
                 "links_read": stats.links_read,

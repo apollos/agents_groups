@@ -130,6 +130,9 @@ class RunContext:
     # Session fallback / credentials access is provided by a store object with
     # ``credential_for(origin)``; None disables authenticated retries.
     session_store: Any = None
+    # Result of clearing expired / revoked managed cookies from the dedicated profile at
+    # browser start (domain counts only, never values). None when nothing had to be swept.
+    credential_sweep: dict[str, Any] | None = None
     clock: Callable[[], float] = time.monotonic
     _browser: BrowserSession | None = field(default=None, repr=False)
     _browser_factory: Callable[[RunContext], BrowserSession] | None = field(
@@ -170,7 +173,32 @@ class RunContext:
                 assert BrowserSession  # keep the import meaningful for type checkers
             self._browser = self._browser_factory(self)
             self._browser.start()
+            self._sweep_stale_credentials(self._browser)
         return self._browser
+
+    def _sweep_stale_credentials(self, browser: BrowserSession) -> None:
+        """Clear cookies of expired / revoked managed credentials from the dedicated profile.
+
+        The profile is persistent, so cookies injected by an earlier run would otherwise keep
+        authenticating requests after their registry entry expired (review R8). Values are never
+        logged; only domain counts are recorded.
+        """
+        store = self.session_store
+        getter = getattr(store, "domains_to_clear", None)
+        if getter is None:
+            return
+        try:
+            domains = list(getter())
+        except Exception:
+            return
+        if not domains:
+            return
+        try:
+            cleared = browser.clear_cookies_for_domains(domains)
+        except Exception as exc:  # pragma: no cover - diagnostics only
+            self.credential_sweep = {"domains": len(domains), "cleared": 0, "error": type(exc).__name__}
+            return
+        self.credential_sweep = {"domains": len(domains), "cleared": cleared}
 
     def close(self) -> dict[str, Any]:
         """Release the browser (if started). Returns cleanup diagnostics."""

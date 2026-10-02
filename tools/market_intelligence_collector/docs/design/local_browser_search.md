@@ -1,7 +1,8 @@
 # agents_groups 本地浏览器搜索与正文采集设计
 
 版本：v1.2 · 2026-10-01  
-状态：已按本方案实现（归档副本，2026-10-01）。实现差异与验收记录见 README「本地浏览器搜索路线（browser_local）」一节：Bing、百度、Google 选择器均已在本机真实 DOM 上验证并启用（Google 需先用 `mic browser setup --url` 人工通过一次 /sorry/ 验证；其结果链接为 `/goto` 跳转包装，按 `pending_redirect` 处理）；在线验收不进入 CI。  
+状态：已按本方案实现（归档副本，2026-10-01）。实现差异与验收记录见 README「本地浏览器搜索路线（browser_local）」一节：Bing、百度、Google 选择器均已在本机真实 DOM 上验证并启用（Google 需先用 `mic browser setup --url` 人工通过一次 /sorry/ 验证；其结果链接为 `/goto` 跳转包装，按 `pending_redirect` 处理）；在线验收不进入 CI。2026-10-02 代码审核后补齐：第 10.1 节 `interactive` 模式（保持页面、限时重新观察）、
+第 8 节进程组级回收与统一硬时限、第 6.3 节读取候选相关性闸门、第 10.3 节注入 Cookie 有效期截短与启动时清理，均已实现并有测试。  
 适用项目：[apollos/agents_groups](https://github.com/apollos/agents_groups)  
 建议归档位置：`docs/design/local_browser_search.md`
 

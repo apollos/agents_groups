@@ -69,6 +69,47 @@ def test_vision_speaks_responses_api(config, monkeypatch):
     assert images[0]["source"]["media_type"] == "image/jpeg"
 
 
+def test_vision_shares_gateway_budget_cancel_and_remaining_time(config, monkeypatch):
+    """Review R5: vision transcription is a gateway request like any other - it must reserve
+    from the shared ``gateway_requests_sent`` budget and be bounded by the remaining run time."""
+    from mic.budget import DEFAULT_LIMITS, RunBudget
+    from mic.modeling.adapter import ModelAdapter
+
+    captured: dict = {}
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        captured.update(url=url, timeout=timeout)
+        return _FakeResp(_responses_payload())
+
+    monkeypatch.setattr(vision_mod.httpx, "post", fake_post)
+    adapter = ModelAdapter(model_config_id="m", provider="p", provider_type="openclaw_gateway",
+                           endpoint="http://127.0.0.1:18789/v1", model="x", api_key="stub-token")
+    clock = {"t": 1000.0}
+    budget = RunBudget(limits={**DEFAULT_LIMITS, "max_gateway_requests": 3, "max_run_seconds": 300},
+                       clock=lambda: clock["t"])
+    adapter.set_budget(budget)
+    v = _vision(config, timeout=120)
+    v.adapter = adapter
+    budget.reserve("gateway_requests_sent")
+    budget.reserve("gateway_requests_sent")
+    budget.reserve("gateway_requests_sent")          # 3 of 3 used by text calls
+    assert v.transcribe_pdf_pages([b"img"]) is None  # 4th request refused, not sent
+    assert "url" not in captured and v.calls_used == 0
+    assert budget.used_summary()["gateway_requests_sent"] == 3
+
+    budget2 = RunBudget(limits={**DEFAULT_LIMITS, "max_gateway_requests": 3, "max_run_seconds": 300},
+                        clock=lambda: clock["t"])
+    adapter.set_budget(budget2)
+    clock["t"] += 250                                # 50 s of run time left
+    assert v.transcribe_pdf_pages([b"img"])          # sent, counted, timeout clamped
+    assert abs(captured["timeout"] - 50.0) < 1e-6
+    assert budget2.used_summary()["gateway_requests_sent"] == 1 and v.calls_used == 1
+
+    budget2.cancel("cancelled")
+    assert v.transcribe_pdf_pages([b"img"]) is None  # cancel honoured before the send
+    assert budget2.used_summary()["gateway_requests_sent"] == 1
+
+
 def test_vision_model_override_env_wins_over_yaml(config, monkeypatch):
     monkeypatch.setenv("OPENCLAW_VISION_MODEL", "vendor/from-env")
     v = VisionExtractor(config)
@@ -235,7 +276,7 @@ def test_fetch_pdf_url_serving_html_is_treated_as_html(config, monkeypatch):
     monkeypatch.setattr(reader_mod.httpx, "get",
                         lambda *a, **kw: _Resp())
     reader = LinkReader(config, search_provider=None)
-    raw, status, _ctype = reader._fetch("https://pdf.example.com/notice.pdf")
+    raw, status, _ctype, _final = reader._fetch("https://pdf.example.com/notice.pdf")
     assert isinstance(raw, str)  # routed to the HTML path, not pypdf
 
     class _PdfResp(_Resp):
@@ -244,5 +285,5 @@ def test_fetch_pdf_url_serving_html_is_treated_as_html(config, monkeypatch):
 
     monkeypatch.setattr(reader_mod.httpx, "get",
                         lambda *a, **kw: _PdfResp())
-    raw, _s, _c = reader._fetch("https://pdf.example.com/notice.pdf")
+    raw, _s, _c, _f = reader._fetch("https://pdf.example.com/notice.pdf")
     assert isinstance(raw, bytes)  # real PDFs still go to the PDF path

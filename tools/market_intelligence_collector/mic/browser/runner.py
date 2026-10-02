@@ -32,6 +32,9 @@ from mic.utils import new_id
 WORKER_MODULE = "mic.browser.worker"
 DEFAULT_GRACE_SECONDS = 5.0
 PARENT_HEARTBEAT_SECONDS = 5.0
+# The worker plans to finish this long before the hard deadline (close browser, write
+# result). Bounded to a fraction of short deadlines so tests / tiny budgets still start.
+DEFAULT_WRAPUP_SECONDS = 10.0
 
 STATUS_COMPLETED = "completed"
 STATUS_FAILED = "failed"
@@ -86,6 +89,67 @@ def _tail(text: str, n: int = 2000) -> str:
     return text[-n:] if text else ""
 
 
+def effective_run_seconds(deadline_seconds: float, task_profile: dict[str, Any] | None,
+                          config_dir: str | None) -> tuple[float, dict[str, Any]]:
+    """One hard limit for supervisor and worker (review: the Agent timeout alone ignored the
+    browser deployment's ``max_run_seconds`` and the task budget).
+
+    = min(caller deadline, task ``budget_profile.max_run_seconds``, deployment
+    ``browser_runtime.limits.max_run_seconds`` when the browser route is enabled).
+    Config problems are left for the worker to report; they never extend the deadline.
+    """
+    sources: dict[str, Any] = {"caller": float(deadline_seconds)}
+    effective = float(deadline_seconds)
+    budget = ((task_profile or {}).get("budget_profile") or {})
+    task_limit = budget.get("max_run_seconds")
+    if isinstance(task_limit, (int, float)) and not isinstance(task_limit, bool) and task_limit > 0:
+        sources["task"] = float(task_limit)
+        effective = min(effective, float(task_limit))
+    try:
+        from mic.config import load_config
+        cfg = load_config(config_dir)
+        runtime = cfg.browser_runtime
+        if runtime.get("enabled"):
+            dep = (runtime.get("limits") or {}).get("max_run_seconds")
+            if isinstance(dep, (int, float)) and dep > 0:
+                sources["deployment"] = float(dep)
+                effective = min(effective, float(dep))
+    except Exception as exc:  # noqa: BLE001 - the worker will surface the config error itself
+        sources["deployment_error"] = f"{type(exc).__name__}"
+    return effective, sources
+
+
+def process_group_alive(pgid: int | None) -> bool:
+    """True while any process of the owned group still exists (zombies excluded)."""
+    if pgid is None:
+        return False
+    try:
+        for entry in os.scandir("/proc"):
+            if not entry.name.isdigit():
+                continue
+            try:
+                with open(f"/proc/{entry.name}/stat", encoding="utf-8", errors="replace") as fh:
+                    stat = fh.read()
+            except OSError:
+                continue
+            # "pid (comm) state ppid pgrp ..." - comm may contain spaces/parens.
+            rest = stat.rsplit(")", 1)[-1].split()
+            if len(rest) < 3:
+                continue
+            state, pgrp = rest[0], rest[2]
+            if pgrp == str(pgid) and state != "Z":
+                return True
+        return False
+    except OSError:
+        try:
+            os.killpg(pgid, 0)
+            return True
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+
+
 class RunSupervisor:
     """Starts, monitors and reaps one MIC worker process."""
 
@@ -94,7 +158,8 @@ class RunSupervisor:
                  heartbeat_seconds: float = PARENT_HEARTBEAT_SECONDS,
                  extra_env: dict[str, str] | None = None,
                  worker_module: str = WORKER_MODULE,
-                 cwd: str | None = None):
+                 cwd: str | None = None,
+                 wrapup_seconds: float = DEFAULT_WRAPUP_SECONDS):
         self.runs_root = Path(runs_root)
         self.python_executable = python_executable or sys.executable
         self.grace_seconds = float(grace_seconds)
@@ -102,6 +167,7 @@ class RunSupervisor:
         self.extra_env = dict(extra_env or {})
         self.worker_module = worker_module
         self.cwd = cwd
+        self.wrapup_seconds = float(wrapup_seconds)
 
     def run(self, *, target_id: str, task_profile: dict[str, Any],
             deadline_seconds: float, config_dir: str | None = None,
@@ -118,14 +184,21 @@ class RunSupervisor:
         parent_hb_path = run_dir / "parent_heartbeat.json"
         started = time.monotonic()
         started_epoch = time.time()
-        deadline_epoch = started_epoch + float(deadline_seconds)
+        # One effective hard limit (caller / task budget / browser deployment). The worker
+        # gets the same limit minus a bounded wrap-up margin so it can close the browser and
+        # write its result before the supervisor's TERM/KILL at the hard deadline.
+        hard_seconds, deadline_sources = effective_run_seconds(deadline_seconds, task_profile, config_dir)
+        wrapup = min(self.wrapup_seconds, hard_seconds * 0.1)
+        worker_seconds = max(0.0, hard_seconds - wrapup)
+        deadline_epoch = started_epoch + hard_seconds
 
         request = {
             "attempt_id": attempt_id, "task_key": task_key, "target_id": target_id,
             "task_profile": task_profile, "config_dir": config_dir,
             "run_dir": str(run_dir), "result_path": str(result_path),
             "cancel_path": str(cancel_path), "parent_heartbeat_path": str(parent_hb_path),
-            "parent_pid": os.getpid(), "deadline_epoch": deadline_epoch,
+            "parent_pid": os.getpid(), "deadline_epoch": started_epoch + worker_seconds,
+            "hard_deadline_epoch": deadline_epoch, "deadline_sources": deadline_sources,
             "started_epoch": started_epoch,
             **(extra_request or {}),
         }
@@ -178,12 +251,16 @@ class RunSupervisor:
                     last_hb = now
                 time.sleep(poll_seconds)
 
-            cleanup = "complete"
+            pgid = self._owned_pgid(proc)
             if stop_reason is not None:
                 write_json_atomic(cancel_path, {"reason": stop_reason, "at": time.time()})
-                cleanup = self._terminate(proc)
+                cleanup = self._terminate(proc, pgid)
             else:
                 proc.wait()
+                # The main process exiting is not proof the group is gone (review: a child
+                # ignoring TERM survived while the report said "complete"). Reap descendants
+                # the worker left behind before declaring the profile free.
+                cleanup = self._reap_group(proc, pgid)
         finally:
             stderr_file.close()
             stdout_file.close()
@@ -194,22 +271,23 @@ class RunSupervisor:
         outcome = SupervisedOutcome(status=STATUS_FAILED, attempt_id=attempt_id,
                                     run_dir=str(run_dir), exit_code=proc.returncode,
                                     stderr_tail=stderr_tail, elapsed_seconds=round(elapsed, 2),
-                                    worker_pid=proc.pid)
+                                    worker_pid=proc.pid, cleanup=cleanup)
         if payload is not None:
             outcome.budget_used = payload.get("budget_used") or {}
             outcome.gateway_requests_sent = payload.get("gateway_requests_sent")
+        if cleanup != "complete":
+            outcome.status = STATUS_CLEANUP_INCOMPLETE
+            outcome.error_code = STATUS_CLEANUP_INCOMPLETE
+            outcome.error_message = ("worker process group did not exit after TERM/KILL; "
+                                     "do not retry on the same profile automatically")
+            outcome.report = payload.get("report") if payload and isinstance(payload.get("report"), dict) \
+                else None
+            return outcome
         if stop_reason is not None:
             outcome.status = stop_reason
-            outcome.cleanup = cleanup
-            if cleanup != "complete":
-                outcome.status = STATUS_CLEANUP_INCOMPLETE
-                outcome.error_code = STATUS_CLEANUP_INCOMPLETE
-                outcome.error_message = ("worker process group did not exit after TERM/KILL; "
-                                         "do not retry on the same profile automatically")
-            else:
-                outcome.error_code = "mic_timeout" if stop_reason == STATUS_TIMED_OUT else "mic_cancelled"
-                outcome.error_message = (f"worker stopped: {stop_reason} after {elapsed:.0f}s; "
-                                         "requests already sent to the gateway may still complete")
+            outcome.error_code = "mic_timeout" if stop_reason == STATUS_TIMED_OUT else "mic_cancelled"
+            outcome.error_message = (f"worker stopped: {stop_reason} after {elapsed:.0f}s; "
+                                     "requests already sent to the gateway may still complete")
             # A worker that managed to write a cancelled result keeps its budget numbers.
             return outcome
         if payload is None:
@@ -219,6 +297,15 @@ class RunSupervisor:
                                      f"({err}); stdout/stderr are logs only and are not used as a report")
             return outcome
         if payload["status"] == STATUS_COMPLETED and isinstance(payload.get("report"), dict):
+            if proc.returncode != 0:
+                # Review: a "completed" result file plus a non-zero exit means the worker
+                # failed after writing it (teardown error, unhandled exception in cleanup).
+                outcome.status = STATUS_FAILED
+                outcome.error_code = "worker_exit_nonzero"
+                outcome.error_message = (f"worker wrote a completed result but exited with "
+                                         f"code {proc.returncode}; not accepted as success")
+                outcome.report = payload["report"]
+                return outcome
             outcome.status = STATUS_COMPLETED
             outcome.report = payload["report"]
             return outcome
@@ -243,29 +330,64 @@ class RunSupervisor:
         except OSError:
             pass
 
-    def _terminate(self, proc: subprocess.Popen) -> str:
-        """TERM the owned process group, then KILL after grace. Returns cleanup state."""
-        pgid = None
+    @staticmethod
+    def _owned_pgid(proc: subprocess.Popen) -> int | None:
+        """Process group created for the worker (``start_new_session``); None when it is
+        already gone or - defensively - equals our own group (never signal ourselves)."""
         try:
             pgid = os.getpgid(proc.pid)
         except ProcessLookupError:
-            return "complete"
+            # Main process already reaped; the group id equals the worker pid by construction.
+            pgid = proc.pid
         if pgid == os.getpgid(os.getpid()):
-            pgid = None  # never signal our own group
+            return None
+        return pgid
+
+    def _terminate(self, proc: subprocess.Popen, pgid: int | None) -> str:
+        """TERM the owned process group, then KILL after grace. Returns cleanup state.
+
+        "complete" requires the *whole* group to be gone, not just the main process.
+        """
         self._signal(proc, pgid, signal.SIGTERM)
-        if self._wait(proc, self.grace_seconds):
+        if self._wait(proc, self.grace_seconds) and self._wait_group(pgid, self.grace_seconds):
             return "complete"
         self._signal(proc, pgid, signal.SIGKILL)
-        if self._wait(proc, self.grace_seconds):
+        if self._wait(proc, self.grace_seconds) and self._wait_group(pgid, self.grace_seconds):
             return "complete"
         return STATUS_CLEANUP_INCOMPLETE
+
+    def _reap_group(self, proc: subprocess.Popen, pgid: int | None) -> str:
+        """After a normal worker exit: descendants (browser, helpers) must be gone too."""
+        if not process_group_alive(pgid):
+            return "complete"
+        # Give an orderly shutdown a short moment (the worker closed the browser; Chromium
+        # helpers may still be exiting), then escalate exactly like a timeout.
+        if self._wait_group(pgid, min(2.0, self.grace_seconds)):
+            return "complete"
+        self._signal(proc, pgid, signal.SIGTERM)
+        if self._wait_group(pgid, self.grace_seconds):
+            return "complete"
+        self._signal(proc, pgid, signal.SIGKILL)
+        if self._wait_group(pgid, self.grace_seconds):
+            return "complete"
+        return STATUS_CLEANUP_INCOMPLETE
+
+    @staticmethod
+    def _wait_group(pgid: int | None, seconds: float, poll: float = 0.1) -> bool:
+        deadline = time.monotonic() + max(0.0, seconds)
+        while True:
+            if not process_group_alive(pgid):
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(poll)
 
     @staticmethod
     def _signal(proc: subprocess.Popen, pgid: int | None, sig: int) -> None:
         try:
             if pgid is not None:
                 os.killpg(pgid, sig)
-            else:
+            elif proc.poll() is None:
                 proc.send_signal(sig)
         except ProcessLookupError:
             pass

@@ -192,6 +192,194 @@ def test_deadline_expiry_reports_timed_out(strict_cfg, monkeypatch):
     assert session.navigations == []
 
 
+def _count_model_completions(monkeypatch) -> dict:
+    """Count every ModelAdapter.complete call (mock or real) made during a run."""
+    from mic.modeling.adapter import ModelAdapter
+    counter = {"n": 0}
+    orig = ModelAdapter.complete
+
+    def counting(self, messages, max_tokens=None, json_mode=None):
+        counter["n"] += 1
+        return orig(self, messages, max_tokens=max_tokens, json_mode=json_mode)
+
+    monkeypatch.setattr(ModelAdapter, "complete", counting)
+    return counter
+
+
+def test_cancel_during_body_read_sends_no_model_request(strict_cfg, monkeypatch):
+    """Review R3: a cancel arriving while a body is being read used to be noticed only at the
+    next loop head, after the model request for that body had already gone out."""
+    loader = FixtureLoader(default=_echo(P1))
+    pipe = _pipeline(strict_cfg, loader, monkeypatch)
+    calls = _count_model_completions(monkeypatch)
+    flag = {"cancel": False}
+
+    class CancelDuringRead(FakeBrowserSession):
+        def navigate(self, page, url, timeout_seconds):
+            out = super().navigate(page, url, timeout_seconds)
+            flag["cancel"] = True  # the Agent cancels while the page body is loading
+            return out
+
+    session = CancelDuringRead(pages=_session_for_hits().pages)
+    report = pipe.collect_intelligence("company_300750", TASK, run_options={
+        "cancel_check": lambda: flag["cancel"], "browser_factory": lambda ctx: session})
+    diag = report["collection_diagnostics"]
+    if not session.navigations:
+        pytest.skip("triage selected no links to read under mock scoring")
+    assert diag["execution_status"] == "cancelled"
+    assert calls["n"] == 0, "model request sent after the cancel signal"
+    assert diag["budget_used"]["gateway_requests_sent"] == 0
+    assert report["summary"]["links_model_analyzed"] == 0
+
+
+def test_model_response_after_deadline_is_timed_out_and_not_persisted(strict_cfg, monkeypatch):
+    """Review R3: the last model call returning past the deadline must not yield 'completed'."""
+    from mic.modeling.adapter import ModelAdapter
+    clock = FakeClock()
+    loader = FixtureLoader(default=_echo(P1), clock=clock)
+    pipe = _pipeline(strict_cfg, loader, monkeypatch)
+    orig_complete, orig_mock = ModelAdapter.complete, ModelAdapter._mock_complete
+    statuses: list[str] = []
+
+    def slow_mock(self, messages, input_chars):  # runs after the pre-send gate = "in flight"
+        clock.advance(400)  # the response lands after the 300 s run deadline
+        return orig_mock(self, messages, input_chars)
+
+    def recording_complete(self, messages, max_tokens=None, json_mode=None):
+        res = orig_complete(self, messages, max_tokens=max_tokens, json_mode=json_mode)
+        statuses.append(res.status)
+        return res
+
+    monkeypatch.setattr(ModelAdapter, "_mock_complete", slow_mock)
+    monkeypatch.setattr(ModelAdapter, "complete", recording_complete)
+    session = _session_for_hits()
+    report = pipe.collect_intelligence("company_300750", TASK, run_options={
+        "deadline_seconds": 300, "clock": clock, "browser_factory": lambda ctx: session})
+    diag = report["collection_diagnostics"]
+    if not statuses:
+        pytest.skip("no model call under mock scoring")
+    # The late response is the only one that went out; every further adapter in the same plan
+    # was refused by the deadline gate (mock path included) and the run ended on the next check.
+    assert statuses[0] == "success" and all(s == "request_failed" for s in statuses[1:])
+    assert diag["execution_status"] == "timed_out"
+    assert diag["usable"] is False
+    assert report["summary"]["links_model_analyzed"] == 0
+    assert all(v == 0 for v in report["structured_outputs"].values())  # nothing persisted late
+    assert report["all_events"] == []
+
+
+def test_call_planner_uses_effective_model_call_limit(monkeypatch):
+    """Review R4: deployment max_model_calls=1, task asks 3 -> planner budget is 1."""
+    import mic.pipeline as pipeline_mod
+    from tests.browser_doubles import browser_runtime_block
+    cfg = browser_config(runtime=browser_runtime_block(limits={"max_model_calls": 1, "max_gateway_requests": 5}))
+    captured = {}
+    real_planner = pipeline_mod.ModelCallPlanner
+
+    class CapturingPlanner(real_planner):
+        def __init__(self, config, registry, budget):
+            captured["budget"] = budget
+            super().__init__(config, registry, budget)
+
+    monkeypatch.setattr(pipeline_mod, "ModelCallPlanner", CapturingPlanner)
+    loader = FixtureLoader(default=_echo(P1))
+    pipe = _pipeline(cfg, loader, monkeypatch)
+    calls = _count_model_completions(monkeypatch)
+    report = pipe.collect_intelligence("company_300750", {**TASK, "budget_profile": {
+        **TASK["budget_profile"], "max_model_calls": 3}}, run_options={
+        "browser_factory": lambda ctx: _session_for_hits()})
+    assert captured["budget"].max_model_calls_per_run == 1
+    assert report["summary"]["model_calls"] <= 1
+    assert calls["n"] <= 1
+
+
+def _hit_with_relevance(title: str, **rel):
+    from mic.schemas import SearchHit
+    base = {"relevant": True, "target_match": True, "task_match": True,
+            "content_form_ok": True, "site_ok": True, "matched_terms": [], "reasons": []}
+    return SearchHit(query="q", title=title, snippet="", url="https://news.example.com/a",
+                     domain="news.example.com", rank=1, provider="browser:bing",
+                     discovery={"relevance": {**base, **rel}})
+
+
+def _read_triage(signals: list[str]):
+    from mic.schemas import TriageResult
+    return TriageResult(source_link_id="l1", triage_decision="read", read_priority=112.0,
+                        matched_signals=signals, need_model=True, reason="rule score 112")
+
+
+def test_read_gate_demotes_non_target_hits_and_flags_related_companies():
+    """Review R7 / design 6.3: relevance rules gate read candidates; never promote."""
+    from mic.pipeline import READ_GATE_SIGNAL_PREFIX, RELATED_ONLY_SIGNAL, Pipeline, RunStats
+    stats = RunStats()
+    # 比亚迪 tender, target CATL not named, 比亚迪 not in the target profile -> record only.
+    out = Pipeline._apply_read_gate(_hit_with_relevance("比亚迪中标200亿元", target_match=False),
+                                    _read_triage(["amount_mentioned", "tender_keyword"]), stats)
+    assert out.triage_decision == "link_record_only" and out.need_model is False
+    assert f"{READ_GATE_SIGNAL_PREFIX}no_target_or_related_entity" in out.matched_signals
+    assert out.read_priority == 112.0  # score untouched: gate is transparent
+    # Same hit but 比亚迪 is a competitor in the profile (legacy entity match) -> still readable,
+    # explicitly tagged so the queue orders it behind target-identity candidates.
+    out = Pipeline._apply_read_gate(_hit_with_relevance("比亚迪中标200亿元", target_match=False),
+                                    _read_triage(["target_entity_match", "amount_mentioned"]), stats)
+    assert out.triage_decision == "read" and RELATED_ONLY_SIGNAL in out.matched_signals
+    # Wrong site / wrong content form demote regardless of entity match.
+    out = Pipeline._apply_read_gate(_hit_with_relevance("宁德时代 中标", site_ok=False),
+                                    _read_triage(["target_entity_match"]), stats)
+    assert out.triage_decision == "link_record_only"
+    assert f"{READ_GATE_SIGNAL_PREFIX}site_rule" in out.matched_signals
+    out = Pipeline._apply_read_gate(_hit_with_relevance("宁德时代 中标", content_form_ok=False),
+                                    _read_triage(["target_entity_match"]), stats)
+    assert f"{READ_GATE_SIGNAL_PREFIX}content_form" in out.matched_signals
+    # Target-identity hit passes through unchanged; non-read decisions are never promoted.
+    tri = _read_triage(["target_entity_match"])
+    assert Pipeline._apply_read_gate(_hit_with_relevance("宁德时代 中标"), tri, stats) is tri
+    rec = tri.model_copy(update={"triage_decision": "link_record_only"})
+    assert Pipeline._apply_read_gate(_hit_with_relevance("宁德时代 中标"), rec, stats) is rec
+    # Hits without relevance metadata (legacy providers) are untouched.
+    from mic.schemas import SearchHit
+    plain = SearchHit(query="q", title="t", snippet="", url="https://x/a", domain="x", rank=1, provider="p")
+    assert Pipeline._apply_read_gate(plain, tri, stats) is tri
+    assert stats.read_gate_demoted == {"no_target_or_related_entity": 1, "site_rule": 1, "content_form": 1}
+    assert stats.read_gate_related_only == 1
+
+
+def test_read_gate_counters_in_report_and_queue_order(strict_cfg, monkeypatch):
+    """End to end: gate counters surface in the report summary; related-only hits sort last."""
+    import mic.pipeline as pipeline_mod
+    from mic.pipeline import RELATED_ONLY_SIGNAL
+    loader = FixtureLoader(default=_echo(P1))
+    pipe = _pipeline(strict_cfg, loader, monkeypatch)
+    real_gate = pipeline_mod.Pipeline._apply_read_gate
+    order: list[str] = []
+
+    def tagging_gate(hit, tri, stats):
+        out = real_gate(hit, tri, stats)
+        # Mark the first read candidate as related-only to exercise queue ordering.
+        if out.triage_decision == "read" and not order:
+            order.append(hit.url)
+            return out.model_copy(update={"matched_signals": [*out.matched_signals, RELATED_ONLY_SIGNAL],
+                                          "read_priority": 999.0})
+        return out
+
+    monkeypatch.setattr(pipeline_mod.Pipeline, "_apply_read_gate", staticmethod(tagging_gate))
+    read_urls: list[str] = []
+    real_read = LinkReader.read
+
+    def recording_read(self, source_link_id, url, *a, **kw):
+        read_urls.append(url)
+        return real_read(self, source_link_id, url, *a, **kw)
+
+    monkeypatch.setattr(LinkReader, "read", recording_read)
+    report = pipe.collect_intelligence("company_300750", {**TASK, "budget_profile": {
+        **TASK["budget_profile"], "max_links_to_read": 1}}, run_options={
+        "deadline_seconds": 300, "browser_factory": lambda ctx: _session_for_hits()})
+    s = report["summary"]
+    assert "read_gate_demoted" in s and "read_gate_related_only" in s
+    # Despite priority 999 the related-only candidate must not take the single read slot.
+    assert read_urls and read_urls[0] != order[0]
+
+
 def test_environment_fault_in_search_fails_fast(strict_cfg, monkeypatch):
     from mic.browser.session import BrowserUnavailable
 

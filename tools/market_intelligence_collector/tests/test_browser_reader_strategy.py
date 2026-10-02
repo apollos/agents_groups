@@ -157,6 +157,33 @@ def test_pending_redirect_final_url_is_reported():
     assert res.final_url == URL  # real host learned from the budgeted navigation only
 
 
+def test_http_redirect_reports_real_final_url(monkeypatch):
+    """Review R6: the plain HTTP transport followed redirects but recorded the requested URL,
+    so a Google ``/goto`` wrapper stayed the source of an article living on the news site."""
+    import mic.reader as reader_mod
+
+    wrapper = "https://www.google.com/goto?url=OPAQUE"
+
+    class _Resp:
+        status_code = 200
+        headers = {"content-type": "text/html; charset=utf-8"}
+        url = URL  # httpx reports the post-redirect URL here
+        text = GOOD_HTML
+        content = GOOD_HTML.encode("utf-8")
+
+    monkeypatch.setattr(reader_mod.httpx, "get", lambda *a, **kw: _Resp())
+    cfg = MICConfig(raw={"output_schema": {"limits": {"strict_evidence_review": True}},
+                         "access_profiles": {"default": {"timeout_seconds": 5},
+                                             "browser_fetch": {"default_mode": "http_only"}}})
+    reader = LinkReader(cfg)
+    ctx = _ctx(FakeBrowserSession())
+    res = reader.read("l1", wrapper, PROFILE, context=ctx)
+    assert res.read_status == "read" and res.transport == "http"
+    assert res.final_url == URL  # real host learned from the redirect, not the wrapper
+    assert res.fetch_diagnostics["attempts"][0]["final_url"] == URL
+    assert reader._fetch(wrapper)[3] == URL
+
+
 # --- T11: scope rules kept; no full-page fallback ----------------------------------------------
 
 def test_scope_unresolved_is_final_without_site_rule():

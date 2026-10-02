@@ -343,12 +343,47 @@ class SessionStore:
 
     # --- runtime use -------------------------------------------------------------
 
+    def domains_to_clear(self) -> list[str]:
+        """Cookie domains of credentials that must no longer live in the dedicated profile.
+
+        Covers revoked credentials and active ones whose local expiry has passed (design 437:
+        the local expiry is the shorter of the user's ``max_age_seconds`` and the real cookie
+        expiry). Callers sweep these from the persistent profile when a browser session starts
+        so that previously injected cookies cannot outlive their registry entry.
+        """
+        now = float(self.now())
+        out: list[str] = []
+        for meta in self._registry.values():
+            if meta.status == "revoked" or (meta.status == "active" and meta.expires_at_local <= now):
+                for d in meta.allowed_cookie_domains:
+                    if d not in out:
+                        out.append(d)
+        return out
+
+    @staticmethod
+    def clamp_cookie_expiry(cookies: list[dict[str, Any]], expires_at: float) -> list[dict[str, Any]]:
+        """Return copies whose ``expires`` never exceeds ``expires_at``.
+
+        Session cookies (``expires`` -1 / missing) become bounded cookies expiring at
+        ``expires_at`` so the persistent profile forgets them on time even if the process
+        that injected them is killed before it can clear them. Shortening only (design 419).
+        """
+        out = []
+        for c in cookies:
+            e = c.get("expires", -1)
+            cc = dict(c)
+            if not isinstance(e, (int, float)) or isinstance(e, bool) or e <= 0 or float(e) > expires_at:
+                cc["expires"] = float(expires_at)
+            out.append(cc)
+        return out
+
     def credential_for(self, origin: str,
                        exclude_versions: set[str] | None = None) -> dict[str, Any] | None:
         """Active, unexpired credential for ``origin`` not yet used in this failure chain.
 
-        Returns {credential_id, version, cookies} or None. Cookie values are
-        returned only to be injected into the dedicated browser context.
+        Returns {credential_id, version, cookies, expires_at_local} or None. Cookie values are
+        returned only to be injected into the dedicated browser context; each cookie's own
+        ``expires`` is clamped to the registry's local expiry (see ``clamp_cookie_expiry``).
         """
         if not self.enabled:
             return None
@@ -366,5 +401,7 @@ class SessionStore:
             cookies = json.loads(self._cookie_path(meta.credential_id).read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
-        return {"credential_id": meta.credential_id, "version": meta.version, "cookies": cookies,
+        return {"credential_id": meta.credential_id, "version": meta.version,
+                "cookies": self.clamp_cookie_expiry(cookies, meta.expires_at_local),
+                "expires_at_local": meta.expires_at_local,
                 "allowed_cookie_domains": list(meta.allowed_cookie_domains)}

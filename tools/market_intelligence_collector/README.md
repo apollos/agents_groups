@@ -219,7 +219,9 @@ export MIC_BROWSER_CREDENTIAL_DIR=<workspace>/browser/credentials     # 仓库�
 
 1. `config/browser_runtime.yaml`：`enabled: true`；按需收紧 `limits`（部署上限，任务 `budget_profile` 只能更小）。
 2. `config/search_providers.yaml`：`active: browser_local`，`fallback: []`（不自动换 provider，不启用 mock）。
-3. 正文读取策略在 `config/access_profiles.yaml` 的 `browser_fetch`（`http_then_browser` / `browser_first` / `http_only` / `browser_only` 与站点规则）。
+3. `config/output_schema.yaml`：`limits.strict_evidence_review: true`。浏览器路线**必须**开启严格证据审查，
+   `load_config` 在 provider 类型为 `browser` 而该项不为 `true` 时直接报 `ConfigError`（不会悄悄放松）。
+4. 正文读取策略在 `config/access_profiles.yaml` 的 `browser_fetch`（`http_then_browser` / `browser_first` / `http_only` / `browser_only` 与站点规则）。
 
 运维命令（确定性工具；Skill 只调用这些，不写临时浏览器脚本、不提高预算、不删锁）：
 
@@ -239,18 +241,38 @@ mic reader probe --url https://... --transport http|browser|http_then_browser [-
 
 运行语义与报告：
 
-- 一次采集 = 一个受监督子进程（`mic.browser.runner.RunSupervisor` → `python -m mic.browser.worker`），
-  总时限取 Agent 超时、部署 `max_run_seconds` 和任务预算的最小值；超时/取消先协作停止，再 TERM，5 秒后 KILL 本轮进程组。
+- 一次采集 = 一个受监督子进程（`mic.browser.runner.RunSupervisor` → `python -m mic.browser.worker`）。
+  **硬时限** = min(Agent 超时、任务 `budget_profile.max_run_seconds`、部署 `browser_runtime.limits.max_run_seconds`)，
+  由监督者在 worker 之外强制执行；worker 拿到的软时限再减去收尾余量（`wrapup_seconds`，默认 10 s、不超过硬时限 10%），
+  用于写 `result.json`、关浏览器。超时/取消先协作停止，再 TERM，5 秒后 KILL **整个进程组**；worker 正常退出后同样检查
+  进程组内是否残留 Edge/子进程并回收，残留则报告 `cleanup_incomplete`。worker 退出码非 0 时即使写出了 `completed`
+  结果也记为 `failed`（`worker_exit_nonzero`），报告保留供诊断。
   本轮产物（`request.json` / `result.json` / 心跳 / `logs/run_<id>.log`）都在 0700 的 attempt 运行目录下；
   未显式设置 `MIC_LOG_DIR` 时，子进程日志不会写进源码树的 `logs/`。
+- 取消与截止在 worker 内部贯穿到底：`RunBudget` 轮询外部取消信号（cancel 文件），每次搜索页/正文/模型请求发送前后、
+  批量 triage 前后、仲裁前后、以及持久化结构化结果之前都检查；超时后到达的模型响应不再入库，运行记为 `timed_out`。
+  PDF 视觉转写走同一 Gateway 预算（`max_gateway_requests`）与剩余时间，不再绕过。
+- 模型调用上限 = min(部署 `limits.max_model_calls`、任务 `budget_profile.max_model_calls`)，在构造调用计划器之前算好。
 - 每条命中的 `provider` 标为 `browser:bing` / `browser:baidu` / `browser:google`（命中所在引擎），`source_link.metadata.discovery`
   记录结果页、页内序号、`url_resolution` 与相关性判定。
 - 所有对外操作（搜索页、HTTP/浏览器正文、模型发送）在发送前预占同一个 `RunBudget`，失败也计数；
   报告中的 `collection_diagnostics` 分别回答 `execution_status` / `search_status` / `read_status` / `output_status` / `usable`，
   并给出 `budget_used`（含 `gateway_requests_sent`：进程被终止后已发送请求的响应状态未知）。
 - 验证码/登录/同意页 → `blocked`（无限重试被禁止）；SSH/systemd 无显示器 → `gui_unavailable`，不会悄悄改 headless。
+  `interaction_mode: interactive`（桌面调试显式开启）时，遇到这三类页面会在日志中输出 `human action required`
+  并**保持该标签页打开**，最多等待 `human_wait_seconds`（默认 60 s，受剩余运行时间与取消信号约束，计入总时长），
+  每 2 s 重新读取**同一页面**的 DOM 并按同一查询重新解析；只有再次解析得到真实结果页才算恢复，不消耗新的页面尝试。
+  程序不填密码、不拖滑块、不调识别服务；等待结果记录在该页 `diagnostics.human_wait`。`unattended` 行为不变。
+- 读取候选的筛选在浏览器路线上多一道**只降不升**的相关性闸门（`read_gate`）：结果页相关性规则判定 `site_ok` / `content_form_ok`
+  为否、或既未命中目标身份又未命中档案中的任何关联公司的候选，从 `read` 降为 `link_record_only`
+  （`matched_signals` 带 `read_gate:<原因>`，报告 `summary.read_gate_demoted` 计数）；只命中客户/供应商/竞争对手等
+  关联公司而未命中目标本身的候选仍可读，但标记 `related_entity_only` 并排在目标命中候选之后，不会挤占读取名额。
+  规则评分与 triage 本身不变。
 - 浏览器路线默认不复用历史分析（`cache.reuse_analysis: false`），避免把旧结果当作本次验收。
 - Cookie 值、profile 内容、凭据文件绝不进入日志、CLI 输出、异常、模型提示词、业务 SQLite、运行报告或 Git。
+  注入专用 profile 的每个 Cookie 的 `expires` 会被截短到登记的本地有效期（min(用户 `max_age_seconds`，真实到期)，
+  会话 Cookie 也变为有界 Cookie），且每次浏览器启动时先清除已过期/已撤销凭据域名下的 Cookie
+  （`collection_diagnostics.credential_sweep` 只记录域名数量），避免持久 profile 里的凭据活得比登记项更久。
 
 引擎适配状态（`enabled_engines: [bing, baidu, google]`）：
 - **Bing**：选择器已在本机真实 DOM 上验证（`bing-dom-20261001`）。

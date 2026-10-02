@@ -125,6 +125,21 @@ def test_browser_provider_requires_runtime_enabled():
     assert "browser_runtime.enabled" in str(exc.value)
 
 
+@pytest.mark.parametrize("strict", [None, False, "true"])
+def test_browser_provider_requires_strict_evidence_review(strict):
+    """Review finding: the repo default omits the flag, so flipping the provider alone
+    would run the browser route with strict body scope / evidence review off."""
+    with pytest.raises(ConfigError) as exc:
+        browser_config(strict_evidence_review=strict)
+    assert "strict_evidence_review" in str(exc.value)
+
+
+def test_legacy_provider_does_not_require_strict_flag():
+    from mic.config import load_config
+    cfg = load_config()  # repo default: searxng/mock route, flag absent
+    assert ((cfg.output_schema or {}).get("limits") or {}).get("strict_evidence_review") is None
+
+
 @pytest.mark.parametrize("provider", [
     {"type": "browser", "engine_order": ["bing"], "enabled_engines": ["bing"], "query_rewrite": True},
     {"type": "browser", "engine_order": ["duckduckgo"]},

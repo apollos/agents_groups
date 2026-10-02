@@ -36,6 +36,18 @@
 - 2026-10-02 MIC 浏览器路线三个引擎全部在本机真实 DOM 上验证并启用（`enabled_engines: [bing, baidu, google]`）。
   Google 需用 `mic browser setup --engine google --url <搜索页>` 人工通过一次 /sorry/ 验证（setup 现随窗口关闭而结束）；
   其结果链接是 `/goto` 跳转包装，命中按 `pending_redirect` 保留、读取阶段解析最终 URL。详见 MIC README「引擎适配状态」。
+- 2026-10-02 代码审核（d95c473）10 项全部接受并修复（MIC 侧，Agent 适配器接口不变）：
+  (1) browser provider 强制 `output_schema.limits.strict_evidence_review: true`，否则 `ConfigError`；
+  (2)(10) `RunSupervisor` 收尾检查并回收**整个进程组**（`/proc` pgrp 扫描，正常退出后残留 Edge/子进程同样 TERM→KILL），
+  worker 非 0 退出码即使写出 `completed` 结果也判 `failed/worker_exit_nonzero`；
+  (3) 统一硬时限 = min(Agent 超时, 任务 `max_run_seconds`, 部署 `max_run_seconds`)，worker 软时限扣除收尾余量，
+  `RunBudget` 轮询 cancel 文件，模型请求前后、批量 triage/仲裁前后、持久化前都检查，超时后到达的响应不入库；
+  (4) `CallBudget` 用 min(部署, 任务) 的 `max_model_calls`；(5) PDF 视觉转写走 Gateway 预算与剩余时间；
+  (6) HTTP 读取记录真实重定向后的 `final_url`；(7) 浏览器路线读取候选增加只降不升的相关性闸门
+  （站点/内容形态不符或无目标及关联公司命中 → `link_record_only`，仅关联公司命中 → `related_entity_only` 排后）；
+  (8) 注入 Cookie 的 `expires` 截短到本地有效期，浏览器启动时清除过期/撤销凭据域名的 Cookie；
+  (9) `interaction_mode: interactive` 真正实现：保持标签页、最多等 `human_wait_seconds`、重新观察同一 DOM、
+  不消耗新页面尝试。MIC 测试 361 → 388，Agent 188 不变。
 
 ---
 

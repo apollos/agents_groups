@@ -72,6 +72,10 @@ class ModelAdapter:
     def set_budget(self, budget: Any) -> None:
         self._budget = budget
 
+    @property
+    def budget(self) -> Any:
+        return self._budget
+
     def _reserve_gateway_request(self) -> str | None:
         """Reserve one gateway request; returns an error string when refused."""
         if self._budget is None:
@@ -79,6 +83,30 @@ class ModelAdapter:
         try:
             self._budget.reserve("gateway_requests_sent")
         except Exception as exc:  # noqa: BLE001 - BudgetExceeded / cancelled / deadline
+            return f"{type(exc).__name__}: {exc}"
+        return None
+
+    def reserve_gateway_request(self) -> str | None:
+        """Public gate for other senders on the same endpoint (vision transcription):
+        one shared ``gateway_requests_sent`` reservation, cancel and deadline included."""
+        return self._reserve_gateway_request()
+
+    def remaining_seconds(self) -> float | None:
+        """Run time left according to the attached budget (None without a budget)."""
+        if self._budget is None or not hasattr(self._budget, "remaining_seconds"):
+            return None
+        try:
+            return float(self._budget.remaining_seconds())
+        except Exception:  # noqa: BLE001
+            return None
+
+    def _alive_or_error(self) -> str | None:
+        """Cancel / deadline check without reserving (mock path has no gateway send)."""
+        if self._budget is None:
+            return None
+        try:
+            self._budget.check_alive()
+        except Exception as exc:  # noqa: BLE001
             return f"{type(exc).__name__}: {exc}"
         return None
 
@@ -90,6 +118,14 @@ class ModelAdapter:
         input_chars = sum(len(m.get("content", "")) for m in messages)
         if not self.api_key or OpenAI is None:
             if self.allow_mock:
+                refused = self._alive_or_error()
+                if refused is not None:
+                    return ModelCallResult(
+                        model_config_id=self.model_config_id, provider=self.provider,
+                        provider_type=self.provider_type, model_name=self.model,
+                        status="request_failed", input_chars=input_chars,
+                        error_type="budget_exhausted", error_message=refused[:500],
+                    )
                 return self._mock_complete(messages, input_chars)
             return ModelCallResult(
                 model_config_id=self.model_config_id, provider=self.provider,

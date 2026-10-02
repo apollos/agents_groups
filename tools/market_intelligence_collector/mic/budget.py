@@ -133,6 +133,11 @@ class RunBudget:
     # Explicit deadline (monotonic seconds) handed down by a supervisor; when
     # set it wins over max_run_seconds.
     deadline_at: float | None = None
+    # External cancel signal (worker cancel flag / Agent lease loss). Polled by every
+    # gate so a cancel that arrives mid-operation is honoured at the next reservation
+    # (review: a cancel during body reading used to be noticed only at the next loop head,
+    # after further model requests had been sent).
+    cancel_check: Callable[[], bool] | None = None
 
     def __post_init__(self) -> None:
         if self.started_at is None:
@@ -161,9 +166,19 @@ class RunBudget:
         self.cancelled = True
         self.cancel_reason = reason
 
+    def poll_cancel(self) -> bool:
+        """Latch an external cancel request; returns the current cancelled state."""
+        if not self.cancelled and self.cancel_check is not None:
+            try:
+                if self.cancel_check():
+                    self.cancel("cancelled")
+            except Exception:  # noqa: BLE001 - a broken probe must not crash the run
+                pass
+        return self.cancelled
+
     def check_alive(self) -> None:
         """Raise when the run must stop (cancelled or past deadline)."""
-        if self.cancelled:
+        if self.poll_cancel():
             raise BudgetExceeded("cancelled", 0, 0)
         if self.expired():
             raise BudgetExceeded("max_run_seconds", self.limits.get("max_run_seconds", 0),
@@ -183,7 +198,7 @@ class RunBudget:
         return None
 
     def can(self, counter: str, n: int = 1) -> bool:
-        if self.cancelled or self.expired():
+        if self.poll_cancel() or self.expired():
             return False
         limit = self.limit_for(counter)
         if limit is None:
@@ -205,7 +220,7 @@ class RunBudget:
     # --- search-specific reservations ----------------------------------
 
     def can_open_search_page(self, query_id: str, engine: str) -> tuple[bool, str | None]:
-        if self.cancelled:
+        if self.poll_cancel():
             return False, "cancelled"
         if self.expired():
             return False, "run_deadline"

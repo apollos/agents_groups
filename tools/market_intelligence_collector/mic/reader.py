@@ -252,15 +252,21 @@ class LinkReader:
             if body is not None:
                 return FetchResult(transport="mock", requested_url=url, final_url=url, http_status=200,
                                    content_type="text/html", html=body, counted_as="http_read_attempts")
-        raw, http_status, ctype = self._fetch(url)
+        fetched = self._fetch(url)
+        # ``_fetch`` reports the URL the response actually came from (after redirects);
+        # review R6: filling in the requested URL left Google ``/goto`` wrappers as the
+        # recorded source of articles that live on the news site.
+        raw, http_status, ctype = fetched[0], fetched[1], fetched[2]
+        final_url = fetched[3] if len(fetched) > 3 and fetched[3] else url
         if raw is None:
             blocked = "http_status" if http_status is not None else "network_error"
-            return FetchResult(transport="http", requested_url=url, http_status=http_status,
-                               content_type=ctype, blocked_reason=blocked, counted_as="http_read_attempts")
+            return FetchResult(transport="http", requested_url=url, final_url=final_url if http_status else None,
+                               http_status=http_status, content_type=ctype, blocked_reason=blocked,
+                               counted_as="http_read_attempts")
         if isinstance(raw, bytes):
-            return FetchResult(transport="http", requested_url=url, final_url=url, http_status=http_status,
+            return FetchResult(transport="http", requested_url=url, final_url=final_url, http_status=http_status,
                                content_type=ctype, content=raw, counted_as="http_read_attempts")
-        return FetchResult(transport="http", requested_url=url, final_url=url, http_status=http_status,
+        return FetchResult(transport="http", requested_url=url, final_url=final_url, http_status=http_status,
                            content_type=ctype, html=raw, counted_as="http_read_attempts")
 
     def _fetch_browser_result(self, url: str, context):
@@ -376,9 +382,11 @@ class LinkReader:
 
     # --- fetch -------------------------------------------------------------
 
-    def _fetch(self, url: str) -> tuple[str | bytes | None, int | None, str | None]:
-        """Returns str for HTML, bytes for PDF, None on failure.
+    def _fetch(self, url: str) -> tuple[str | bytes | None, int | None, str | None, str | None]:
+        """Returns (body, http_status, content_type, final_url).
 
+        ``body`` is str for HTML, bytes for PDF, None on failure; ``final_url`` is the
+        URL the response came from after redirects (None on transport failure).
         Mock/synthetic bodies are served earlier by ``_fetch_http_result``; this
         method is the plain HTTP transport only.
         """
@@ -386,17 +394,18 @@ class LinkReader:
             resp = httpx.get(url, timeout=self.timeout, follow_redirects=True,
                              headers={"User-Agent": self.user_agent})
             ctype = resp.headers.get("content-type", "")
+            final_url = str(resp.url)
             if resp.status_code != 200:
-                return None, resp.status_code, ctype
+                return None, resp.status_code, ctype, final_url
             looks_pdf = ("pdf" in ctype.lower()
-                         or str(resp.url).lower().split("?")[0].endswith(".pdf"))
+                         or final_url.lower().split("?")[0].endswith(".pdf"))
             # Trust the magic bytes over URL/Content-Type: ".pdf" URLs often
             # serve an HTML hotlink-protection/redirect page instead.
             if looks_pdf and b"%PDF" in resp.content[:1024]:
-                return resp.content, resp.status_code, ctype
-            return resp.text, resp.status_code, ctype
+                return resp.content, resp.status_code, ctype, final_url
+            return resp.text, resp.status_code, ctype, final_url
         except (httpx.HTTPError, OSError):
-            return None, None, None
+            return None, None, None, None
 
     # --- anti-bot detection --------------------------------------------------
 

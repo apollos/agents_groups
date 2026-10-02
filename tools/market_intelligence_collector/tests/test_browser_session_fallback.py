@@ -157,6 +157,59 @@ def test_remove_revokes_and_reports_domains_to_clear(store, tmp_path):
     assert store.status()[0]["status"] == "revoked"
 
 
+def test_injected_cookie_expiry_clamped_to_local_expiry(store, tmp_path):
+    """Review R8: cookies handed to the browser never outlive the registry's local expiry."""
+    f = _write_cookie_file(tmp_path, [_cookie(), _cookie(name="sess", expires=-1),
+                                      _cookie(name="short", expires=NOW + 60)])
+    meta = store.import_cookies(ORIGIN, f)
+    assert meta.expires_at_local == NOW + 60  # min(max_age 3600, shortest real expiry 60)
+    cred = store.credential_for(ORIGIN)
+    by_name = {c["name"]: c for c in cred["cookies"]}
+    assert by_name["sid"]["expires"] == NOW + 60          # shortened from +86400
+    assert by_name["sess"]["expires"] == NOW + 60         # session cookie becomes bounded
+    assert by_name["short"]["expires"] == NOW + 60        # unchanged
+    assert cred["expires_at_local"] == NOW + 60
+    # The stored file is untouched (clamping happens at injection time only).
+    stored = json.loads(store._cookie_path("news_user").read_text())
+    assert {c["name"]: c["expires"] for c in stored}["sid"] == NOW + 86400
+
+
+def test_domains_to_clear_covers_expired_and_revoked(store, tmp_path):
+    f = _write_cookie_file(tmp_path, [_cookie()])
+    store.import_cookies(ORIGIN, f)
+    assert store.domains_to_clear() == []
+    store._clock["t"] = NOW + 3601
+    assert store.domains_to_clear() == ALLOWED  # expired by local max_age
+    store._clock["t"] = NOW
+    store.remove("news_user")
+    assert store.domains_to_clear() == ALLOWED  # revoked
+
+
+def test_run_context_sweeps_stale_cookies_at_browser_start(store, tmp_path):
+    from mic.run_context import RunContext
+    from tests.browser_doubles import FakeBrowserSession
+    f = _write_cookie_file(tmp_path, [_cookie()])
+    store.import_cookies(ORIGIN, f)
+    store._clock["t"] = NOW + 3601
+    session = FakeBrowserSession(pages={})
+    ctx = RunContext(run_id="r", attempt_id="a", session_store=store)
+    ctx.set_browser_factory(lambda c: session)
+    assert ctx.browser() is session
+    assert session.cleared_domains == ALLOWED
+    assert ctx.credential_sweep == {"domains": 1, "cleared": 1}
+    # Second access does not start / sweep again.
+    ctx.browser()
+    assert session.cleared_domains == ALLOWED
+    # Nothing stale -> no sweep recorded.
+    fresh = FakeBrowserSession(pages={})
+    store._clock["t"] = NOW
+    store._registry["news_user"].status = "active"
+    ctx2 = RunContext(run_id="r2", attempt_id="a", session_store=store)
+    ctx2.set_browser_factory(lambda c: fresh)
+    ctx2.browser()
+    assert fresh.cleared_domains == [] and ctx2.credential_sweep is None
+
+
 def test_disabled_fallback_never_returns_credentials(tmp_path):
     runtime = browser_runtime_block()  # session_fallback.enabled False
     s = SessionStore.from_runtime(runtime, env={"MIC_BROWSER_CREDENTIAL_DIR": str(tmp_path / "c")}, now=lambda: NOW)

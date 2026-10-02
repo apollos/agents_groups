@@ -217,3 +217,11 @@ def validate_search_provider_config(cfg: MICConfig) -> None:
         raise ConfigError(
             "search_providers.active selects a browser provider but browser_runtime.enabled "
             "is false; enable browser_runtime.yaml or choose another provider")
+    # Design 2 (quality config) / 13.4: the browser route must never run with the strict
+    # body-scope and evidence checks switched off. The flag is opt-in in output_schema.yaml,
+    # so a deployment that only flips the provider would otherwise read unscoped pages.
+    strict = ((cfg.output_schema or {}).get("limits") or {}).get("strict_evidence_review")
+    if strict is not True:
+        raise ConfigError(
+            "output_schema.limits.strict_evidence_review must be true when the active search "
+            "provider is of type browser (strict body scope + evidence review are mandatory)")

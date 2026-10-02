@@ -129,10 +129,23 @@ class VisionExtractor:
         if self.model_override:
             headers["x-openclaw-model"] = self.model_override
         url = self.adapter.endpoint.rstrip("/") + "/responses"
+        # Same gateway, same budget: reserve one ``gateway_requests_sent`` (cancel and
+        # deadline included) before the send, and never wait longer than the run has left.
+        # Review R5: this request used to bypass the shared budget entirely.
+        reserve = getattr(self.adapter, "reserve_gateway_request", None)
+        refused = reserve() if callable(reserve) else None
+        if refused is not None:
+            logger.warning("vision_extract_refused kind=%s reason=%s", kind, refused[:200])
+            return None
+        timeout = float(self.timeout)
+        remaining_fn = getattr(self.adapter, "remaining_seconds", None)
+        remaining = remaining_fn() if callable(remaining_fn) else None
+        if remaining is not None:
+            timeout = max(1.0, min(timeout, remaining))
         self.calls_used += 1
         try:
             resp = httpx.post(url, json=payload, headers=headers,
-                              timeout=self.timeout)
+                              timeout=timeout)
             resp.raise_for_status()
             data = resp.json()
         except (httpx.HTTPError, ValueError) as exc:

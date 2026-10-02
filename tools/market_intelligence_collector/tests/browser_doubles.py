@@ -48,8 +48,12 @@ def browser_runtime_block(**overrides) -> dict:
 
 
 def browser_config(active: str = "browser_local", provider: dict | None = None, runtime: dict | None = None,
-                   fallback=None):
-    """Load the repo config and switch it to the browser route (in-memory only)."""
+                   fallback=None, strict_evidence_review: bool | None = True):
+    """Load the repo config and switch it to the browser route (in-memory only).
+
+    ``strict_evidence_review`` mirrors the deployment step the README requires; pass
+    ``None`` to leave the repo default (absent) in place.
+    """
     import copy
 
     from mic.config import load_config, validate_search_provider_config
@@ -57,6 +61,9 @@ def browser_config(active: str = "browser_local", provider: dict | None = None, 
     cfg = load_config()
     cfg.raw = copy.deepcopy(cfg.raw)
     cfg.set_browser_runtime(runtime or browser_runtime_block())
+    if strict_evidence_review is not None:
+        cfg.raw.setdefault("output_schema", {}).setdefault("limits", {})["strict_evidence_review"] = \
+            strict_evidence_review
     sp = cfg.raw["search_providers"]
     sp["active"] = active
     sp["fallback"] = fallback if fallback is not None else []
@@ -102,14 +109,28 @@ class FixtureLoader:
     """Maps requested URLs to LoadedPage outcomes. Records every URL opened."""
 
     def __init__(self, routes: dict[str, Any] | None = None, default: Any = None,
-                 clock: FakeClock | None = None, per_load_seconds: float = 0.0):
+                 clock: FakeClock | None = None, per_load_seconds: float = 0.0,
+                 reobserve: Any = None):
         self.routes = routes or {}
         self.default = default
         self.opened: list[str] = []
         self.clock = clock
         self.per_load_seconds = per_load_seconds
+        # Interactive-mode double: ``reobserve(url, poll_index) -> html | LoadedPage | None``.
+        # None means "page unchanged" (the originally loaded HTML is returned again).
+        self.reobserve = reobserve
+        self.holds: list[str] = []
+        self.released: list[str] = []
+        self.reobserved: list[str] = []
 
-    def load(self, url: str, engine, timeout_seconds: float) -> LoadedPage:
+    def load(self, url: str, engine, timeout_seconds: float, hold: bool = False) -> LoadedPage:
+        loaded = self._resolve(url)
+        if hold and loaded.status == "navigated":
+            self.holds.append(url)
+            loaded.held = _FixtureHeldPage(self, url, loaded)
+        return loaded
+
+    def _resolve(self, url: str) -> LoadedPage:
         self.opened.append(url)
         if self.clock is not None and self.per_load_seconds:
             self.clock.advance(self.per_load_seconds)
@@ -134,6 +155,31 @@ class FixtureLoader:
         if isinstance(outcome, str):
             return LoadedPage(status="navigated", final_url=url, html=outcome, http_status=200)
         raise TypeError(f"bad route value for {url}: {type(outcome)}")
+
+
+class _FixtureHeldPage:
+    def __init__(self, loader: FixtureLoader, url: str, loaded: LoadedPage):
+        self.loader, self.url, self.loaded = loader, url, loaded
+        self.polls = 0
+        self.released = False
+
+    def reobserve(self, engine, timeout_seconds: float) -> LoadedPage:
+        if self.released:
+            return LoadedPage(status="browser_closed", error="page released")
+        self.polls += 1
+        self.loader.reobserved.append(self.url)
+        out = self.loader.reobserve(self.url, self.polls) if self.loader.reobserve else None
+        if out is None:
+            return LoadedPage(status="navigated", final_url=self.loaded.final_url, html=self.loaded.html,
+                              http_status=self.loaded.http_status)
+        if isinstance(out, LoadedPage):
+            return out
+        return LoadedPage(status="navigated", final_url=self.loaded.final_url, html=out,
+                          http_status=self.loaded.http_status)
+
+    def release(self) -> None:
+        self.released = True
+        self.loader.released.append(self.url)
 
 
 def page_index_of(url: str) -> int:

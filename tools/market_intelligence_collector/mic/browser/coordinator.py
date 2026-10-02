@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 from urllib.parse import urlparse
@@ -32,8 +33,23 @@ from mic.utils import canonicalize_url, domain_of, new_id, now
 logger = logging.getLogger(__name__)
 
 RELEVANCE_RULES_VERSION = "relevance_rules_v1"
+# Interactive mode (design 10.1): statuses handed to the operator, default wait, poll period.
+HUMAN_ACTION_STATUSES = ("captcha", "login_required", "consent_required")
+DEFAULT_HUMAN_WAIT_SECONDS = 60.0
+HUMAN_POLL_SECONDS = 2.0
 TRACKING_PARAMS = {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "spm",
                    "from", "fr", "ref", "share_token", "msclkid", "gclid", "fbclid"}
+
+
+class HeldPage(Protocol):
+    """A loaded page kept open so the operator can act on it (interactive mode, design 10.1).
+
+    ``reobserve`` re-reads the *current* DOM without navigating (no new page attempt is
+    consumed); ``release`` closes the tab. Both must be safe to call after a browser crash.
+    """
+
+    def reobserve(self, engine: EngineAdapter, timeout_seconds: float) -> LoadedPage: ...
+    def release(self) -> None: ...
 
 
 @dataclass
@@ -45,10 +61,37 @@ class LoadedPage:
     elapsed_ms: int = 0
     error: str | None = None
     ready: bool = True
+    # Set only when the loader was asked to ``hold`` the page (interactive mode).
+    held: HeldPage | None = None
 
 
 class PageLoader(Protocol):
-    def load(self, url: str, engine: EngineAdapter, timeout_seconds: float) -> LoadedPage: ...
+    def load(self, url: str, engine: EngineAdapter, timeout_seconds: float,
+             hold: bool = False) -> LoadedPage: ...
+
+
+class _PlaywrightHeldPage:
+    def __init__(self, loader: BrowserPageLoader, page, stack: ExitStack, http_status: int | None):
+        self._loader = loader
+        self._page = page
+        self._stack = stack
+        self._http_status = http_status
+        self._released = False
+
+    def reobserve(self, engine: EngineAdapter, timeout_seconds: float) -> LoadedPage:
+        if self._released:
+            return LoadedPage(status="browser_closed", error="page released")
+        start = self._loader.clock()
+        return self._loader._capture(self._page, engine, timeout_seconds, start, self._http_status)
+
+    def release(self) -> None:
+        if self._released:
+            return
+        self._released = True
+        try:
+            self._stack.close()
+        except Exception:  # noqa: BLE001 - closing a dead tab must never raise into the run
+            pass
 
 
 class BrowserPageLoader:
@@ -58,31 +101,45 @@ class BrowserPageLoader:
         self.session = session
         self.clock = clock
 
-    def load(self, url: str, engine: EngineAdapter, timeout_seconds: float) -> LoadedPage:
+    def load(self, url: str, engine: EngineAdapter, timeout_seconds: float,
+             hold: bool = False) -> LoadedPage:
         start = self.clock()
-        with self.session.page() as page:
+        stack = ExitStack()
+        page = stack.enter_context(self.session.page())
+        try:
             nav = self.session.navigate(page, url, timeout_seconds)
             if nav["status"] != "navigated":
                 return LoadedPage(status=nav["status"], final_url=nav.get("final_url"),
                                   error=nav.get("error"), elapsed_ms=nav.get("elapsed_ms", 0))
-            # Bounded readiness wait on engine-specific features; never a fixed
-            # sleep and never networkidle (search pages keep streaming requests).
-            remaining = max(0.5, timeout_seconds - (self.clock() - start))
-            ready = True
-            try:
-                page.wait_for_selector(", ".join(engine.ready_selectors()), state="attached",
-                                       timeout=int(remaining * 1000))
-            except Exception:  # noqa: BLE001 - we still parse whatever is present
-                ready = False
-            try:
-                html = page.content()
-                final_url = page.url
-            except Exception as exc:  # noqa: BLE001
-                return LoadedPage(status="browser_closed", error=f"{type(exc).__name__}: {exc}"[:200],
-                                  elapsed_ms=int((self.clock() - start) * 1000))
-            return LoadedPage(status="navigated", final_url=final_url, html=html,
-                              http_status=nav.get("http_status"), ready=ready,
+            loaded = self._capture(page, engine, timeout_seconds, start, nav.get("http_status"))
+            if hold and loaded.status == "navigated":
+                loaded.held = _PlaywrightHeldPage(self, page, stack, nav.get("http_status"))
+                stack = None  # ownership transferred to the held page
+            return loaded
+        finally:
+            if stack is not None:
+                stack.close()
+
+    def _capture(self, page, engine: EngineAdapter, timeout_seconds: float, start: float,
+                 http_status: int | None) -> LoadedPage:
+        # Bounded readiness wait on engine-specific features; never a fixed
+        # sleep and never networkidle (search pages keep streaming requests).
+        remaining = max(0.5, timeout_seconds - (self.clock() - start))
+        ready = True
+        try:
+            page.wait_for_selector(", ".join(engine.ready_selectors()), state="attached",
+                                   timeout=int(remaining * 1000))
+        except Exception:  # noqa: BLE001 - we still parse whatever is present
+            ready = False
+        try:
+            html = page.content()
+            final_url = page.url
+        except Exception as exc:  # noqa: BLE001
+            return LoadedPage(status="browser_closed", error=f"{type(exc).__name__}: {exc}"[:200],
                               elapsed_ms=int((self.clock() - start) * 1000))
+        return LoadedPage(status="navigated", final_url=final_url, html=html,
+                          http_status=http_status, ready=ready,
+                          elapsed_ms=int((self.clock() - start) * 1000))
 
 
 def strip_tracking(url: str) -> str:
@@ -263,10 +320,28 @@ class SearchCoordinator:
         )
         handle = context.recorder.page_started({**page.to_record(), "query_id": state.query_id})
         state.last_engine_load[engine.name] = context.clock()
+        # Interactive mode (design 10.1): keep the tab open so the operator can act on a
+        # challenge page; the DOM is then re-observed without a new navigation.
+        hold = context.interaction_mode == "interactive" and not authenticated_retry
         try:
-            loaded = loader.load(url, engine, budget.page_timeout_seconds())
+            loaded = loader.load(url, engine, budget.page_timeout_seconds(), hold=True) if hold \
+                else loader.load(url, engine, budget.page_timeout_seconds())
         except Exception as exc:  # noqa: BLE001 - loader failures are page failures
             loaded = LoadedPage(status="network_error", error=f"{type(exc).__name__}: {exc}"[:200])
+        try:
+            self._apply_loaded(engine, loaded, page, state, context, identity, family_focus)
+            if hold and loaded.held is not None and page.status in HUMAN_ACTION_STATUSES:
+                self._await_human_action(engine, loaded.held, page, state, context, identity, family_focus)
+        finally:
+            if loaded.held is not None:
+                loaded.held.release()
+        page.finished_at = now().isoformat()
+        context.recorder.page_finished(handle, {**page.to_record(), "query_id": state.query_id})
+        return page
+
+    def _apply_loaded(self, engine: EngineAdapter, loaded: LoadedPage, page: SearchPageResult,
+                      state: QueryState, context: RunContext, identity: TargetIdentity,
+                      family_focus: list[str] | None) -> None:
         page.final_url = loaded.final_url
         page.diagnostics.update({"load_status": loaded.status, "http_status": loaded.http_status,
                                  "elapsed_ms": loaded.elapsed_ms, "load_error": loaded.error,
@@ -276,9 +351,66 @@ class SearchCoordinator:
             page.error_code = page.status
         else:
             self._parse_into(engine, loaded, page, state, context, identity, family_focus)
-        page.finished_at = now().isoformat()
-        context.recorder.page_finished(handle, {**page.to_record(), "query_id": state.query_id})
-        return page
+
+    def _await_human_action(self, engine: EngineAdapter, held: HeldPage, page: SearchPageResult,
+                            state: QueryState, context: RunContext, identity: TargetIdentity,
+                            family_focus: list[str] | None) -> None:
+        """Interactive mode: wait (bounded, counted in run time) for the operator, then re-check.
+
+        The program fills no passwords, drags no sliders and calls no solver; it only re-reads
+        the already loaded DOM. Recovery is accepted only when the re-parsed page is a real
+        result page for the same query (``status == ok``); "continue" alone never counts.
+        """
+        budget = context.budget
+        runtime = context.browser_runtime or {}
+        configured = float(runtime.get("human_wait_seconds", DEFAULT_HUMAN_WAIT_SECONDS) or 0)
+        allowance = max(0.0, min(configured, budget.remaining_seconds()))
+        logger.warning("human action required: engine=%s status=%s page_attempt=%s waiting up to %.0fs "
+                       "(window kept open; complete the challenge in the browser)",
+                       engine.name, page.status, page.page_attempt_id, allowance)
+        start = context.clock()
+        polls = 0
+        outcome = "timeout"
+        blocked_status = page.status
+        statuses: list[str] = []
+        while True:
+            if budget.poll_cancel():
+                outcome = "cancelled"
+                break
+            elapsed = context.clock() - start
+            if elapsed >= allowance:
+                break
+            self.sleep(min(HUMAN_POLL_SECONDS, allowance - elapsed))
+            polls += 1
+            observed = held.reobserve(engine, min(budget.page_timeout_seconds(), HUMAN_POLL_SECONDS))
+            probe = SearchPageResult(
+                engine=page.engine, adapter_version=page.adapter_version, query_requested=page.query_requested,
+                page_index=page.page_index, page_attempt_id=page.page_attempt_id,
+                requested_url=page.requested_url, started_at=page.started_at, auth_mode=page.auth_mode,
+                auth_context_id=page.auth_context_id, authenticated_retry=page.authenticated_retry)
+            self._apply_loaded(engine, observed, probe, state, context, identity, family_focus)
+            statuses.append(probe.status)
+            if probe.status == "ok":
+                # Same attempt, same budget: copy the recovered observation into the page record.
+                page.status, page.error_code = "ok", None
+                page.final_url, page.query_observed = probe.final_url, probe.query_observed
+                page.query_match_status, page.page_fingerprint = probe.query_match_status, probe.page_fingerprint
+                page.quality, page.next_page, page.relevance = probe.quality, probe.next_page, probe.relevance
+                page.diagnostics.update(probe.diagnostics)
+                outcome = "recovered"
+                break
+            if probe.status == "browser_closed":
+                page.status, page.error_code = "browser_closed", "browser_closed"
+                page.diagnostics.update(probe.diagnostics)
+                outcome = "browser_closed"
+                break
+        page.diagnostics["human_wait"] = {
+            "blocked_status": blocked_status, "outcome": outcome, "polls": polls,
+            "waited_seconds": round(context.clock() - start, 2), "allowance_seconds": round(allowance, 2),
+            "observed_statuses": statuses[-5:],
+        }
+        logger.warning("human action wait finished: engine=%s outcome=%s waited=%.1fs",
+                       engine.name, outcome, context.clock() - start)
 
     def _parse_into(self, engine: EngineAdapter, loaded: LoadedPage, page: SearchPageResult,
                     state: QueryState, context: RunContext, identity: TargetIdentity,

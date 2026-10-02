@@ -276,6 +276,10 @@ WORKER_STUB = textwrap.dedent('''
             (run_dir / "result.json").write_text(json.dumps({"attempt_id": "other", "status": "completed",
                                                              "report": {}}))
             sys.exit(0)
+        if mode == "echo_deadline":
+            (run_dir / "seen.json").write_text(json.dumps({
+                "deadline_epoch": req["deadline_epoch"], "hard_deadline_epoch": req["hard_deadline_epoch"],
+                "started_epoch": req["started_epoch"], "deadline_sources": req["deadline_sources"]}))
         payload = {"attempt_id": attempt_id, "status": "completed",
                    "report": {"collection_diagnostics": {"execution_status": "completed"}},
                    "budget_used": {"gateway_requests_sent": 0}}
@@ -284,6 +288,19 @@ WORKER_STUB = textwrap.dedent('''
         with os.fdopen(fd, "w") as fh:
             fh.write(json.dumps(payload))
         os.replace(tmp, run_dir / "result.json")
+        if mode == "completed_then_exit_7":
+            sys.exit(7)
+        if mode in ("orphan_child", "orphan_child_ignore_term"):
+            # Leave a descendant behind in the same process group (like a browser helper).
+            code = "import signal, time\\n"
+            if mode == "orphan_child_ignore_term":
+                code += "signal.signal(signal.SIGTERM, lambda *a: None)\\n"
+            code += "time.sleep(60)\\n"
+            pid = os.fork()
+            if pid == 0:
+                os.execv(sys.executable, [sys.executable, "-c", code])
+            (run_dir / "child.pid").write_text(str(pid))
+            sys.exit(0)
         sys.exit(0)
 
     if __name__ == "__main__":
@@ -380,6 +397,78 @@ def test_supervisor_cancel_event_stops_worker(tmp_path, stub_module):
     out = _run(sup, "hang", deadline_seconds=30, cancel_event=cancel)
     assert out.status == "cancelled" and out.error_code == "mic_cancelled"
     _assert_reaped(out.worker_pid)
+
+
+def test_supervisor_rejects_completed_result_with_nonzero_exit(tmp_path, stub_module):
+    """Review R10: result file says completed but the worker exited 7 -> not a success."""
+    sup = _supervisor(tmp_path, stub_module)
+    out = _run(sup, "completed_then_exit_7")
+    assert out.status == "failed" and out.error_code == "worker_exit_nonzero"
+    assert out.exit_code == 7 and out.ok is False
+    assert out.report is not None  # kept for diagnostics, never treated as success
+
+
+@pytest.mark.parametrize("mode", ["orphan_child", "orphan_child_ignore_term"])
+def test_supervisor_reaps_descendants_after_main_process_exit(tmp_path, stub_module, mode):
+    """Review R2: the main process exiting is not cleanup; the owned group must be empty."""
+    from mic.browser.runner import process_group_alive
+    sup = _supervisor(tmp_path, stub_module, grace=0.5)
+    t0 = time.monotonic()
+    out = _run(sup, mode)
+    child_pid = int((Path(out.run_dir) / "child.pid").read_text())
+    assert out.status == "completed" and out.cleanup == "complete"
+    assert time.monotonic() - t0 < 10
+    _assert_reaped(child_pid)
+    assert process_group_alive(out.worker_pid) is False
+    # the orphan was not left in the worker's group
+    try:
+        state = Path(f"/proc/{child_pid}/stat").read_text().split(")")[-1].split()[0]
+        assert state == "Z"  # at most a zombie awaiting init, never running
+    except FileNotFoundError:
+        pass
+
+
+def test_supervisor_timeout_leaves_no_descendants(tmp_path, stub_module):
+    """A hanging worker with a TERM-ignoring descendant: cleanup only completes when both are gone."""
+    sup = _supervisor(tmp_path, stub_module, grace=0.5)
+    out = _run(sup, "hang_ignore_term", deadline_seconds=1.0)
+    assert out.status == "timed_out" and out.cleanup == "complete"
+    from mic.browser.runner import process_group_alive
+    assert process_group_alive(out.worker_pid) is False
+
+
+def test_supervisor_merges_task_and_deployment_deadline(tmp_path, stub_module, monkeypatch):
+    """Review R3c: the hard deadline = min(caller, task budget, browser deployment max_run_seconds),
+    and the worker is told to finish a bounded wrap-up margin earlier."""
+    class _Cfg:
+        browser_runtime = {"enabled": True, "limits": {"max_run_seconds": 40}}
+
+    import mic.config as cfg_mod  # the runner imports load_config lazily -> patch at source
+    monkeypatch.setattr(cfg_mod, "load_config", lambda config_dir=None: _Cfg())
+    sup = _supervisor(tmp_path, stub_module)
+    out = _run(sup, "echo_deadline", deadline_seconds=900,
+               task_profile={"budget_profile": {"max_run_seconds": 120}})
+    assert out.status == "completed"
+    seen = json.loads((Path(out.run_dir) / "seen.json").read_text())
+    hard = seen["hard_deadline_epoch"] - seen["started_epoch"]
+    soft = seen["deadline_epoch"] - seen["started_epoch"]
+    assert hard == pytest.approx(40.0)  # deployment ceiling wins over 900 / 120
+    assert soft == pytest.approx(40.0 - 4.0)  # wrap-up = min(10 s, 10 %)
+    assert seen["deadline_sources"] == {"caller": 900.0, "task": 120.0, "deployment": 40.0}
+
+
+def test_effective_run_seconds_without_browser_route_keeps_task_min(tmp_path, monkeypatch):
+    from mic.browser.runner import effective_run_seconds
+
+    class _Cfg:
+        browser_runtime = {"enabled": False, "limits": {"max_run_seconds": 5}}
+
+    import mic.config as cfg_mod
+    monkeypatch.setattr(cfg_mod, "load_config", lambda config_dir=None: _Cfg())
+    eff, src = effective_run_seconds(900, {"budget_profile": {"max_run_seconds": 200}}, None)
+    assert eff == 200 and "deployment" not in src
+    eff, src = effective_run_seconds(60, {"budget_profile": {"max_run_seconds": True}}, None)
+    assert eff == 60 and "task" not in src  # bool is not a limit
 
 
 def test_result_file_validation(tmp_path):

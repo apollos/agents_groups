@@ -256,3 +256,181 @@ def test_no_credential_means_no_retry():
     assert len(batch.page_attempts) == 1
     assert batch.page_attempts[0].diagnostics["auth_retry_skipped"] == "no_credential"
     assert ctx.budget.used_summary()["authenticated_retries"] == 0
+
+
+# --- Review R9 / design 10.1: interactive mode holds the page and re-observes -----------------
+
+def _interactive(ctx, clock: FakeClock, wait_seconds: float = 60):
+    ctx.interaction_mode = "interactive"
+    ctx.browser_runtime["human_wait_seconds"] = wait_seconds
+    sleeps: list[float] = []
+
+    def sleep(s):
+        sleeps.append(s)
+        clock.advance(s)
+
+    coord = SearchCoordinator([build_engine("bing")], desired_relevant_articles=2, results_per_page_cap=10,
+                              min_engine_interval_seconds=0, sleep=sleep)
+    return coord, sleeps
+
+
+def test_interactive_captcha_recovers_after_operator_action_without_new_page_attempt():
+    clock = FakeClock()
+    ctx = make_context(clock=clock)
+    # Operator solves the challenge: the 3rd re-observation of the same tab shows results.
+    loader = FixtureLoader(default=fixture("bing_captcha.html"),
+                           reobserve=lambda url, n: P1 if n >= 3 else None, clock=clock)
+    coord, sleeps = _interactive(ctx, clock)
+    batch = coord.run_query(Q, None, "q1", 20, ctx, loader)
+    page = batch.page_attempts[0]
+    assert page.status == "ok" and batch.hits and batch.outcome == "completed"
+    hw = page.diagnostics["human_wait"]
+    assert hw["blocked_status"] == "captcha" and hw["outcome"] == "recovered" and hw["polls"] == 3
+    assert hw["observed_statuses"][-1] == "ok" and hw["observed_statuses"][0] == "captcha"
+    # Re-observation never navigates: one page attempt, one URL opened, tab held then released.
+    assert ctx.budget.used_summary()["search_page_attempts"] == 1
+    assert loader.opened == [loader.holds[0]] and loader.released == loader.holds
+    assert len(loader.reobserved) == 3
+    # Waiting counted in run time (clock advanced by the sleeps).
+    assert abs(hw["waited_seconds"] - sum(sleeps)) < 1e-6 and hw["waited_seconds"] > 0
+    assert ctx.budget.elapsed_seconds() >= hw["waited_seconds"]
+
+
+def test_interactive_wait_times_out_and_is_bounded_by_human_wait_seconds():
+    clock = FakeClock()
+    ctx = make_context(clock=clock)
+    loader = FixtureLoader(default=fixture("bing_captcha.html"), clock=clock)  # never recovers
+    coord, sleeps = _interactive(ctx, clock, wait_seconds=10)
+    batch = coord.run_query(Q, None, "q1", 20, ctx, loader)
+    page = batch.page_attempts[0]
+    assert page.status == "captcha" and batch.outcome == "blocked"
+    hw = page.diagnostics["human_wait"]
+    assert hw["outcome"] == "timeout" and abs(hw["allowance_seconds"] - 10) < 1e-6
+    assert abs(sum(sleeps) - 10) < 1e-6 and hw["polls"] == 5
+    assert loader.released == loader.holds and len(loader.holds) == 1
+    assert ctx.budget.used_summary()["search_page_attempts"] == 1
+
+
+def test_interactive_wait_is_clamped_to_remaining_run_time_and_honours_cancel():
+    clock = FakeClock()
+    ctx = make_context(clock=clock, deadline_seconds=7)
+    loader = FixtureLoader(default=fixture("bing_captcha.html"), clock=clock)
+    coord, sleeps = _interactive(ctx, clock, wait_seconds=60)
+    batch = coord.run_query(Q, None, "q1", 20, ctx, loader)
+    hw = batch.page_attempts[0].diagnostics["human_wait"]
+    assert abs(hw["allowance_seconds"] - 7) < 1e-6 and sum(sleeps) <= 7 + 1e-6
+    # Cancel during the wait stops polling promptly.
+    clock2 = FakeClock()
+    ctx2 = make_context(clock=clock2)
+    flag = {"cancel": False}
+
+    def operator_cancels(url, n):
+        if n >= 2:
+            flag["cancel"] = True  # external cancel signal arrives during the wait
+        return None
+
+    loader2 = FixtureLoader(default=fixture("bing_captcha.html"), clock=clock2, reobserve=operator_cancels)
+    coord2, sleeps2 = _interactive(ctx2, clock2, wait_seconds=60)
+    ctx2.budget.cancel_check = lambda: flag["cancel"]
+    batch2 = coord2.run_query(Q, None, "q1", 20, ctx2, loader2)
+    hw2 = batch2.page_attempts[0].diagnostics["human_wait"]
+    assert hw2["outcome"] == "cancelled" and hw2["polls"] == 2 and sum(sleeps2) <= 4 + 1e-6
+    assert batch2.outcome in ("blocked", "cancelled") and loader2.released == loader2.holds
+
+
+def test_unattended_mode_never_holds_or_waits():
+    clock = FakeClock()
+    ctx = make_context(clock=clock)
+    loader = FixtureLoader(default=fixture("bing_captcha.html"), clock=clock)
+    sleeps: list[float] = []
+    batch = _coord(engines=("bing",), sleeps=sleeps).run_query(Q, None, "q1", 20, ctx, loader)
+    assert batch.page_attempts[0].status == "captcha"
+    assert "human_wait" not in batch.page_attempts[0].diagnostics
+    assert loader.holds == [] and loader.reobserved == [] and sleeps == []
+
+
+def test_interactive_ok_page_is_released_without_waiting():
+    clock = FakeClock()
+    ctx = make_context(clock=clock)
+    loader = FixtureLoader(default=P1, clock=clock)
+    coord, sleeps = _interactive(ctx, clock)
+    batch = coord.run_query(Q, None, "q1", 20, ctx, loader)
+    assert batch.hits and sleeps == [] and loader.released == loader.holds and loader.holds
+
+
+def test_interactive_consent_page_waits_then_moves_on_without_fabricating_consent():
+    clock = FakeClock()
+    ctx = make_context(clock=clock)
+    loader = FixtureLoader(default=LoadedPage(status="navigated", final_url="https://www.bing.com/search?q=x",
+                                              html="<html><body><div id='bnp_container'>consent</div></body></html>",
+                                              http_status=200), clock=clock)
+    coord, sleeps = _interactive(ctx, clock, wait_seconds=4)
+    batch = coord.run_query(Q, None, "q1", 20, ctx, loader)
+    page = batch.page_attempts[0]
+    if page.status == "consent_required":  # depends on the bing adapter's consent detection
+        assert page.diagnostics["human_wait"]["outcome"] == "timeout" and sum(sleeps) <= 4 + 1e-6
+    assert loader.released == loader.holds
+
+
+def test_browser_page_loader_hold_reobserves_same_tab_and_releases_once():
+    """The Playwright-backed loader keeps the tab open only when asked; reobserve never navigates."""
+    from contextlib import contextmanager
+
+    from mic.browser.coordinator import BrowserPageLoader
+
+    class _Page:
+        def __init__(self):
+            self.url = "https://www.bing.com/search?q=x"
+            self.contents = ["<html>captcha</html>", "<html>results</html>"]
+            self.closed = False
+            self.waits = 0
+
+        def wait_for_selector(self, *a, **k):
+            self.waits += 1
+
+        def content(self):
+            return self.contents.pop(0) if len(self.contents) > 1 else self.contents[0]
+
+        def is_closed(self):
+            return self.closed
+
+    class _Session:
+        def __init__(self):
+            self.pages: list[_Page] = []
+            self.closed: list[_Page] = []
+            self.navigations = 0
+
+        @contextmanager
+        def page(self):
+            p = _Page()
+            self.pages.append(p)
+            try:
+                yield p
+            finally:
+                p.closed = True
+                self.closed.append(p)
+
+        def navigate(self, page, url, timeout):
+            self.navigations += 1
+            return {"status": "navigated", "http_status": 200, "final_url": url, "elapsed_ms": 1}
+
+    engine = build_engine("bing")
+    # Default: tab closed before returning, nothing held.
+    s = _Session()
+    loaded = BrowserPageLoader(s).load("https://www.bing.com/search?q=x", engine, 5.0)
+    assert loaded.status == "navigated" and loaded.held is None and s.closed == s.pages
+    # hold=True: tab stays open, reobserve reads the current DOM without navigating.
+    s = _Session()
+    loaded = BrowserPageLoader(s).load("https://www.bing.com/search?q=x", engine, 5.0, hold=True)
+    assert loaded.held is not None and s.closed == [] and loaded.html == "<html>captcha</html>"
+    again = loaded.held.reobserve(engine, 2.0)
+    assert again.status == "navigated" and again.html == "<html>results</html>" and s.navigations == 1
+    loaded.held.release()
+    loaded.held.release()  # idempotent
+    assert s.closed == s.pages and len(s.closed) == 1
+    assert loaded.held.reobserve(engine, 1.0).status == "browser_closed"
+    # Navigation failure with hold=True still closes the tab and holds nothing.
+    s = _Session()
+    s.navigate = lambda page, url, timeout: {"status": "timeout", "error": "t", "elapsed_ms": 5}
+    loaded = BrowserPageLoader(s).load("https://www.bing.com/search?q=x", engine, 5.0, hold=True)
+    assert loaded.status == "timeout" and loaded.held is None and s.closed == s.pages
