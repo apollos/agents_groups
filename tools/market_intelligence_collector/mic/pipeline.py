@@ -193,6 +193,10 @@ class Pipeline:
             finally:
                 cleanup = self._close_context(context)
                 self.registry.set_budget(None)
+            # Final verdict after wrap-up (browser closed) and before the report is published:
+            # a cancel that arrived during teardown, or wrap-up pushing the run past its hard
+            # limit, must not be reported as completed / usable (review).
+            self._final_status_check(stats, context)
             summary = self._summary(run_id, target_id, task_profile, stats, context, cleanup)
             status = "completed" if stats.execution_status == "completed" else stats.execution_status
             self.repo.finish_search_run(run_id, status, summary)
@@ -311,20 +315,41 @@ class Pipeline:
         elif rel.get("target_match") is False and "target_entity_match" not in tri.matched_signals:
             demote_reason = "no_target_or_related_entity"
         if demote_reason is not None:
+            signal_name = f"{READ_GATE_SIGNAL_PREFIX}{demote_reason}"
+            if signal_name in tri.matched_signals:
+                # Already gated once and re-promoted afterwards (batch triage): demote again
+                # without counting or tagging twice.
+                return tri.model_copy(update={"triage_decision": "link_record_only", "need_model": False})
             stats.read_gate_demoted[demote_reason] = stats.read_gate_demoted.get(demote_reason, 0) + 1
             return tri.model_copy(update={
                 "triage_decision": "link_record_only",
                 "need_model": False,
-                "matched_signals": [*tri.matched_signals, f"{READ_GATE_SIGNAL_PREFIX}{demote_reason}"],
+                "matched_signals": [*tri.matched_signals, signal_name],
                 "reason": f"{tri.reason}; read gate: {demote_reason}".strip("; "),
             })
         if rel.get("target_match") is False:
+            if RELATED_ONLY_SIGNAL in tri.matched_signals:
+                return tri
             stats.read_gate_related_only += 1
             return tri.model_copy(update={
                 "matched_signals": [*tri.matched_signals, RELATED_ONLY_SIGNAL],
                 "reason": f"{tri.reason}; related company only (target not named)".strip("; "),
             })
         return tri
+
+    @staticmethod
+    def _final_status_check(stats: RunStats, context: RunContext) -> None:
+        if stats.execution_status != "completed":
+            return
+        budget = context.budget
+        if budget.poll_cancel():
+            stats.execution_status, stats.stop_reason = "cancelled", budget.cancel_reason or "cancelled"
+        elif budget.deadline_at is not None and budget.expired():
+            stats.execution_status, stats.stop_reason = "timed_out", "run_deadline"
+        else:
+            return
+        logger.warning("collect_stopped_at_wrapup run_id=%s reason=%s elapsed=%.1fs",
+                       context.run_id, stats.stop_reason, budget.elapsed_seconds())
 
     def _check_alive(self, context: RunContext) -> None:
         try:
@@ -476,6 +501,10 @@ class Pipeline:
         self._check_alive(context)
         self._batch_triage(call_planner, triaged, stats)
         self._check_alive(context)
+        # Final gate *after* every triage step (review: batch triage re-promoted a hit the
+        # rule gate had demoted - ``/tag/catl``, content_form_ok=false - and it was read).
+        if browser_run:
+            triaged = [(lid, h, self._apply_read_gate(h, t, stats)) for lid, h, t in triaged]
 
         for link_id, _hit, tri in triaged:
             self.repo.update_link_triage(
@@ -498,6 +527,9 @@ class Pipeline:
         for link_id, hit, tri in read_queue:
             self._check_alive(context)
             read = self.reader.read(link_id, hit.url, profile, context=context)
+            # Right after the read returns, before any branch may ``continue`` (review: a
+            # cancel / deadline during the *last* read, which then failed, was never seen).
+            self._check_alive(context)
             # Pending redirects / browser navigations may land on another URL:
             # update canonical identity and never analyse the same body twice.
             final_canonical = canonicalize_url(read.final_url or hit.url)
@@ -640,6 +672,8 @@ class Pipeline:
                     }, search_run_id=run_id)
                 self._tally(stats, bundle, source_metadata=source_metadata)
 
+        # End of work: a run that is cancelled or past its deadline here is not "completed".
+        self._check_alive(context)
         # Persist run-level coverage gaps that weren't tied to a saved link.
         self.repo.save_coverage_gaps(run_id, profile.target_id, self._run_gaps(stats))
         stats.model_calls = call_planner.budget.calls_used

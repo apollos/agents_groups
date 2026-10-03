@@ -73,7 +73,10 @@ class FakeCtx:
         self.pages = []
         self.closed = False
         self.handlers = {}
-        self.cookies = []
+        self._cookies = []
+
+    def cookies(self):
+        return [dict(c) for c in self._cookies]
 
     def on(self, event, handler):
         self.handlers[event] = handler
@@ -87,10 +90,13 @@ class FakeCtx:
         self.closed = True
 
     def add_cookies(self, cookies):
-        self.cookies.extend(cookies)
+        self._cookies.extend(cookies)
 
-    def clear_cookies(self, domain=None):
-        self.cookies = [c for c in self.cookies if domain is None or c.get("domain", "").lstrip(".") != domain]
+    def clear_cookies(self, name=None, domain=None, path=None):
+        # Playwright semantics: string filters are exact matches.
+        self._cookies = [c for c in self._cookies
+                         if not ((name is None or c.get("name") == name) and (domain is None or c.get("domain") == domain)
+                                 and (path is None or c.get("path") == path))]
 
 
 class FakePwPage:
@@ -301,6 +307,33 @@ WORKER_STUB = textwrap.dedent('''
                 os.execv(sys.executable, [sys.executable, "-c", code])
             (run_dir / "child.pid").write_text(str(pid))
             sys.exit(0)
+        if mode.startswith("detached_browser_"):
+            # Like a real Edge under Playwright on Linux: own session / process group (detached),
+            # ignores TERM, and - as Chromium wipes its environ - carries NO attempt marker.
+            #   _hang     : worker keeps running -> only the live parent chain identifies it
+            #   _orphan   : spawned via an intermediate that exits -> chain broken; only the
+            #               ``--user-data-dir=<profile>`` command line identifies it
+            #   _foreign  : chain broken, no profile argument -> not ours, must be left alone
+            import subprocess
+            code = "import signal, time\\nsignal.signal(signal.SIGTERM, lambda *a: None)\\ntime.sleep(60)\\n"
+            env = {k: v for k, v in os.environ.items() if k != "MIC_WORKER_ATTEMPT_ID"}
+            argv = [sys.executable, "-c", code]
+            if mode == "detached_browser_orphan":
+                argv.append("--user-data-dir=" + os.environ["MIC_BROWSER_PROFILE_DIR"])
+            if mode == "detached_browser_hang":
+                child = subprocess.Popen(argv, env=env, start_new_session=True, stdin=subprocess.DEVNULL,
+                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                (run_dir / "child.pid").write_text(str(child.pid))
+                while True:
+                    time.sleep(0.1)
+            launcher = ("import subprocess, sys\\n"
+                        f"p = subprocess.Popen({argv!r}, start_new_session=True, stdin=subprocess.DEVNULL,"
+                        " stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\\n"
+                        "print(p.pid)\\n")
+            out = subprocess.run([sys.executable, "-c", launcher], env=env, capture_output=True, text=True)
+            (run_dir / "child.pid").write_text(out.stdout.strip())
+            time.sleep(0.3)  # intermediate is gone -> grandchild reparented, chain broken
+            sys.exit(0)
         sys.exit(0)
 
     if __name__ == "__main__":
@@ -321,7 +354,8 @@ def stub_module(tmp_path, monkeypatch):
 def _supervisor(tmp_path, stub_module, grace=1.0):
     return RunSupervisor(runs_root=tmp_path / "runs", python_executable=sys.executable,
                          grace_seconds=grace, heartbeat_seconds=0.2, worker_module=stub_module,
-                         extra_env={"PYTHONPATH": os.environ["PYTHONPATH"]})
+                         extra_env={"PYTHONPATH": os.environ["PYTHONPATH"],
+                                    "MIC_BROWSER_PROFILE_DIR": str(tmp_path / "profiles" / "mic-edge")})
 
 
 def _run(sup, mode, **kw):
@@ -332,15 +366,28 @@ def _run(sup, mode, **kw):
     return sup.run(**args)
 
 
+def _proc_state(pid: int) -> str | None:
+    try:
+        return Path(f"/proc/{pid}/stat").read_text().split(")")[-1].split()[0]
+    except FileNotFoundError:
+        return None
+
+
 def _assert_reaped(pid: int) -> None:
-    # The child was waited on by the supervisor; a zombie would still answer kill(pid, 0),
-    # so check via /proc state when the pid happens to be reused.
+    """The supervisor's *own child* must be waited on: gone, or a reused pid that is not a zombie."""
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return
-    state = Path(f"/proc/{pid}/stat").read_text().split(")")[-1].split()[0]
-    assert state != "Z", "worker left as zombie"
+    assert _proc_state(pid) != "Z", "worker left as zombie"
+
+
+def _assert_not_running(pid: int) -> None:
+    """A *descendant* the supervisor cannot wait on (grandchild): gone, or at most a zombie
+    awaiting init / a subreaper - never running. (Whether init has reaped it yet depends on
+    the environment, so both outcomes are accepted.)"""
+    state = _proc_state(pid)
+    assert state in (None, "Z"), f"descendant {pid} still running (state={state})"
 
 
 def test_supervisor_happy_path_reads_validated_result(tmp_path, stub_module):
@@ -418,14 +465,9 @@ def test_supervisor_reaps_descendants_after_main_process_exit(tmp_path, stub_mod
     child_pid = int((Path(out.run_dir) / "child.pid").read_text())
     assert out.status == "completed" and out.cleanup == "complete"
     assert time.monotonic() - t0 < 10
-    _assert_reaped(child_pid)
+    _assert_reaped(out.worker_pid)
+    _assert_not_running(child_pid)  # grandchild: gone or zombie, never running
     assert process_group_alive(out.worker_pid) is False
-    # the orphan was not left in the worker's group
-    try:
-        state = Path(f"/proc/{child_pid}/stat").read_text().split(")")[-1].split()[0]
-        assert state == "Z"  # at most a zombie awaiting init, never running
-    except FileNotFoundError:
-        pass
 
 
 def test_supervisor_timeout_leaves_no_descendants(tmp_path, stub_module):
@@ -435,6 +477,86 @@ def test_supervisor_timeout_leaves_no_descendants(tmp_path, stub_module):
     assert out.status == "timed_out" and out.cleanup == "complete"
     from mic.browser.runner import process_group_alive
     assert process_group_alive(out.worker_pid) is False
+
+
+@pytest.mark.parametrize("mode", ["detached_browser_hang", "detached_browser_orphan"])
+def test_supervisor_reaps_detached_browser_group(tmp_path, stub_module, mode):
+    """Review: Playwright launches the browser detached (own process group) and Chromium wipes
+    its environ. A TERM-ignoring 'browser' without any marker must still be found - via the
+    live parent chain while the worker runs (hang -> timeout), or via its
+    ``--user-data-dir=<MIC profile>`` command line once the chain is gone (orphan) - and killed."""
+    from mic.browser.runner import OwnershipSpec, owned_processes
+    sup = _supervisor(tmp_path, stub_module, grace=0.5)
+    t0 = time.monotonic()
+    out = _run(sup, mode, deadline_seconds=1.5 if mode == "detached_browser_hang" else 20)
+    child_pid = int((Path(out.run_dir) / "child.pid").read_text())
+    assert out.cleanup == "complete", (out.status, out.error_message)
+    assert out.status == ("timed_out" if mode == "detached_browser_hang" else "completed")
+    assert time.monotonic() - t0 < 10
+    _assert_not_running(child_pid)
+    assert out.owned_process_groups >= 2  # worker group + the detached browser group
+    assert out.leftover_processes == 0
+    spec = OwnershipSpec(profile_dir=str(tmp_path / "profiles" / "mic-edge"), started_epoch=0.0)
+    assert owned_processes(spec, set()) == []
+
+
+def test_supervisor_leaves_foreign_detached_process_alone(tmp_path, stub_module):
+    """Control: a detached process with no marker, no live chain and no MIC profile argument is
+    not ours -> untouched, and it does not count against cleanup either."""
+    sup = _supervisor(tmp_path, stub_module, grace=0.5)
+    out = _run(sup, "detached_browser_foreign")
+    child_pid = int((Path(out.run_dir) / "child.pid").read_text())
+    try:
+        assert out.status == "completed" and out.cleanup == "complete"
+        assert _proc_state(child_pid) not in (None, "Z")  # still running
+    finally:
+        os.kill(child_pid, 9)
+
+
+def test_owned_processes_rules(tmp_path):
+    """Ownership rules: exact marker, known group, live parent chain, MIC profile command line
+    (only when started after the run); the supervisor's own group is never owned."""
+    import subprocess
+
+    from mic.browser.runner import OwnershipSpec, owned_processes
+    sleep = "import time; time.sleep(30)"
+    env_a = {**os.environ, "MIC_WORKER_ATTEMPT_ID": "att-A"}
+    env_ab = {**os.environ, "MIC_WORKER_ATTEMPT_ID": "att-AB"}
+    clean = {k: v for k, v in os.environ.items() if k != "MIC_WORKER_ATTEMPT_ID"}
+    profile = str(tmp_path / "prof" / "mic-edge")
+    pa = subprocess.Popen([sys.executable, "-c", sleep], env=env_a, start_new_session=True)
+    pab = subprocess.Popen([sys.executable, "-c", sleep], env=env_ab, start_new_session=True)
+    same_group = subprocess.Popen([sys.executable, "-c", sleep], env=env_a)
+    # "worker" (own session) whose child detaches again (own session, no marker) = browser.
+    chain_code = (f"import subprocess, sys, time; p = subprocess.Popen([sys.executable, '-c', {sleep!r}],"
+                  " start_new_session=True); print(p.pid, flush=True); time.sleep(30)")
+    worker = subprocess.Popen([sys.executable, "-c", chain_code], env=clean, start_new_session=True,
+                              stdout=subprocess.PIPE, text=True)
+    browser_pid = int(worker.stdout.readline())
+    # Orphan-like "browser" on the MIC profile (no marker, parent is this test process but we
+    # do not list it as a root) and a look-alike on a sibling profile path.
+    prof_proc = subprocess.Popen([sys.executable, "-c", sleep, f"--user-data-dir={profile}"], env=clean,
+                                 start_new_session=True)
+    sibling = subprocess.Popen([sys.executable, "-c", sleep, f"--user-data-dir={profile}2"], env=clean,
+                               start_new_session=True)
+    try:
+        time.sleep(0.3)
+        pids = lambda spec, pg=None: {pid for pid, _g, _s in owned_processes(spec, pg or set())}  # noqa: E731
+        found = pids(OwnershipSpec(attempt_id="att-A"))
+        assert pa.pid in found and pab.pid not in found
+        assert same_group.pid not in found  # our own process group is excluded by design
+        assert pids(None, {os.getpgid(pab.pid)}) >= {pab.pid} and pa.pid not in pids(None, {os.getpgid(pab.pid)})
+        chain = pids(OwnershipSpec(root_pids={worker.pid}))
+        assert {worker.pid, browser_pid} <= chain and prof_proc.pid not in chain
+        by_profile = pids(OwnershipSpec(profile_dir=profile, started_epoch=time.time() - 30))
+        assert prof_proc.pid in by_profile and sibling.pid not in by_profile
+        # Started before the run -> not ours even on the same profile.
+        assert prof_proc.pid not in pids(OwnershipSpec(profile_dir=profile, started_epoch=time.time() + 60))
+    finally:
+        for p in (pa, pab, same_group, worker, prof_proc, sibling):
+            p.kill()
+            p.wait()
+        os.kill(browser_pid, 9)
 
 
 def test_supervisor_merges_task_and_deployment_deadline(tmp_path, stub_module, monkeypatch):

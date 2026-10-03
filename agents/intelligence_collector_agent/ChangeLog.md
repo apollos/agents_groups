@@ -48,6 +48,17 @@
   (8) 注入 Cookie 的 `expires` 截短到本地有效期，浏览器启动时清除过期/撤销凭据域名的 Cookie；
   (9) `interaction_mode: interactive` 真正实现：保持标签页、最多等 `human_wait_seconds`、重新观察同一 DOM、
   不消耗新页面尝试。MIC 测试 361 → 388，Agent 188 不变。
+- 2026-10-03 第二轮审核（30be694）4 项全部接受并修复（MIC 侧，Agent 接口不变）：
+  (1) 进程清理改为**整个进程树**：Playwright 以 detached 启动 Edge（独立进程组）且 Chromium 清空自身 environ，
+  监督者改按"已知进程组 / 存活父链后代 / `--user-data-dir=<MIC profile>` 且本轮启动 / 环境标记"四规则累计归属，
+  TERM/KILL 与收尾检查覆盖全部归属组，已用真实 Playwright + Edge 验证（驱动挂起时也能找到并回收整组）；
+  结果新增 `owned_process_groups` / `leftover_processes`。
+  (2) 正文读取返回后立即检查取消/截止；全部工作结束时、收尾（关浏览器）之后发布报告之前再做最终判定，
+  取消或越过硬时限的运行不再报告 `completed` / `usable`。
+  (3) 读取候选相关性闸门在模型批量 triage 之后再执行一次（幂等），批量 triage 不能把已降级的候选重新提升为 read。
+  (4) 撤销/过期凭据的 Cookie 清除按实际 Cookie domain 判定范围（含前导点与子域），逐条清除并复核实际数量。
+  同时统一了子进程测试对僵尸状态的预期（监督者自己的子进程必须被 wait；孙进程允许处于 Z，但不得仍在运行）。
+  MIC 测试 388 → 400，Agent 188 不变。
 
 ---
 

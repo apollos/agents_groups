@@ -35,6 +35,9 @@ PARENT_HEARTBEAT_SECONDS = 5.0
 # The worker plans to finish this long before the hard deadline (close browser, write
 # result). Bounded to a fraction of short deadlines so tests / tiny budgets still start.
 DEFAULT_WRAPUP_SECONDS = 10.0
+# How often the supervisor rescans /proc for processes carrying this attempt's marker
+# (discovers the detached browser group while the worker is still alive).
+TREE_TRACK_SECONDS = 2.0
 
 STATUS_COMPLETED = "completed"
 STATUS_FAILED = "failed"
@@ -60,6 +63,10 @@ class SupervisedOutcome:
     cleanup: str = "complete"
     worker_pid: int | None = None
     gateway_requests_sent: int | None = None
+    # Process-tree diagnostics: groups owned by this attempt (worker + detached browser
+    # group(s)) and processes still alive when cleanup gave up (0 when complete).
+    owned_process_groups: int = 0
+    leftover_processes: int = 0
 
     @property
     def ok(self) -> bool:
@@ -119,6 +126,141 @@ def effective_run_seconds(deadline_seconds: float, task_profile: dict[str, Any] 
     return effective, sources
 
 
+def _proc_stat(pid: int | str) -> tuple[str, int, int, int] | None:
+    """(state, ppid, pgrp, starttime_ticks) from ``/proc/<pid>/stat``; None when gone."""
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8", errors="replace") as fh:
+            stat = fh.read()
+    except OSError:
+        return None
+    # "pid (comm) state ppid pgrp ..." - comm may contain spaces/parens. After the comm the
+    # fields are 1-based 3.. so starttime (field 22) is rest[19].
+    rest = stat.rsplit(")", 1)[-1].split()
+    if len(rest) < 20:
+        return None
+    try:
+        return rest[0], int(rest[1]), int(rest[2]), int(rest[19])
+    except ValueError:
+        return None
+
+
+def _environ_has(pid: int | str, entry: bytes) -> bool:
+    """True when ``/proc/<pid>/environ`` contains exactly ``entry`` (``KEY=value``)."""
+    try:
+        with open(f"/proc/{pid}/environ", "rb") as fh:
+            return entry in fh.read().split(b"\0")
+    except OSError:
+        return False
+
+
+def _cmdline_has_profile(pid: int | str, profile_arg: bytes) -> bool:
+    """True when the process command line carries ``--user-data-dir=<profile>`` as a whole
+    argument. Chromium rewrites its argv area for the process title (arguments become
+    space separated), so match on the raw bytes with a NUL / space / end terminator."""
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            raw = fh.read()
+    except OSError:
+        return False
+    start = raw.find(profile_arg)
+    if start < 0:
+        return False
+    end = start + len(profile_arg)
+    return end == len(raw) or raw[end:end + 1] in (b"\0", b" ")
+
+
+def _boot_epoch() -> float | None:
+    try:
+        with open("/proc/stat", encoding="utf-8") as fh:
+            for line in fh:
+                if line.startswith("btime "):
+                    return float(line.split()[1])
+    except (OSError, ValueError):
+        pass
+    return None
+
+
+@dataclass
+class OwnershipSpec:
+    """What identifies a process as belonging to one supervised attempt."""
+
+    attempt_id: str | None = None          # MIC_WORKER_ATTEMPT_ID marker (python / node helpers)
+    root_pids: set[int] = field(default_factory=set)   # worker pid(s): descendants are owned
+    profile_dir: str | None = None         # dedicated browser profile (``--user-data-dir=``)
+    started_epoch: float | None = None     # only browsers started after this are ours
+
+
+def owned_processes(spec: OwnershipSpec | str | None, pgids: set[int]) -> list[tuple[int, int, str]]:
+    """Every live (non-zombie) process that belongs to this attempt: ``(pid, pgid, state)``.
+
+    Playwright spawns the browser ``detached`` (own session / process group) and Chromium
+    wipes its own ``/proc/<pid>/environ`` (observed: every ``msedge`` process shows an empty
+    environ), so neither the worker's group nor an environment marker can find Edge. A
+    process is therefore owned when **any** of these holds:
+
+    1. it is in a process group already known to be owned (worker group, browser group);
+    2. it descends from an owned process through the live parent chain
+       (worker -> node driver -> browser main; renderers share the browser's group);
+    3. its command line carries ``--user-data-dir=<this deployment's MIC profile>`` and it
+       started after the run began (orphaned browser whose parent chain is already gone -
+       the profile is exclusive to one MIC run at a time);
+    4. its environment carries exactly ``MIC_WORKER_ATTEMPT_ID=<attempt>`` (Python / Node
+       helpers; cheap, kept for processes that neither chain nor command line identify).
+
+    The supervisor's own group is never owned. Zombies are ignored (no resources, reaped by
+    whoever inherits them).
+    """
+    if not isinstance(spec, OwnershipSpec):
+        spec = OwnershipSpec(attempt_id=spec)
+    marker = f"MIC_WORKER_ATTEMPT_ID={spec.attempt_id}".encode() if spec.attempt_id else None
+    profile_arg = f"--user-data-dir={spec.profile_dir}".encode() if spec.profile_dir else None
+    me, my_pgid, uid = os.getpid(), os.getpgid(0), os.getuid()
+    try:
+        entries = [int(e.name) for e in os.scandir("/proc") if e.name.isdigit()]
+    except OSError:
+        return []
+    table: dict[int, tuple[str, int, int, int]] = {}
+    for pid in entries:
+        if pid == me:
+            continue
+        st = _proc_stat(pid)
+        if st is None or st[0] == "Z" or st[2] == my_pgid:
+            continue
+        table[pid] = st
+    min_ticks: int | None = None
+    if profile_arg is not None and spec.started_epoch is not None:
+        boot = _boot_epoch()
+        if boot is not None:
+            min_ticks = int((spec.started_epoch - 1.0 - boot) * os.sysconf("SC_CLK_TCK"))
+
+    owned: set[int] = set()
+    for pid, (_state, _ppid, pgrp, start_ticks) in table.items():
+        if pgrp in pgids or pid in spec.root_pids:
+            owned.add(pid)
+            continue
+        if marker is None and profile_arg is None:
+            continue
+        try:
+            if os.stat(f"/proc/{pid}").st_uid != uid:
+                continue
+        except OSError:
+            continue
+        if profile_arg is not None and (min_ticks is None or start_ticks >= min_ticks) \
+                and _cmdline_has_profile(pid, profile_arg):
+            owned.add(pid)
+        elif marker is not None and _environ_has(pid, marker):
+            owned.add(pid)
+    # Rule 2: propagate down the live parent chain until nothing new is found.
+    changed = True
+    while changed:
+        changed = False
+        for pid, (_state, ppid, _pgrp, _st) in table.items():
+            if pid not in owned and ppid in owned:
+                owned.add(pid)
+                changed = True
+    return [(pid, table[pid][2], table[pid][0]) for pid in sorted(owned)]
+
+
 def process_group_alive(pgid: int | None) -> bool:
     """True while any process of the owned group still exists (zombies excluded)."""
     if pgid is None:
@@ -127,17 +269,8 @@ def process_group_alive(pgid: int | None) -> bool:
         for entry in os.scandir("/proc"):
             if not entry.name.isdigit():
                 continue
-            try:
-                with open(f"/proc/{entry.name}/stat", encoding="utf-8", errors="replace") as fh:
-                    stat = fh.read()
-            except OSError:
-                continue
-            # "pid (comm) state ppid pgrp ..." - comm may contain spaces/parens.
-            rest = stat.rsplit(")", 1)[-1].split()
-            if len(rest) < 3:
-                continue
-            state, pgrp = rest[0], rest[2]
-            if pgrp == str(pgid) and state != "Z":
+            st = _proc_stat(entry.name)
+            if st is not None and st[2] == pgid and st[0] != "Z":
                 return True
         return False
     except OSError:
@@ -148,6 +281,73 @@ def process_group_alive(pgid: int | None) -> bool:
             return False
         except PermissionError:
             return True
+
+
+def profile_dir_for(config_dir: str | None, env: dict[str, str]) -> str | None:
+    """The dedicated browser profile the worker will use (same resolution as the session),
+    or None when the browser route is not configured - then rule 3 is simply unavailable."""
+    try:
+        from mic.browser.config import resolve_profile_dir
+        from mic.config import load_config
+        # Not gated on ``enabled``: only a browser started *after* this run on exactly this
+        # profile can match, and that is a MIC browser whatever the flag says.
+        return str(resolve_profile_dir(load_config(config_dir).browser_runtime, env))
+    except Exception:  # noqa: BLE001 - the worker reports config problems itself
+        return None
+
+
+class _OwnedTree:
+    """Process groups and processes that belong to one attempt (see ``owned_processes``)."""
+
+    def __init__(self, spec: OwnershipSpec, worker_pgid: int | None):
+        self.spec = spec
+        self.pgids: set[int] = {worker_pgid} if worker_pgid is not None else set()
+        self.leftover = 0
+
+    def refresh(self) -> list[tuple[int, int, str]]:
+        """Scan once; remember every group an owned process lives in (groups outlive the
+        parent chain, so a browser seen once stays tracked after the worker is gone)."""
+        procs = owned_processes(self.spec, self.pgids)
+        my_pgid = os.getpgid(0)
+        for _pid, pgrp, _state in procs:
+            if pgrp != my_pgid and pgrp > 0:
+                self.pgids.add(pgrp)
+        self.leftover = len(procs)
+        return procs
+
+    def alive(self) -> bool:
+        return bool(self.refresh())
+
+    def wait_gone(self, seconds: float, poll: float = 0.1) -> bool:
+        deadline = time.monotonic() + max(0.0, seconds)
+        while True:
+            if not self.alive():
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(poll)
+
+    def signal(self, proc: subprocess.Popen | None, sig: int) -> None:
+        """Signal every owned group plus any marked process outside the known groups."""
+        procs = self.refresh()
+        for pgid in list(self.pgids):
+            try:
+                os.killpg(pgid, sig)
+            except ProcessLookupError:
+                pass
+            except PermissionError:  # pragma: no cover - foreign process reused the id
+                self.pgids.discard(pgid)
+        for pid, pgrp, _state in procs:
+            if pgrp not in self.pgids:
+                try:
+                    os.kill(pid, sig)
+                except (ProcessLookupError, PermissionError):
+                    pass
+        if proc is not None and not self.pgids and proc.poll() is None:
+            try:
+                proc.send_signal(sig)
+            except ProcessLookupError:
+                pass
 
 
 class RunSupervisor:
@@ -229,6 +429,13 @@ class RunSupervisor:
 
         stop_reason: str | None = None
         last_hb = time.monotonic()
+        # Owned process tree: the worker's group (start_new_session) plus every group found
+        # carrying this attempt's marker while it runs (the detached browser and its helpers).
+        tree = _OwnedTree(OwnershipSpec(attempt_id=attempt_id, root_pids={proc.pid},
+                                        profile_dir=profile_dir_for(config_dir, env),
+                                        started_epoch=started_epoch),
+                          self._owned_pgid(proc))
+        last_track = 0.0
         try:
             while True:
                 rc = proc.poll()
@@ -249,18 +456,20 @@ class RunSupervisor:
                         except Exception:  # noqa: BLE001 - lease renewal must not kill supervision
                             pass
                     last_hb = now
+                if now - last_track >= TREE_TRACK_SECONDS:
+                    tree.refresh()
+                    last_track = now
                 time.sleep(poll_seconds)
 
-            pgid = self._owned_pgid(proc)
             if stop_reason is not None:
                 write_json_atomic(cancel_path, {"reason": stop_reason, "at": time.time()})
-                cleanup = self._terminate(proc, pgid)
+                cleanup = self._terminate(proc, tree)
             else:
                 proc.wait()
-                # The main process exiting is not proof the group is gone (review: a child
+                # The main process exiting is not proof the tree is gone (review: a child
                 # ignoring TERM survived while the report said "complete"). Reap descendants
                 # the worker left behind before declaring the profile free.
-                cleanup = self._reap_group(proc, pgid)
+                cleanup = self._reap_tree(tree)
         finally:
             stderr_file.close()
             stdout_file.close()
@@ -271,14 +480,17 @@ class RunSupervisor:
         outcome = SupervisedOutcome(status=STATUS_FAILED, attempt_id=attempt_id,
                                     run_dir=str(run_dir), exit_code=proc.returncode,
                                     stderr_tail=stderr_tail, elapsed_seconds=round(elapsed, 2),
-                                    worker_pid=proc.pid, cleanup=cleanup)
+                                    worker_pid=proc.pid, cleanup=cleanup,
+                                    owned_process_groups=len(tree.pgids),
+                                    leftover_processes=tree.leftover)
         if payload is not None:
             outcome.budget_used = payload.get("budget_used") or {}
             outcome.gateway_requests_sent = payload.get("gateway_requests_sent")
         if cleanup != "complete":
             outcome.status = STATUS_CLEANUP_INCOMPLETE
             outcome.error_code = STATUS_CLEANUP_INCOMPLETE
-            outcome.error_message = ("worker process group did not exit after TERM/KILL; "
+            outcome.error_message = (f"{tree.leftover} owned process(es) across {len(tree.pgids)} group(s) "
+                                     "still alive after TERM/KILL (worker and/or detached browser); "
                                      "do not retry on the same profile automatically")
             outcome.report = payload.get("report") if payload and isinstance(payload.get("report"), dict) \
                 else None
@@ -343,54 +555,35 @@ class RunSupervisor:
             return None
         return pgid
 
-    def _terminate(self, proc: subprocess.Popen, pgid: int | None) -> str:
-        """TERM the owned process group, then KILL after grace. Returns cleanup state.
+    def _terminate(self, proc: subprocess.Popen, tree: _OwnedTree) -> str:
+        """TERM the whole owned tree, then KILL after grace. Returns cleanup state.
 
-        "complete" requires the *whole* group to be gone, not just the main process.
+        "complete" requires every owned process to be gone - worker group *and* the
+        browser's detached group(s) - not just the main process.
         """
-        self._signal(proc, pgid, signal.SIGTERM)
-        if self._wait(proc, self.grace_seconds) and self._wait_group(pgid, self.grace_seconds):
+        tree.signal(proc, signal.SIGTERM)
+        if self._wait(proc, self.grace_seconds) and tree.wait_gone(self.grace_seconds):
             return "complete"
-        self._signal(proc, pgid, signal.SIGKILL)
-        if self._wait(proc, self.grace_seconds) and self._wait_group(pgid, self.grace_seconds):
+        tree.signal(proc, signal.SIGKILL)
+        if self._wait(proc, self.grace_seconds) and tree.wait_gone(self.grace_seconds):
             return "complete"
         return STATUS_CLEANUP_INCOMPLETE
 
-    def _reap_group(self, proc: subprocess.Popen, pgid: int | None) -> str:
+    def _reap_tree(self, tree: _OwnedTree) -> str:
         """After a normal worker exit: descendants (browser, helpers) must be gone too."""
-        if not process_group_alive(pgid):
+        if not tree.alive():
             return "complete"
         # Give an orderly shutdown a short moment (the worker closed the browser; Chromium
         # helpers may still be exiting), then escalate exactly like a timeout.
-        if self._wait_group(pgid, min(2.0, self.grace_seconds)):
+        if tree.wait_gone(min(2.0, self.grace_seconds)):
             return "complete"
-        self._signal(proc, pgid, signal.SIGTERM)
-        if self._wait_group(pgid, self.grace_seconds):
+        tree.signal(None, signal.SIGTERM)
+        if tree.wait_gone(self.grace_seconds):
             return "complete"
-        self._signal(proc, pgid, signal.SIGKILL)
-        if self._wait_group(pgid, self.grace_seconds):
+        tree.signal(None, signal.SIGKILL)
+        if tree.wait_gone(self.grace_seconds):
             return "complete"
         return STATUS_CLEANUP_INCOMPLETE
-
-    @staticmethod
-    def _wait_group(pgid: int | None, seconds: float, poll: float = 0.1) -> bool:
-        deadline = time.monotonic() + max(0.0, seconds)
-        while True:
-            if not process_group_alive(pgid):
-                return True
-            if time.monotonic() >= deadline:
-                return False
-            time.sleep(poll)
-
-    @staticmethod
-    def _signal(proc: subprocess.Popen, pgid: int | None, sig: int) -> None:
-        try:
-            if pgid is not None:
-                os.killpg(pgid, sig)
-            elif proc.poll() is None:
-                proc.send_signal(sig)
-        except ProcessLookupError:
-            pass
 
     @staticmethod
     def _wait(proc: subprocess.Popen, seconds: float) -> bool:

@@ -47,6 +47,19 @@ def gui_available(env: dict[str, str] | None = None) -> bool:
     return bool(env.get("DISPLAY") or env.get("WAYLAND_DISPLAY"))
 
 
+def cookie_domain_within_any(cookie_domain: str, allowed: list[str]) -> bool:
+    """True when a cookie's domain attribute (``host``, ``.host`` or ``sub.host``) lies within
+    one of the authorised domains - the same scope the import validation applied."""
+    host = cookie_domain.lower().lstrip(".")
+    if not host:
+        return False
+    for a in allowed:
+        a = str(a).lower().lstrip(".")
+        if a and (host == a or host.endswith("." + a)):
+            return True
+    return False
+
+
 class PlaywrightBackend:
     """Real backend: sync Playwright persistent context on the Edge channel."""
 
@@ -278,19 +291,40 @@ class BrowserSession:
         self.credential_versions[credential_id] = version
 
     def clear_cookies_for_domains(self, domains: list[str]) -> int:
-        """Remove cookies whose domain is within one of ``domains`` (revocation)."""
+        """Remove every cookie whose *actual* domain falls within one of ``domains``.
+
+        Playwright's ``clear_cookies(domain=str)`` is an exact match, so ``news.example.com``
+        would leave legitimately imported ``.news.example.com`` / ``a.news.example.com``
+        cookies behind (review). We therefore enumerate the profile's cookies, select those
+        within scope (host-only or domain cookies, any subdomain) and clear each by
+        name/domain/path. Returns the number of cookies removed; values are never logged.
+        """
         ctx = self._require_context()
-        removed = 0
         try:
-            for domain in domains:
-                ctx.clear_cookies(domain=domain)
-                removed += 1
+            cookies = ctx.cookies()
+        except Exception:  # noqa: BLE001 - fall back to the coarse clear below
+            cookies = None
+        if cookies is None:
+            ctx.clear_cookies()
+            return 0
+        targets = [c for c in cookies if cookie_domain_within_any(str(c.get("domain", "")), domains)]
+        if not targets:
+            return 0
+        try:
+            for c in targets:
+                ctx.clear_cookies(name=c.get("name"), domain=c.get("domain"), path=c.get("path"))
         except TypeError:
             # Older Playwright without filter support: clear all cookies in the
             # dedicated profile (never touches the user's daily browser).
             ctx.clear_cookies()
-            removed = len(domains)
-        return removed
+            return len(targets)
+        # Verify instead of trusting the call: count what is actually gone.
+        try:
+            remaining = ctx.cookies()
+        except Exception:  # noqa: BLE001
+            return len(targets)
+        left = sum(1 for c in remaining if cookie_domain_within_any(str(c.get("domain", "")), domains))
+        return max(0, len(targets) - left)
 
     def auth_context(self) -> dict[str, Any]:
         mode = "imported_cookie" if self.credential_versions else "profile"

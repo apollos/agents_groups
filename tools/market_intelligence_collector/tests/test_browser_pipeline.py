@@ -232,6 +232,108 @@ def test_cancel_during_body_read_sends_no_model_request(strict_cfg, monkeypatch)
     assert report["summary"]["links_model_analyzed"] == 0
 
 
+def test_cancel_during_last_failing_read_is_not_completed(strict_cfg, monkeypatch):
+    """Review (2nd round): a cancel arriving during the *last* read, which then fails and
+    ``continue``s, used to slip past every check and the run was reported completed."""
+    loader = FixtureLoader(default=_echo(P1))
+    pipe = _pipeline(strict_cfg, loader, monkeypatch)  # HTTP = challenge -> browser read
+    flag = {"cancel": False}
+
+    class CancelAndFail(FakeBrowserSession):
+        def navigate(self, page, url, timeout_seconds):
+            flag["cancel"] = True
+            return super().navigate(page, url, timeout_seconds)
+
+    # Every body is a challenge page -> each read fails.
+    session = CancelAndFail(pages={u: CAPTCHA_HTML for u in _session_for_hits().pages})
+    report = pipe.collect_intelligence("company_300750", {**TASK, "budget_profile": {
+        **TASK["budget_profile"], "max_links_to_read": 1}}, run_options={
+        "cancel_check": lambda: flag["cancel"], "browser_factory": lambda ctx: session})
+    diag = report["collection_diagnostics"]
+    if not session.navigations:
+        pytest.skip("triage selected no links to read under mock scoring")
+    assert len(session.navigations) == 1
+    assert diag["execution_status"] == "cancelled" and diag["usable"] is False
+    assert report["summary"]["links_read"] == 0
+
+
+def test_deadline_crossed_during_wrapup_is_timed_out_not_usable(strict_cfg, monkeypatch):
+    """Review (2nd round): work finished inside the budget but closing the browser pushed the
+    run past the hard limit (300 s budget, 301 s elapsed) -> not completed, not usable."""
+    clock = FakeClock()
+    loader = FixtureLoader(default=_echo(P1), clock=clock)
+    pipe = _pipeline(strict_cfg, loader, monkeypatch)
+
+    class SlowClose(FakeBrowserSession):
+        def close(self):
+            clock.advance(301)  # teardown takes longer than the whole budget
+            return super().close()
+
+    session = SlowClose(pages=_session_for_hits().pages)
+    report = pipe.collect_intelligence("company_300750", TASK, run_options={
+        "deadline_seconds": 300, "clock": clock, "browser_factory": lambda ctx: session})
+    diag = report["collection_diagnostics"]
+    assert diag["execution_status"] == "timed_out" and diag["stop_reason"] == "run_deadline"
+    assert diag["usable"] is False
+    assert diag["cleanup"]["cleanup"] == "complete"
+    run = pipe.repo.get_search_run(report["search_run_id"]) if hasattr(pipe.repo, "get_search_run") else None
+    if run is not None:
+        assert run["status"] == "timed_out"
+
+
+def test_cancel_during_wrapup_is_reported_cancelled(strict_cfg, monkeypatch):
+    loader = FixtureLoader(default=_echo(P1))
+    pipe = _pipeline(strict_cfg, loader, monkeypatch)
+    flag = {"cancel": False}
+
+    class CancelOnClose(FakeBrowserSession):
+        def close(self):
+            flag["cancel"] = True
+            return super().close()
+
+    session = CancelOnClose(pages=_session_for_hits().pages)
+    report = pipe.collect_intelligence("company_300750", TASK, run_options={
+        "cancel_check": lambda: flag["cancel"], "browser_factory": lambda ctx: session})
+    diag = report["collection_diagnostics"]
+    assert diag["execution_status"] == "cancelled" and diag["usable"] is False
+
+
+def test_batch_triage_cannot_repromote_gated_hit(strict_cfg, monkeypatch):
+    """Review (2nd round): the model batch triage ran after the rule gate and re-promoted a
+    ``content_form_ok=false`` hit (``/tag/catl``) to read. The gate is final now."""
+    import mic.pipeline as pipeline_mod
+    from mic.pipeline import READ_GATE_SIGNAL_PREFIX
+    loader = FixtureLoader(default=_echo(P1))
+    pipe = _pipeline(strict_cfg, loader, monkeypatch)
+    real_gate = pipeline_mod.Pipeline._apply_read_gate
+    gated: list[str] = []
+
+    def gate_all_as_tag_pages(hit, tri, stats):
+        rel = (hit.discovery or {}).setdefault("relevance", {})
+        rel["content_form_ok"] = False  # every SERP card is a tag / listing page
+        out = real_gate(hit, tri, stats)
+        if out.triage_decision == "link_record_only" and f"{READ_GATE_SIGNAL_PREFIX}content_form" in out.matched_signals:
+            gated.append(hit.url)
+        return out
+
+    def repromote_everything(self, call_planner, triaged, stats):
+        for _lid, _h, t in triaged:
+            t.triage_decision, t.need_model, t.read_priority = "read", True, 200.0
+        stats.batch_triage_calls += 1
+
+    monkeypatch.setattr(pipeline_mod.Pipeline, "_apply_read_gate", staticmethod(gate_all_as_tag_pages))
+    monkeypatch.setattr(pipeline_mod.Pipeline, "_batch_triage", repromote_everything)
+    session = _session_for_hits()
+    report = pipe.collect_intelligence("company_300750", TASK, run_options={
+        "deadline_seconds": 300, "browser_factory": lambda ctx: session})
+    assert gated, "gate never demoted anything - test setup broken"
+    assert session.navigations == []  # nothing read despite the model saying 'read'
+    assert report["summary"]["links_selected_for_read"] == 0
+    assert report["summary"]["read_gate_demoted"].get("content_form", 0) == len(set(gated))
+    links = pipe.repo.source_links_for_run(report["search_run_id"], limit=50)
+    assert links and all(link["triage_decision"] != "read" for link in links)
+
+
 def test_model_response_after_deadline_is_timed_out_and_not_persisted(strict_cfg, monkeypatch):
     """Review R3: the last model call returning past the deadline must not yield 'completed'."""
     from mic.modeling.adapter import ModelAdapter

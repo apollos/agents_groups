@@ -244,13 +244,23 @@ mic reader probe --url https://... --transport http|browser|http_then_browser [-
 - 一次采集 = 一个受监督子进程（`mic.browser.runner.RunSupervisor` → `python -m mic.browser.worker`）。
   **硬时限** = min(Agent 超时、任务 `budget_profile.max_run_seconds`、部署 `browser_runtime.limits.max_run_seconds`)，
   由监督者在 worker 之外强制执行；worker 拿到的软时限再减去收尾余量（`wrapup_seconds`，默认 10 s、不超过硬时限 10%），
-  用于写 `result.json`、关浏览器。超时/取消先协作停止，再 TERM，5 秒后 KILL **整个进程组**；worker 正常退出后同样检查
-  进程组内是否残留 Edge/子进程并回收，残留则报告 `cleanup_incomplete`。worker 退出码非 0 时即使写出了 `completed`
+  用于写 `result.json`、关浏览器。超时/取消先协作停止，再 TERM，5 秒后 KILL **本轮拥有的整个进程树**；worker 正常退出后
+  同样检查并回收残留，残留则报告 `cleanup_incomplete`。worker 退出码非 0 时即使写出了 `completed`
   结果也记为 `failed`（`worker_exit_nonzero`），报告保留供诊断。
+  进程树的归属判定（`mic.browser.runner.owned_processes`）不依赖环境变量：Playwright 在 Linux 上以 `detached` 方式启动
+  浏览器（Edge 自成一个会话/进程组，不在 worker 的进程组里），而 Chromium 会清空自己的 `/proc/<pid>/environ`，所以
+  监督者按四条规则累计：已知归属进程组的成员；沿存活父子链从 worker 向下的后代（worker → node 驱动 → Edge 主进程，
+  渲染/GPU 进程与主进程同组）；命令行带 `--user-data-dir=<本部署 MIC profile>` 且在本轮开始之后启动的进程（父链已断的
+  孤儿浏览器；profile 同一时间只属于一轮）；环境中带本轮 `MIC_WORKER_ATTEMPT_ID` 的 Python/Node 辅助进程。运行期间每
+  2 秒刷新一次，发现过的进程组在父链消失后仍被跟踪。结果里 `owned_process_groups` / `leftover_processes` 给出计数。
+  该判定已用真实 Playwright 1.63 + 系统 Edge 验证（驱动被挂起时仅凭 profile 规则即可找到整组 9 个 `msedge` 进程）。
   本轮产物（`request.json` / `result.json` / 心跳 / `logs/run_<id>.log`）都在 0700 的 attempt 运行目录下；
   未显式设置 `MIC_LOG_DIR` 时，子进程日志不会写进源码树的 `logs/`。
 - 取消与截止在 worker 内部贯穿到底：`RunBudget` 轮询外部取消信号（cancel 文件），每次搜索页/正文/模型请求发送前后、
-  批量 triage 前后、仲裁前后、以及持久化结构化结果之前都检查；超时后到达的模型响应不再入库，运行记为 `timed_out`。
+  批量 triage 前后、仲裁前后、以及持久化结构化结果之前都检查；正文读取返回后立即检查（读取失败分支也不例外）；
+  全部工作结束时、以及关闭浏览器等收尾完成后、发布报告之前再做一次最终判定：此时已取消或已越过硬时限的运行记为
+  `cancelled` / `timed_out`，`usable=false`（例如预算 300 s、收尾后用时 301 s 不再报告为 completed）。
+  超时后到达的模型响应不再入库。
   PDF 视觉转写走同一 Gateway 预算（`max_gateway_requests`）与剩余时间，不再绕过。
 - 模型调用上限 = min(部署 `limits.max_model_calls`、任务 `budget_profile.max_model_calls`)，在构造调用计划器之前算好。
 - 每条命中的 `provider` 标为 `browser:bing` / `browser:baidu` / `browser:google`（命中所在引擎），`source_link.metadata.discovery`
@@ -267,12 +277,15 @@ mic reader probe --url https://... --transport http|browser|http_then_browser [-
   为否、或既未命中目标身份又未命中档案中的任何关联公司的候选，从 `read` 降为 `link_record_only`
   （`matched_signals` 带 `read_gate:<原因>`，报告 `summary.read_gate_demoted` 计数）；只命中客户/供应商/竞争对手等
   关联公司而未命中目标本身的候选仍可读，但标记 `related_entity_only` 并排在目标命中候选之后，不会挤占读取名额。
-  规则评分与 triage 本身不变。
+  规则评分与 triage 本身不变；闸门在规则 triage 之后和模型批量 triage 之后各执行一次（幂等），最终决定以闸门为准，
+  模型批量 triage 不能把已降级的候选重新提升为 `read`。
 - 浏览器路线默认不复用历史分析（`cache.reuse_analysis: false`），避免把旧结果当作本次验收。
 - Cookie 值、profile 内容、凭据文件绝不进入日志、CLI 输出、异常、模型提示词、业务 SQLite、运行报告或 Git。
   注入专用 profile 的每个 Cookie 的 `expires` 会被截短到登记的本地有效期（min(用户 `max_age_seconds`，真实到期)，
   会话 Cookie 也变为有界 Cookie），且每次浏览器启动时先清除已过期/已撤销凭据域名下的 Cookie
-  （`collection_diagnostics.credential_sweep` 只记录域名数量），避免持久 profile 里的凭据活得比登记项更久。
+  （`collection_diagnostics.credential_sweep` 记录域名数与实际清除的 Cookie 数），避免持久 profile 里的凭据活得比登记项更久。
+  清除按 Cookie 的实际 domain 属性判定授权范围（`host`、`.host`、`sub.host` 都在 `host` 范围内），逐条按 name/domain/path
+  清除并复核剩余数量，而不是用 Playwright 的精确字符串匹配 `clear_cookies(domain=...)`（那会漏掉带前导点和子域的 Cookie）。
 
 引擎适配状态（`enabled_engines: [bing, baidu, google]`）：
 - **Bing**：选择器已在本机真实 DOM 上验证（`bing-dom-20261001`）。

@@ -229,3 +229,74 @@ def test_fetch_result_diagnostics_never_include_cookie_or_page_content():
     assert "html" not in d and "content" not in d
     assert "SECRET" not in json.dumps(d)
     assert d["auth_mode"] == "imported_cookie" and d["authenticated_retry"] is True
+
+
+# --- Review (2nd round): revocation sweep matches real cookie domains, not an exact string ------
+
+class _FakeCtx:
+    """Playwright-like context: ``clear_cookies(domain=str)`` is an exact match, as in Playwright."""
+
+    def __init__(self, cookies):
+        self._cookies = list(cookies)
+        self.calls: list[dict] = []
+
+    def cookies(self):
+        return [dict(c) for c in self._cookies]
+
+    def clear_cookies(self, name=None, domain=None, path=None):
+        self.calls.append({"name": name, "domain": domain, "path": path})
+        self._cookies = [c for c in self._cookies
+                         if not ((name is None or c["name"] == name) and (domain is None or c["domain"] == domain)
+                                 and (path is None or c["path"] == path))]
+
+
+def _session_with(ctx, tmp_path):
+    from mic.browser.session import BrowserSession
+    s = BrowserSession(runtime={}, run_id="r", attempt_id="a", profile_dir=tmp_path / "p")
+    s._context = ctx
+    return s
+
+
+def test_cookie_domain_scope_helper():
+    from mic.browser.session import cookie_domain_within_any
+    for d in ("news.example.com", ".news.example.com", "a.news.example.com", ".A.News.Example.com"):
+        assert cookie_domain_within_any(d, ALLOWED), d
+    for d in ("example.com", "notnews.example.com", "news.example.com.evil", ""):
+        assert not cookie_domain_within_any(d, ALLOWED), d
+
+
+def test_clear_cookies_for_domains_removes_dotted_and_subdomain_cookies(tmp_path):
+    ctx = _FakeCtx([
+        {"name": "sid", "value": "V1", "domain": "news.example.com", "path": "/"},
+        {"name": "sid2", "value": "V2", "domain": ".news.example.com", "path": "/"},
+        {"name": "sub", "value": "V3", "domain": "a.news.example.com", "path": "/x"},
+        {"name": "keep", "value": "V4", "domain": "other.example.org", "path": "/"},
+        {"name": "keep2", "value": "V5", "domain": "example.com", "path": "/"},
+    ])
+    removed = _session_with(ctx, tmp_path).clear_cookies_for_domains(ALLOWED)
+    assert removed == 3
+    assert sorted(c["name"] for c in ctx.cookies()) == ["keep", "keep2"]
+    # cleared one by one with the cookie's own domain/path, never a blanket clear
+    assert all(call["name"] and call["domain"] and call["path"] for call in ctx.calls)
+    assert {c["domain"] for c in ctx.calls} == {"news.example.com", ".news.example.com", "a.news.example.com"}
+
+
+def test_clear_cookies_for_domains_reports_actual_removals(tmp_path):
+    class Stubborn(_FakeCtx):
+        def clear_cookies(self, name=None, domain=None, path=None):
+            self.calls.append({"name": name, "domain": domain, "path": path})  # nothing removed
+
+    ctx = Stubborn([{"name": "sid", "value": "V", "domain": ".news.example.com", "path": "/"}])
+    assert _session_with(ctx, tmp_path).clear_cookies_for_domains(ALLOWED) == 0  # not a fake "1"
+    assert _session_with(_FakeCtx([]), tmp_path).clear_cookies_for_domains(ALLOWED) == 0
+
+
+def test_clear_cookies_for_domains_falls_back_on_old_playwright(tmp_path):
+    class Legacy(_FakeCtx):
+        def clear_cookies(self):  # no filter support
+            self.calls.append({"all": True})
+            self._cookies = []
+
+    ctx = Legacy([{"name": "sid", "value": "V", "domain": ".news.example.com", "path": "/"}])
+    assert _session_with(ctx, tmp_path).clear_cookies_for_domains(ALLOWED) == 1
+    assert ctx.cookies() == []
