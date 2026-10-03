@@ -249,14 +249,17 @@ mic reader probe --url https://... --transport http|browser|http_then_browser [-
   结果也记为 `failed`（`worker_exit_nonzero`），报告保留供诊断。
   进程树的归属判定（`mic.browser.runner.owned_processes`）只认**本轮自己的身份证据**：Playwright 在 Linux 上以
   `detached` 方式启动浏览器（Edge 自成一个会话/进程组，不在 worker 的进程组里），而 Chromium 会清空自己的
-  `/proc/<pid>/environ`，所以 worker 在浏览器启动成功后立刻把它的后代进程（pid / pgid / `/proc` 启动时刻）登记到本轮运行
-  目录下的 `browser_processes.json`（0600，带 `attempt_id`），监督者据此归属——pid 被复用（启动时刻不符）或登记属于别
-  的 attempt 都不算。再加上：已知归属进程组的成员；沿存活父子链从 worker 向下的后代；环境中带本轮
-  `MIC_WORKER_ATTEMPT_ID` 的 Python/Node 辅助进程。**profile 路径不是归属依据**：同一 profile 上别的进程只计入
+  `/proc/<pid>/environ`，所以主证据是 worker 启动浏览器时加在命令行上的 Chromium 开关
+  `--mic-attempt-id=<attempt_id>`（Chromium 忽略未知开关但保留在命令行里；进程一经 `exec` 就带着它，不依赖任何事后登记，
+  驱动在启动握手期间崩溃也能认出留下的浏览器）。第二道证据是 worker 在 `launch` 返回后（失败路径也尽力）把后代进程
+  （pid / pgid / `/proc` 启动时刻）登记到本轮运行目录下的 `browser_processes.json`（0600，带 `attempt_id`）——pid 被复用
+  （启动时刻不符）或登记属于别的 attempt 都不算。再加上：已知归属进程组的成员；沿存活父子链从 worker 向下的后代；环境中
+  带本轮 `MIC_WORKER_ATTEMPT_ID` 的 Python/Node 辅助进程。**profile 路径不是归属依据**：同一 profile 上别的进程只计入
   `foreign_profile_processes` 供诊断，所以争抢同一 profile 失败（`profile_busy`）的一轮绝不会碰持锁一轮的浏览器。运行
   期间每 2 秒刷新一次，发现过的进程组在父链消失后仍被跟踪；结果里 `owned_process_groups` / `leftover_processes` 给出计数。
-  该判定已用真实 Playwright 1.63 + 系统 Edge 验证（worker 位置登记到整组 9 个 `msedge` 进程，驱动被挂起时仅凭登记即可
-  识别并回收，无残留）。
+  `/proc` 读不到时不会把"没看到"当成"都没了"：收尾复核失败即报告 `cleanup=unverified` → `cleanup_incomplete`。
+  该判定已用真实 Playwright 1.63 + 系统 Edge 验证（仅凭命令行开关即可归属整组 9 个 `msedge` + crashpad 辅助进程；驱动被
+  SIGKILL 的真实启动器故障下，残留的替身浏览器仅凭开关被认出并回收，无残留）。
   本轮产物（`request.json` / `result.json` / 心跳 / `logs/run_<id>.log`）都在 0700 的 attempt 运行目录下；
   未显式设置 `MIC_LOG_DIR` 时，子进程日志不会写进源码树的 `logs/`。
 - 取消与截止在 worker 内部贯穿到底：`RunBudget` 轮询外部取消信号（cancel 文件），每次搜索页/正文/模型请求发送前后、

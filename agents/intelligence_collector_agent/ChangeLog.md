@@ -66,6 +66,15 @@
   新增回归测试：真实 `ProfileLock` + `RunSupervisor` + 受控子进程，B 抢锁失败报 `profile_busy`、cleanup=complete，
   A 的浏览器进程不受影响、锁仍由 A 持有。已用真实 Playwright + Edge 复核（登记到整组 9 个 `msedge`，驱动挂起时仅凭
   登记即可回收，无残留）。MIC 测试 400 → 401，Agent 188 不变。
+- 2026-10-03 第四轮审核 1 项（P1，接受）：登记发生在 `launch()` 成功返回之后，驱动在启动握手期间崩溃时浏览器已存在
+  却无登记、父链又已断开，会被误判为外部进程（`foreign_profile_processes=1`、`cleanup=complete`）。根治：浏览器身份
+  改为进程创建时就带上的 Chromium 命令行开关 `--mic-attempt-id=<attempt_id>`（`BrowserSession.start` 经
+  `PlaywrightBackend.launch(extra_args=...)` 传入；Chromium 忽略未知开关并保留在命令行里），监督者按整参数精确匹配并
+  归属其进程组；事后登记降为第二道证据，并在失败路径也尽力登记。`/proc` 不可读时监督者不再把空扫描当作"已清理"，
+  收尾复核失败即 `cleanup=unverified` → `cleanup_incomplete`。新增回归：受控子进程复现"驱动崩溃、无登记、父链已断"
+  （浏览器被回收、foreign=0）；真实 Playwright 启动器 + 替身浏览器 + SIGKILL node 驱动（`browser_launch_failed`，
+  残留替身仅凭开关被归属）；`/proc` 不可读 → `cleanup_incomplete`。真实 Edge 复核：仅凭开关归属整组 9 个 `msedge`
+  + crashpad 辅助进程，关闭后无残留。MIC 测试 401 → 404，Agent 188 不变。
 
 ---
 

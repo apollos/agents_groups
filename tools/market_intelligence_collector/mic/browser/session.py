@@ -82,7 +82,8 @@ class PlaywrightBackend:
     def launch(self, *, user_data_dir: Path, channel: str, headless: bool,
                accept_downloads: bool, chromium_sandbox: bool,
                timeout_ms: int, executable_path: str | None = None,
-               locale: str | None = None, viewport: dict[str, int] | None = None):
+               locale: str | None = None, viewport: dict[str, int] | None = None,
+               extra_args: list[str] | None = None):
         from playwright.sync_api import sync_playwright
         self._pw = sync_playwright().start()
         kwargs: dict[str, Any] = {
@@ -90,6 +91,8 @@ class PlaywrightBackend:
             "accept_downloads": accept_downloads, "chromium_sandbox": chromium_sandbox,
             "timeout": timeout_ms, "ignore_default_args": ["--enable-automation"],
         }
+        if extra_args:
+            kwargs["args"] = list(extra_args)
         if executable_path:
             kwargs["executable_path"] = executable_path
         else:
@@ -152,6 +155,12 @@ class BrowserSession:
             self._lock = None
             raise
         timeout_ms = int(float(self.runtime.get("browser_start_timeout_seconds", 20)) * 1000)
+        # The browser's identity for the supervisor is a Chromium switch on its command line
+        # (``--mic-attempt-id=<attempt>``): present from the moment the process exists, so a
+        # driver crash during the start-up handshake cannot leave an unidentifiable browser
+        # behind. The post-launch registration below is the second, independent line.
+        from mic.browser.runner import browser_marker_arg, register_browser_processes
+        marker_attempt = os.environ.get("MIC_WORKER_ATTEMPT_ID") or self.attempt_id
         try:
             self._context = self.backend.launch(
                 user_data_dir=self.profile_dir,
@@ -163,8 +172,15 @@ class BrowserSession:
                 executable_path=self.runtime.get("executable_path") or None,
                 locale=self.runtime.get("locale") or None,
                 viewport=self.runtime.get("viewport") or None,
+                extra_args=[browser_marker_arg(marker_attempt)],
             )
         except Exception as exc:  # noqa: BLE001
+            # Best effort: whatever the driver did spawn before failing is ours - record it
+            # while the parent chain may still be intact, then let the driver go.
+            try:
+                self.browser_processes = register_browser_processes()
+            except Exception:  # noqa: BLE001 - diagnostics only
+                self.browser_processes = []
             self._release_lock()
             try:
                 self.backend.stop()
@@ -181,7 +197,6 @@ class BrowserSession:
         # what makes a process ours (an attempt that lost the profile-lock race must never
         # signal the lock holder's browser).
         try:
-            from mic.browser.runner import register_browser_processes
             self.browser_processes = register_browser_processes()
         except Exception:  # noqa: BLE001 - diagnostics only
             self.browser_processes = []

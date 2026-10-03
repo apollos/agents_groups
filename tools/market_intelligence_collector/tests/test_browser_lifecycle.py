@@ -339,6 +339,24 @@ WORKER_STUB = textwrap.dedent('''
             (run_dir / "child.pid").write_text(out.stdout.strip())
             time.sleep(0.3)  # intermediate is gone -> grandchild reparented, chain broken
             sys.exit(0)
+        if mode == "launch_crash_marked_browser":
+            # Review (4th round): the driver crashes during the start-up handshake. The browser
+            # process already exists (detached, ignores TERM, NO environ marker, NOT registered -
+            # launch never returned) and the worker dies at once, before the supervisor's next
+            # scan: the only thing identifying the browser is the Chromium switch the worker put
+            # on its command line (--mic-attempt-id=<attempt>, like BrowserSession.start does).
+            import subprocess
+            code = "import signal, time\\nsignal.signal(signal.SIGTERM, lambda *a: None)\\ntime.sleep(60)\\n"
+            env = {k: v for k, v in os.environ.items() if k != "MIC_WORKER_ATTEMPT_ID"}
+            argv = [sys.executable, "-c", code, "--mic-attempt-id=" + attempt_id,
+                    "--user-data-dir=" + os.environ["MIC_BROWSER_PROFILE_DIR"]]
+            child = subprocess.Popen(argv, env=env, start_new_session=True, stdin=subprocess.DEVNULL,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            (run_dir / "child.pid").write_text(str(child.pid))
+            payload = {"attempt_id": attempt_id, "status": "failed", "error_code": "browser_launch_failed",
+                       "error_message": "driver crashed during handshake"}
+            (run_dir / "result.json").write_text(json.dumps(payload))
+            sys.exit(3)
         if mode == "profile_busy":
             # Real lock contention: another attempt holds the profile lock -> this worker fails
             # fast with profile_busy (exit 3) exactly like mic.browser.worker does.
@@ -536,6 +554,117 @@ def test_supervisor_leaves_foreign_detached_process_alone(tmp_path, stub_module)
         os.kill(child_pid, 9)
 
 
+def test_driver_crash_before_registration_still_reaps_marked_browser(tmp_path, stub_module):
+    """Review (4th round): browser created, driver crashed in the handshake, worker gone before
+    the next scan - nothing registered, parent chain broken. The command-line marker alone
+    must identify the browser; it is reaped and NOT counted as foreign."""
+    sup = _supervisor(tmp_path, stub_module, grace=0.5)
+    out = _run(sup, "launch_crash_marked_browser", attempt_id="att-crash")
+    child_pid = int((Path(out.run_dir) / "child.pid").read_text())
+    try:
+        assert not (Path(out.run_dir) / "browser_processes.json").exists()  # launch never returned
+        assert out.status == "failed" and out.error_code == "browser_launch_failed" and out.exit_code == 3
+        assert out.cleanup == "complete" and out.leftover_processes == 0
+        assert out.owned_process_groups >= 2  # worker group + the detached browser's group
+        assert out.foreign_profile_processes == 0
+        _assert_not_running(child_pid)
+    finally:
+        try:
+            os.kill(child_pid, 9)
+        except ProcessLookupError:
+            pass
+
+
+def test_marked_browser_survives_real_driver_crash_and_is_owned(tmp_path, monkeypatch):
+    """Same failure with the real Playwright launcher: a stand-in browser executable that never
+    completes the CDP handshake, the node driver SIGKILLed mid-launch. BrowserSession reports
+    browser_launch_failed; the surviving browser carries the marker and is owned by the
+    supervisor's rule - on nothing else (no registration, chain broken)."""
+    pytest.importorskip("playwright")
+    import stat
+    import subprocess
+    import threading
+
+    from mic.browser.runner import OwnershipSpec, owned_processes
+    from mic.browser.session import BrowserSession, BrowserUnavailable, PlaywrightBackend
+    attempt = f"att-real-{os.getpid()}"
+    monkeypatch.setenv("MIC_WORKER_ATTEMPT_ID", attempt)
+    monkeypatch.delenv("MIC_BROWSER_PROCESS_FILE", raising=False)
+    fake = tmp_path / "fake-browser.sh"
+    fake.write_text("#!/bin/bash\ntrap '' TERM\nsleep 60\n")
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    profile = tmp_path / "profiles" / "mic-edge"
+    runtime = {"headless": True, "executable_path": str(fake), "browser_start_timeout_seconds": 15}
+    backend = PlaywrightBackend()
+
+    def kill_driver():
+        # The node driver is our child (sync_playwright().start()); kill it mid-handshake.
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            for p in subprocess.run(["pgrep", "-P", str(os.getpid())], capture_output=True,
+                                    text=True).stdout.split():
+                try:
+                    cmd = Path(f"/proc/{p}/cmdline").read_bytes()
+                except OSError:
+                    continue
+                if b"node" in cmd and b"playwright" in cmd:
+                    children = subprocess.run(["pgrep", "-P", p], capture_output=True, text=True).stdout
+                    if children.strip():  # the browser has been spawned -> crash the driver now
+                        os.kill(int(p), 9)
+                        return
+            time.sleep(0.02)
+
+    killer = threading.Thread(target=kill_driver, daemon=True)
+    session = BrowserSession(runtime=runtime, run_id="r", attempt_id=attempt, profile_dir=profile,
+                             backend=backend)
+    killer.start()
+    with pytest.raises(BrowserUnavailable) as info:
+        session.start()
+    killer.join(timeout=5)
+    try:
+        assert info.value.code == "browser_launch_failed"
+        deadline = time.monotonic() + 3
+        owned = []
+        while time.monotonic() < deadline:
+            owned = owned_processes(OwnershipSpec(attempt_id=attempt), set())
+            if owned:
+                break
+            time.sleep(0.05)
+        pids = {pid for pid, _g, _s in owned}
+        assert pids, "surviving browser not identified by the command-line marker"
+        cmds = [Path(f"/proc/{pid}/cmdline").read_bytes() for pid in pids]
+        # The stand-in browser carries the marker; its ``sleep`` child is owned via the group.
+        assert any(f"--mic-attempt-id={attempt}".encode() in c and str(fake).encode() in c for c in cmds)
+        assert all(_proc_state(pid) not in (None, "Z") for pid in pids)  # really survived the crash
+        # The lock was released on failure; a foreign attempt id owns nothing of ours.
+        assert not owned_processes(OwnershipSpec(attempt_id=attempt + "-other"), set())
+    finally:
+        for pid, _g, _s in owned_processes(OwnershipSpec(attempt_id=attempt), set()):
+            try:
+                os.kill(pid, 9)
+            except ProcessLookupError:
+                pass
+        try:
+            backend.stop()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def test_cleanup_is_unverified_when_proc_cannot_be_read(tmp_path, stub_module, monkeypatch):
+    """Review (4th round): when the supervisor cannot confirm the tree is gone it must say so
+    (cleanup_incomplete), never report "complete" because the scan came back empty."""
+    import mic.browser.runner as runner
+
+    def broken(*_a, **_k):
+        raise runner.ProcTableUnavailable("/proc unreadable")
+    monkeypatch.setattr(runner, "_proc_table", broken)
+    sup = _supervisor(tmp_path, stub_module, grace=0.5)
+    out = _run(sup, "ok", attempt_id="att-noproc")
+    assert out.exit_code == 0 and (Path(out.run_dir) / "result.json").exists()
+    assert out.status == "cleanup_incomplete" and out.cleanup == "unverified"
+    assert "/proc" in out.error_message and not out.ok
+
+
 def test_losing_profile_lock_race_never_touches_lock_holders_browser(tmp_path, stub_module):
     """Review (3rd round): attempt A holds the real ProfileLock and is starting its browser;
     attempt B starts at the same time, gets profile_busy and cleans up. B must not signal A's
@@ -575,6 +704,7 @@ def test_owned_processes_rules(tmp_path):
 
     from mic.browser.runner import (
         OwnershipSpec,
+        browser_marker_arg,
         descendant_processes,
         owned_processes,
         profile_processes,
@@ -598,12 +728,22 @@ def test_owned_processes_rules(tmp_path):
                                  start_new_session=True)
     sibling = subprocess.Popen([sys.executable, "-c", sleep, f"--user-data-dir={profile}2"], env=clean,
                                start_new_session=True)
+    # Browsers identified by the Chromium switch alone (no environ marker, no chain, nothing
+    # registered): ours, a look-alike attempt id (prefix) and another attempt's.
+    marked = subprocess.Popen([sys.executable, "-c", sleep, browser_marker_arg("att-A")], env=clean,
+                              start_new_session=True)
+    marked_prefix = subprocess.Popen([sys.executable, "-c", sleep, browser_marker_arg("att-AB")], env=clean,
+                                     start_new_session=True)
+    marked_other = subprocess.Popen([sys.executable, "-c", sleep, browser_marker_arg("att-B")], env=clean,
+                                    start_new_session=True)
     try:
         time.sleep(0.3)
         pids = lambda spec, pg=None: {pid for pid, _g, _s in owned_processes(spec, pg or set())}  # noqa: E731
         found = pids(OwnershipSpec(attempt_id="att-A"))
         assert pa.pid in found and pab.pid not in found
         assert same_group.pid not in found  # our own process group is excluded by design
+        assert marked.pid in found and marked_prefix.pid not in found and marked_other.pid not in found
+        assert os.getpgid(marked.pid) in {g for _p, g, _s in owned_processes(OwnershipSpec(attempt_id="att-A"), set())}
         assert pids(None, {os.getpgid(pab.pid)}) >= {pab.pid} and pa.pid not in pids(None, {os.getpgid(pab.pid)})
         chain = pids(OwnershipSpec(root_pids={worker.pid}))
         assert {worker.pid, browser_pid} <= chain and prof_proc.pid not in chain
@@ -619,7 +759,7 @@ def test_owned_processes_rules(tmp_path):
         assert pids(OwnershipSpec(profile_dir=profile)) == set()
         assert profile_processes(profile, set()) == 1 and profile_processes(profile, {prof_proc.pid}) == 0
     finally:
-        for p in (pa, pab, same_group, worker, prof_proc, sibling):
+        for p in (pa, pab, same_group, worker, prof_proc, sibling, marked, marked_prefix, marked_other):
             p.kill()
             p.wait()
         os.kill(browser_pid, 9)

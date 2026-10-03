@@ -156,23 +156,42 @@ def _environ_has(pid: int | str, entry: bytes) -> bool:
         return False
 
 
-def _cmdline_has_profile(pid: int | str, profile_arg: bytes) -> bool:
-    """True when the process command line carries ``--user-data-dir=<profile>`` as a whole
-    argument. Chromium rewrites its argv area for the process title (arguments become
-    space separated), so match on the raw bytes with a NUL / space / end terminator."""
+def _cmdline_has_arg(pid: int | str, arg: bytes) -> bool:
+    """True when the process command line carries ``arg`` as a whole argument. Chromium
+    rewrites its argv area for the process title (arguments become space separated), so
+    match on the raw bytes with a NUL / space / end terminator."""
     try:
         with open(f"/proc/{pid}/cmdline", "rb") as fh:
             raw = fh.read()
     except OSError:
         return False
-    start = raw.find(profile_arg)
-    if start < 0:
-        return False
-    end = start + len(profile_arg)
-    return end == len(raw) or raw[end:end + 1] in (b"\0", b" ")
+    start = 0
+    while True:
+        start = raw.find(arg, start)
+        if start < 0:
+            return False
+        end = start + len(arg)
+        if (start == 0 or raw[start - 1:start] in (b"\0", b" ")) and \
+                (end == len(raw) or raw[end:end + 1] in (b"\0", b" ")):
+            return True
+        start = end
 
 
 BROWSER_PROCESS_FILE_ENV = "MIC_BROWSER_PROCESS_FILE"
+# Chromium ignores switches it does not know, keeps them in its command line (verified with
+# Edge: ``--user-data-dir`` and this switch both survive the argv rewrite) and the browser
+# carries it from ``exec`` on - so unlike a registration written *after* launch returned,
+# this identifies the browser even when the driver crashes during the start-up handshake.
+BROWSER_MARKER_SWITCH = "--mic-attempt-id"
+
+
+def browser_marker_arg(attempt_id: str) -> str:
+    """The Chromium switch a MIC worker adds to its browser's command line."""
+    return f"{BROWSER_MARKER_SWITCH}={attempt_id}"
+
+
+class ProcTableUnavailable(OSError):
+    """``/proc`` could not be enumerated: ownership cannot be decided this time."""
 
 
 def _proc_table(exclude_own_group: bool = True) -> dict[int, tuple[str, int, int, int]]:
@@ -180,14 +199,15 @@ def _proc_table(exclude_own_group: bool = True) -> dict[int, tuple[str, int, int
 
     The supervisor also drops its own process group (never a kill target); the worker must
     keep it, because the Playwright node driver - the hop between worker and browser in the
-    parent chain - lives in the worker's group.
+    parent chain - lives in the worker's group. Raises ``ProcTableUnavailable`` instead of
+    pretending the table is empty (an empty table would read as "everything is gone").
     """
     me, my_pgid = os.getpid(), os.getpgid(0)
     table: dict[int, tuple[str, int, int, int]] = {}
     try:
         entries = [int(e.name) for e in os.scandir("/proc") if e.name.isdigit()]
-    except OSError:
-        return table
+    except OSError as exc:
+        raise ProcTableUnavailable(str(exc)) from exc
     for pid in entries:
         if pid == me:
             continue
@@ -204,7 +224,10 @@ def descendant_processes(root_pid: int) -> list[dict[str, int]]:
     Called by the worker right after the browser launched, while the chain
     worker -> node driver -> browser is intact, to register the browser's identity.
     """
-    table = _proc_table(exclude_own_group=False)
+    try:
+        table = _proc_table(exclude_own_group=False)
+    except ProcTableUnavailable:
+        return []
     table.pop(root_pid, None)
     owned = {root_pid}
     changed = True
@@ -278,38 +301,48 @@ def owned_processes(spec: OwnershipSpec | str | None, pgids: set[int]) -> list[t
     1. it is in a process group already known to be owned (worker group, browser group);
     2. it descends from an owned process through the live parent chain
        (worker -> node driver -> browser main; renderers share the browser's group);
-    3. the worker registered it at browser start (``register_browser_processes``) and its
+    3. its command line carries exactly ``--mic-attempt-id=<attempt>``: the switch the worker
+       passes to Chromium at launch, present from ``exec`` on - this is what identifies the
+       browser when the driver crashed before launch returned (nothing registered, chain
+       already broken); its group is owned too;
+    4. the worker registered it at browser start (``register_browser_processes``) and its
        ``starttime`` still matches (pid reuse excluded) - then its group is owned too;
-    4. its environment carries exactly ``MIC_WORKER_ATTEMPT_ID=<attempt>`` (Python / Node
+    5. its environment carries exactly ``MIC_WORKER_ATTEMPT_ID=<attempt>`` (Python / Node
        helpers).
 
     The MIC profile path is deliberately **not** an ownership rule: an attempt that lost the
     profile-lock race would otherwise "own" the lock holder's browser (review). The
-    supervisor's own group is never owned. Zombies are ignored.
+    supervisor's own group is never owned. Zombies are ignored. Raises
+    ``ProcTableUnavailable`` when ``/proc`` cannot be read.
     """
     if not isinstance(spec, OwnershipSpec):
         spec = OwnershipSpec(attempt_id=spec)
-    marker = f"MIC_WORKER_ATTEMPT_ID={spec.attempt_id}".encode() if spec.attempt_id else None
+    env_marker = f"MIC_WORKER_ATTEMPT_ID={spec.attempt_id}".encode() if spec.attempt_id else None
+    arg_marker = browser_marker_arg(spec.attempt_id).encode() if spec.attempt_id else None
     uid = os.getuid()
     table = _proc_table()
     groups = set(pgids)
+    owned: set[int] = set(spec.root_pids) & set(table)
     for reg in spec.registered:
         st = table.get(reg["pid"])
         if st is not None and st[3] == reg["starttime"]:
             groups.add(st[2])
-    owned: set[int] = set()
-    for pid, (_state, _ppid, pgrp, _start) in table.items():
-        if pgrp in groups or pid in spec.root_pids:
-            owned.add(pid)
-            continue
-        if marker is None:
-            continue
-        try:
-            if os.stat(f"/proc/{pid}").st_uid != uid:
+    # Pass 1 - identity evidence on the process itself (rules 3 and 5).
+    if env_marker is not None or arg_marker is not None:
+        for pid, (_state, _ppid, pgrp, _start) in table.items():
+            try:
+                if os.stat(f"/proc/{pid}").st_uid != uid:
+                    continue
+            except OSError:
                 continue
-        except OSError:
-            continue
-        if _environ_has(pid, marker):
+            if arg_marker is not None and _cmdline_has_arg(pid, arg_marker):
+                owned.add(pid)
+                groups.add(pgrp)
+            elif env_marker is not None and _environ_has(pid, env_marker):
+                owned.add(pid)
+    # Pass 2 - group membership (rule 1, plus the groups rules 3/4 just added).
+    for pid, (_state, _ppid, pgrp, _start) in table.items():
+        if pgrp in groups:
             owned.add(pid)
     # Rule 2: propagate down the live parent chain until nothing new is found.
     changed = True
@@ -328,7 +361,11 @@ def profile_processes(profile_dir: str | None, exclude: set[int]) -> int:
     if not profile_dir:
         return 0
     arg = f"--user-data-dir={profile_dir}".encode()
-    return sum(1 for pid in _proc_table() if pid not in exclude and _cmdline_has_profile(pid, arg))
+    try:
+        table = _proc_table()
+    except ProcTableUnavailable:
+        return 0
+    return sum(1 for pid in table if pid not in exclude and _cmdline_has_arg(pid, arg))
 
 
 def process_group_alive(pgid: int | None) -> bool:
@@ -375,15 +412,26 @@ class _OwnedTree:
         self.registry_path = registry_path
         self.pgids: set[int] = {worker_pgid} if worker_pgid is not None else set()
         self.leftover = 0
+        self.scan_failed = False          # a scan could not read /proc: cleanup is unverified
+        self._last: list[tuple[int, int, str]] = []
 
     def refresh(self) -> list[tuple[int, int, str]]:
         """Scan once; remember every group an owned process lives in (groups outlive the
-        parent chain, so a browser seen once stays tracked after the worker is gone)."""
+        parent chain, so a browser seen once stays tracked after the worker is gone).
+
+        When ``/proc`` cannot be read the previous result is returned and ``scan_failed``
+        is set: "nothing found" must never be the outcome of "could not look".
+        """
         if self.registry_path is not None:
             # The worker registers its browser (pid / pgid / starttime) right after launch;
             # pick it up whenever it appears (cheap: a tiny file in the run dir).
             self.spec.registered = load_registered_processes(self.registry_path, self.spec.attempt_id)
-        procs = owned_processes(self.spec, self.pgids)
+        try:
+            procs = owned_processes(self.spec, self.pgids)
+        except ProcTableUnavailable:
+            self.scan_failed = True
+            return self._last
+        self._last = procs
         my_pgid = os.getpgid(0)
         for _pid, pgrp, _state in procs:
             if pgrp != my_pgid and pgrp > 0:
@@ -554,7 +602,12 @@ class RunSupervisor:
         elapsed = time.monotonic() - started
         stderr_tail = _tail(self._read(run_dir / "worker.stderr.log"))
         payload, err = read_result_file(result_path, attempt_id)
+        # Final verification scan. If /proc cannot be read now, "complete" is not a claim we
+        # can make - report cleanup as unverified (-> cleanup_incomplete, no auto-retry).
+        tree.scan_failed = False
         ours = {p for p, _g, _s in tree.refresh()}
+        if tree.scan_failed and cleanup == "complete":
+            cleanup = "unverified"
         foreign = profile_processes(tree.spec.profile_dir, ours)
         outcome = SupervisedOutcome(status=STATUS_FAILED, attempt_id=attempt_id,
                                     run_dir=str(run_dir), exit_code=proc.returncode,
@@ -569,9 +622,14 @@ class RunSupervisor:
         if cleanup != "complete":
             outcome.status = STATUS_CLEANUP_INCOMPLETE
             outcome.error_code = STATUS_CLEANUP_INCOMPLETE
-            outcome.error_message = (f"{tree.leftover} owned process(es) across {len(tree.pgids)} group(s) "
-                                     "still alive after TERM/KILL (worker and/or detached browser); "
-                                     "do not retry on the same profile automatically")
+            if cleanup == "unverified":
+                outcome.error_message = ("process table (/proc) could not be read, so the owned "
+                                         "process tree cannot be confirmed gone; do not retry on the "
+                                         "same profile automatically")
+            else:
+                outcome.error_message = (f"{tree.leftover} owned process(es) across {len(tree.pgids)} group(s) "
+                                         "still alive after TERM/KILL (worker and/or detached browser); "
+                                         "do not retry on the same profile automatically")
             outcome.report = payload.get("report") if payload and isinstance(payload.get("report"), dict) \
                 else None
             return outcome
