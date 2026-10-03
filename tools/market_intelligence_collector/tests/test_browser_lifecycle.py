@@ -310,22 +310,27 @@ WORKER_STUB = textwrap.dedent('''
         if mode.startswith("detached_browser_"):
             # Like a real Edge under Playwright on Linux: own session / process group (detached),
             # ignores TERM, and - as Chromium wipes its environ - carries NO attempt marker.
-            #   _hang     : worker keeps running -> only the live parent chain identifies it
-            #   _orphan   : spawned via an intermediate that exits -> chain broken; only the
-            #               ``--user-data-dir=<profile>`` command line identifies it
-            #   _foreign  : chain broken, no profile argument -> not ours, must be left alone
+            #   _hang       : worker keeps running -> only the live parent chain identifies it
+            #   _registered : worker registers the browser (as BrowserSession.start does) and
+            #                 exits at once -> chain broken; only the registration identifies it
+            #   _foreign    : chain broken, nothing registered -> not ours, must be left alone
             import subprocess
             code = "import signal, time\\nsignal.signal(signal.SIGTERM, lambda *a: None)\\ntime.sleep(60)\\n"
             env = {k: v for k, v in os.environ.items() if k != "MIC_WORKER_ATTEMPT_ID"}
-            argv = [sys.executable, "-c", code]
-            if mode == "detached_browser_orphan":
-                argv.append("--user-data-dir=" + os.environ["MIC_BROWSER_PROFILE_DIR"])
+            argv = [sys.executable, "-c", code, "--user-data-dir=" + os.environ["MIC_BROWSER_PROFILE_DIR"]]
             if mode == "detached_browser_hang":
                 child = subprocess.Popen(argv, env=env, start_new_session=True, stdin=subprocess.DEVNULL,
                                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 (run_dir / "child.pid").write_text(str(child.pid))
                 while True:
                     time.sleep(0.1)
+            if mode == "detached_browser_registered":
+                child = subprocess.Popen(argv, env=env, start_new_session=True, stdin=subprocess.DEVNULL,
+                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                (run_dir / "child.pid").write_text(str(child.pid))
+                from mic.browser.runner import register_browser_processes
+                assert any(p["pid"] == child.pid for p in register_browser_processes())
+                sys.exit(0)  # chain breaks here; the registration must carry ownership
             launcher = ("import subprocess, sys\\n"
                         f"p = subprocess.Popen({argv!r}, start_new_session=True, stdin=subprocess.DEVNULL,"
                         " stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\\n"
@@ -334,6 +339,19 @@ WORKER_STUB = textwrap.dedent('''
             (run_dir / "child.pid").write_text(out.stdout.strip())
             time.sleep(0.3)  # intermediate is gone -> grandchild reparented, chain broken
             sys.exit(0)
+        if mode == "profile_busy":
+            # Real lock contention: another attempt holds the profile lock -> this worker fails
+            # fast with profile_busy (exit 3) exactly like mic.browser.worker does.
+            from mic.browser.profile_lock import ProfileBusy, ProfileLock
+            time.sleep(0.5)  # give the lock holder time to "start its browser"
+            try:
+                ProfileLock(Path(os.environ["MIC_BROWSER_PROFILE_DIR"]), "r", attempt_id).acquire()
+            except ProfileBusy:
+                payload = {"attempt_id": attempt_id, "status": "failed", "error_code": "profile_busy",
+                           "error_message": "profile busy"}
+                (run_dir / "result.json").write_text(json.dumps(payload))
+                sys.exit(3)
+            raise SystemExit("lock unexpectedly acquired")
         sys.exit(0)
 
     if __name__ == "__main__":
@@ -479,13 +497,13 @@ def test_supervisor_timeout_leaves_no_descendants(tmp_path, stub_module):
     assert process_group_alive(out.worker_pid) is False
 
 
-@pytest.mark.parametrize("mode", ["detached_browser_hang", "detached_browser_orphan"])
+@pytest.mark.parametrize("mode", ["detached_browser_hang", "detached_browser_registered"])
 def test_supervisor_reaps_detached_browser_group(tmp_path, stub_module, mode):
     """Review: Playwright launches the browser detached (own process group) and Chromium wipes
     its environ. A TERM-ignoring 'browser' without any marker must still be found - via the
-    live parent chain while the worker runs (hang -> timeout), or via its
-    ``--user-data-dir=<MIC profile>`` command line once the chain is gone (orphan) - and killed."""
-    from mic.browser.runner import OwnershipSpec, owned_processes
+    live parent chain while the worker runs (hang -> timeout), or via the worker's
+    registration once the chain is gone (registered) - and killed."""
+    from mic.browser.runner import OwnershipSpec, load_registered_processes, owned_processes
     sup = _supervisor(tmp_path, stub_module, grace=0.5)
     t0 = time.monotonic()
     out = _run(sup, mode, deadline_seconds=1.5 if mode == "detached_browser_hang" else 20)
@@ -495,30 +513,72 @@ def test_supervisor_reaps_detached_browser_group(tmp_path, stub_module, mode):
     assert time.monotonic() - t0 < 10
     _assert_not_running(child_pid)
     assert out.owned_process_groups >= 2  # worker group + the detached browser group
-    assert out.leftover_processes == 0
-    spec = OwnershipSpec(profile_dir=str(tmp_path / "profiles" / "mic-edge"), started_epoch=0.0)
-    assert owned_processes(spec, set()) == []
+    assert out.leftover_processes == 0 and out.foreign_profile_processes == 0
+    if mode == "detached_browser_registered":
+        reg_path = Path(out.run_dir) / "browser_processes.json"
+        reg = load_registered_processes(reg_path, out.attempt_id)
+        assert [p["pid"] for p in reg] == [child_pid]
+        assert stat.S_IMODE(reg_path.stat().st_mode) == 0o600
+        assert owned_processes(OwnershipSpec(registered=reg), set()) == []  # gone
 
 
 def test_supervisor_leaves_foreign_detached_process_alone(tmp_path, stub_module):
-    """Control: a detached process with no marker, no live chain and no MIC profile argument is
-    not ours -> untouched, and it does not count against cleanup either."""
+    """Control: a detached process on the MIC profile path but with no marker, no live chain
+    and no registration is not ours -> untouched (only counted as foreign_profile_processes)."""
     sup = _supervisor(tmp_path, stub_module, grace=0.5)
     out = _run(sup, "detached_browser_foreign")
     child_pid = int((Path(out.run_dir) / "child.pid").read_text())
     try:
         assert out.status == "completed" and out.cleanup == "complete"
         assert _proc_state(child_pid) not in (None, "Z")  # still running
+        assert out.foreign_profile_processes == 1
     finally:
         os.kill(child_pid, 9)
 
 
+def test_losing_profile_lock_race_never_touches_lock_holders_browser(tmp_path, stub_module):
+    """Review (3rd round): attempt A holds the real ProfileLock and is starting its browser;
+    attempt B starts at the same time, gets profile_busy and cleans up. B must not signal A's
+    browser even though it runs on the same profile and started after B began."""
+    import subprocess
+    import threading
+
+    from mic.browser.profile_lock import ProfileLock
+    profile = tmp_path / "profiles" / "mic-edge"
+    lock = ProfileLock(profile, "run-A", "att-A").acquire()  # A holds the lock
+    sup = _supervisor(tmp_path, stub_module, grace=0.5)
+    result: dict = {}
+    th = threading.Thread(target=lambda: result.update(out=_run(sup, "profile_busy", attempt_id="att-B")))
+    th.start()
+    time.sleep(0.15)  # B is already running (started_epoch set) when A's browser appears
+    env = {k: v for k, v in os.environ.items() if k != "MIC_WORKER_ATTEMPT_ID"}
+    a_browser = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)", f"--user-data-dir={profile}"],
+                                 env=env, start_new_session=True)
+    try:
+        th.join(timeout=30)
+        out = result["out"]
+        assert out.status == "failed" and out.error_code == "profile_busy" and out.exit_code == 3
+        assert out.cleanup == "complete" and out.leftover_processes == 0
+        assert a_browser.poll() is None, f"lock holder's browser was killed (rc={a_browser.returncode})"
+        assert out.foreign_profile_processes == 1  # seen, reported, not touched
+        assert lock.holder()["attempt_id"] == "att-A"  # A's lock untouched as well
+    finally:
+        a_browser.kill()
+        a_browser.wait()
+        lock.release()
+
+
 def test_owned_processes_rules(tmp_path):
-    """Ownership rules: exact marker, known group, live parent chain, MIC profile command line
-    (only when started after the run); the supervisor's own group is never owned."""
+    """Ownership rules: exact marker, known group, live parent chain, worker registration with a
+    matching starttime; the MIC profile path alone never owns; own group is never owned."""
     import subprocess
 
-    from mic.browser.runner import OwnershipSpec, owned_processes
+    from mic.browser.runner import (
+        OwnershipSpec,
+        descendant_processes,
+        owned_processes,
+        profile_processes,
+    )
     sleep = "import time; time.sleep(30)"
     env_a = {**os.environ, "MIC_WORKER_ATTEMPT_ID": "att-A"}
     env_ab = {**os.environ, "MIC_WORKER_ATTEMPT_ID": "att-AB"}
@@ -533,8 +593,7 @@ def test_owned_processes_rules(tmp_path):
     worker = subprocess.Popen([sys.executable, "-c", chain_code], env=clean, start_new_session=True,
                               stdout=subprocess.PIPE, text=True)
     browser_pid = int(worker.stdout.readline())
-    # Orphan-like "browser" on the MIC profile (no marker, parent is this test process but we
-    # do not list it as a root) and a look-alike on a sibling profile path.
+    # A "browser" on the MIC profile that nobody registered (another attempt's), and a sibling.
     prof_proc = subprocess.Popen([sys.executable, "-c", sleep, f"--user-data-dir={profile}"], env=clean,
                                  start_new_session=True)
     sibling = subprocess.Popen([sys.executable, "-c", sleep, f"--user-data-dir={profile}2"], env=clean,
@@ -548,10 +607,17 @@ def test_owned_processes_rules(tmp_path):
         assert pids(None, {os.getpgid(pab.pid)}) >= {pab.pid} and pa.pid not in pids(None, {os.getpgid(pab.pid)})
         chain = pids(OwnershipSpec(root_pids={worker.pid}))
         assert {worker.pid, browser_pid} <= chain and prof_proc.pid not in chain
-        by_profile = pids(OwnershipSpec(profile_dir=profile, started_epoch=time.time() - 30))
-        assert prof_proc.pid in by_profile and sibling.pid not in by_profile
-        # Started before the run -> not ours even on the same profile.
-        assert prof_proc.pid not in pids(OwnershipSpec(profile_dir=profile, started_epoch=time.time() + 60))
+        # Registration (what the worker records at browser start) owns the browser's group ...
+        reg = [p for p in descendant_processes(worker.pid) if p["pid"] == browser_pid]
+        assert reg and reg[0]["pgid"] == browser_pid
+        assert browser_pid in pids(OwnershipSpec(registered=reg))
+        assert worker.pid not in pids(OwnershipSpec(registered=reg))
+        # ... but not with a stale starttime (pid reuse) ...
+        stale = [{**reg[0], "starttime": reg[0]["starttime"] + 1}]
+        assert browser_pid not in pids(OwnershipSpec(registered=stale))
+        # ... and the profile path alone owns nothing; it is only a diagnostic count.
+        assert pids(OwnershipSpec(profile_dir=profile)) == set()
+        assert profile_processes(profile, set()) == 1 and profile_processes(profile, {prof_proc.pid}) == 0
     finally:
         for p in (pa, pab, same_group, worker, prof_proc, sibling):
             p.kill()

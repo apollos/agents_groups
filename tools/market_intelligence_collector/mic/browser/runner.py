@@ -67,6 +67,9 @@ class SupervisedOutcome:
     # group(s)) and processes still alive when cleanup gave up (0 when complete).
     owned_process_groups: int = 0
     leftover_processes: int = 0
+    # Browsers on the MIC profile that are *not* ours (lock holder of another attempt or a
+    # stale browser). Diagnostics only - never signalled by this attempt.
+    foreign_profile_processes: int = 0
 
     @property
     def ok(self) -> bool:
@@ -169,15 +172,89 @@ def _cmdline_has_profile(pid: int | str, profile_arg: bytes) -> bool:
     return end == len(raw) or raw[end:end + 1] in (b"\0", b" ")
 
 
-def _boot_epoch() -> float | None:
+BROWSER_PROCESS_FILE_ENV = "MIC_BROWSER_PROCESS_FILE"
+
+
+def _proc_table(exclude_own_group: bool = True) -> dict[int, tuple[str, int, int, int]]:
+    """pid -> (state, ppid, pgrp, starttime) for every live non-zombie process except ours.
+
+    The supervisor also drops its own process group (never a kill target); the worker must
+    keep it, because the Playwright node driver - the hop between worker and browser in the
+    parent chain - lives in the worker's group.
+    """
+    me, my_pgid = os.getpid(), os.getpgid(0)
+    table: dict[int, tuple[str, int, int, int]] = {}
     try:
-        with open("/proc/stat", encoding="utf-8") as fh:
-            for line in fh:
-                if line.startswith("btime "):
-                    return float(line.split()[1])
+        entries = [int(e.name) for e in os.scandir("/proc") if e.name.isdigit()]
+    except OSError:
+        return table
+    for pid in entries:
+        if pid == me:
+            continue
+        st = _proc_stat(pid)
+        if st is None or st[0] == "Z" or (exclude_own_group and st[2] == my_pgid):
+            continue
+        table[pid] = st
+    return table
+
+
+def descendant_processes(root_pid: int) -> list[dict[str, int]]:
+    """Live descendants of ``root_pid`` (parent chain), each as ``{pid, pgid, starttime}``.
+
+    Called by the worker right after the browser launched, while the chain
+    worker -> node driver -> browser is intact, to register the browser's identity.
+    """
+    table = _proc_table(exclude_own_group=False)
+    table.pop(root_pid, None)
+    owned = {root_pid}
+    changed = True
+    while changed:
+        changed = False
+        for pid, (_s, ppid, _pg, _st) in table.items():
+            if pid not in owned and ppid in owned:
+                owned.add(pid)
+                changed = True
+    owned.discard(root_pid)
+    return [{"pid": pid, "pgid": table[pid][2], "starttime": table[pid][3]} for pid in sorted(owned)]
+
+
+def register_browser_processes(path: Path | str | None = None, root_pid: int | None = None) -> list[dict[str, int]]:
+    """Worker side: record the browser processes this attempt owns (pid / pgid / starttime).
+
+    ``path`` defaults to ``$MIC_BROWSER_PROCESS_FILE`` (set by the supervisor to a file in the
+    0700 attempt run dir). Returns what was recorded; silently records nothing when no path
+    is configured (e.g. ``mic browser setup`` / probes run without a supervisor).
+    """
+    target = path or os.environ.get(BROWSER_PROCESS_FILE_ENV)
+    procs = descendant_processes(root_pid or os.getpid())
+    procs = [p for p in procs if p["pgid"] != os.getpgid(0)]  # own group is tracked anyway
+    if target:
+        payload = {"attempt_id": os.environ.get("MIC_WORKER_ATTEMPT_ID"), "registered_at": time.time(),
+                   "processes": procs}
+        try:
+            write_json_atomic(Path(target), payload)
+        except OSError:  # pragma: no cover - diagnostics only, never fail the run for it
+            pass
+    return procs
+
+
+def load_registered_processes(path: Path | str | None, attempt_id: str | None) -> list[dict[str, int]]:
+    """Supervisor side: the worker's registration for *this* attempt (others are ignored)."""
+    if not path:
+        return []
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
-        pass
-    return None
+        return []
+    if not isinstance(data, dict) or (attempt_id and data.get("attempt_id") not in (None, attempt_id)):
+        return []
+    out = []
+    for p in data.get("processes") or []:
+        try:
+            out.append({"pid": int(p["pid"]), "pgid": int(p["pgid"]), "starttime": int(p["starttime"])})
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
 
 
 @dataclass
@@ -186,8 +263,8 @@ class OwnershipSpec:
 
     attempt_id: str | None = None          # MIC_WORKER_ATTEMPT_ID marker (python / node helpers)
     root_pids: set[int] = field(default_factory=set)   # worker pid(s): descendants are owned
-    profile_dir: str | None = None         # dedicated browser profile (``--user-data-dir=``)
-    started_epoch: float | None = None     # only browsers started after this are ours
+    registered: list[dict[str, int]] = field(default_factory=list)  # worker-registered browser
+    profile_dir: str | None = None         # MIC profile: diagnostics only, never a kill criterion
 
 
 def owned_processes(spec: OwnershipSpec | str | None, pgids: set[int]) -> list[tuple[int, int, str]]:
@@ -196,59 +273,43 @@ def owned_processes(spec: OwnershipSpec | str | None, pgids: set[int]) -> list[t
     Playwright spawns the browser ``detached`` (own session / process group) and Chromium
     wipes its own ``/proc/<pid>/environ`` (observed: every ``msedge`` process shows an empty
     environ), so neither the worker's group nor an environment marker can find Edge. A
-    process is therefore owned when **any** of these holds:
+    process is owned when **any** of these holds:
 
     1. it is in a process group already known to be owned (worker group, browser group);
     2. it descends from an owned process through the live parent chain
        (worker -> node driver -> browser main; renderers share the browser's group);
-    3. its command line carries ``--user-data-dir=<this deployment's MIC profile>`` and it
-       started after the run began (orphaned browser whose parent chain is already gone -
-       the profile is exclusive to one MIC run at a time);
+    3. the worker registered it at browser start (``register_browser_processes``) and its
+       ``starttime`` still matches (pid reuse excluded) - then its group is owned too;
     4. its environment carries exactly ``MIC_WORKER_ATTEMPT_ID=<attempt>`` (Python / Node
-       helpers; cheap, kept for processes that neither chain nor command line identify).
+       helpers).
 
-    The supervisor's own group is never owned. Zombies are ignored (no resources, reaped by
-    whoever inherits them).
+    The MIC profile path is deliberately **not** an ownership rule: an attempt that lost the
+    profile-lock race would otherwise "own" the lock holder's browser (review). The
+    supervisor's own group is never owned. Zombies are ignored.
     """
     if not isinstance(spec, OwnershipSpec):
         spec = OwnershipSpec(attempt_id=spec)
     marker = f"MIC_WORKER_ATTEMPT_ID={spec.attempt_id}".encode() if spec.attempt_id else None
-    profile_arg = f"--user-data-dir={spec.profile_dir}".encode() if spec.profile_dir else None
-    me, my_pgid, uid = os.getpid(), os.getpgid(0), os.getuid()
-    try:
-        entries = [int(e.name) for e in os.scandir("/proc") if e.name.isdigit()]
-    except OSError:
-        return []
-    table: dict[int, tuple[str, int, int, int]] = {}
-    for pid in entries:
-        if pid == me:
-            continue
-        st = _proc_stat(pid)
-        if st is None or st[0] == "Z" or st[2] == my_pgid:
-            continue
-        table[pid] = st
-    min_ticks: int | None = None
-    if profile_arg is not None and spec.started_epoch is not None:
-        boot = _boot_epoch()
-        if boot is not None:
-            min_ticks = int((spec.started_epoch - 1.0 - boot) * os.sysconf("SC_CLK_TCK"))
-
+    uid = os.getuid()
+    table = _proc_table()
+    groups = set(pgids)
+    for reg in spec.registered:
+        st = table.get(reg["pid"])
+        if st is not None and st[3] == reg["starttime"]:
+            groups.add(st[2])
     owned: set[int] = set()
-    for pid, (_state, _ppid, pgrp, start_ticks) in table.items():
-        if pgrp in pgids or pid in spec.root_pids:
+    for pid, (_state, _ppid, pgrp, _start) in table.items():
+        if pgrp in groups or pid in spec.root_pids:
             owned.add(pid)
             continue
-        if marker is None and profile_arg is None:
+        if marker is None:
             continue
         try:
             if os.stat(f"/proc/{pid}").st_uid != uid:
                 continue
         except OSError:
             continue
-        if profile_arg is not None and (min_ticks is None or start_ticks >= min_ticks) \
-                and _cmdline_has_profile(pid, profile_arg):
-            owned.add(pid)
-        elif marker is not None and _environ_has(pid, marker):
+        if _environ_has(pid, marker):
             owned.add(pid)
     # Rule 2: propagate down the live parent chain until nothing new is found.
     changed = True
@@ -259,6 +320,15 @@ def owned_processes(spec: OwnershipSpec | str | None, pgids: set[int]) -> list[t
                 owned.add(pid)
                 changed = True
     return [(pid, table[pid][2], table[pid][0]) for pid in sorted(owned)]
+
+
+def profile_processes(profile_dir: str | None, exclude: set[int]) -> int:
+    """Diagnostics only: live processes on the MIC profile that are *not* ours (another
+    attempt holding the lock, or a stale browser). Reported, never signalled."""
+    if not profile_dir:
+        return 0
+    arg = f"--user-data-dir={profile_dir}".encode()
+    return sum(1 for pid in _proc_table() if pid not in exclude and _cmdline_has_profile(pid, arg))
 
 
 def process_group_alive(pgid: int | None) -> bool:
@@ -299,14 +369,20 @@ def profile_dir_for(config_dir: str | None, env: dict[str, str]) -> str | None:
 class _OwnedTree:
     """Process groups and processes that belong to one attempt (see ``owned_processes``)."""
 
-    def __init__(self, spec: OwnershipSpec, worker_pgid: int | None):
+    def __init__(self, spec: OwnershipSpec, worker_pgid: int | None,
+                 registry_path: Path | None = None):
         self.spec = spec
+        self.registry_path = registry_path
         self.pgids: set[int] = {worker_pgid} if worker_pgid is not None else set()
         self.leftover = 0
 
     def refresh(self) -> list[tuple[int, int, str]]:
         """Scan once; remember every group an owned process lives in (groups outlive the
         parent chain, so a browser seen once stays tracked after the worker is gone)."""
+        if self.registry_path is not None:
+            # The worker registers its browser (pid / pgid / starttime) right after launch;
+            # pick it up whenever it appears (cheap: a tiny file in the run dir).
+            self.spec.registered = load_registered_processes(self.registry_path, self.spec.attempt_id)
         procs = owned_processes(self.spec, self.pgids)
         my_pgid = os.getpgid(0)
         for _pid, pgrp, _state in procs:
@@ -405,7 +481,9 @@ class RunSupervisor:
         write_json_atomic(request_path, request)
         self._write_parent_heartbeat(parent_hb_path, "running")
 
-        env = {**os.environ, **self.extra_env, "MIC_WORKER_ATTEMPT_ID": attempt_id}
+        browser_registry_path = run_dir / "browser_processes.json"
+        env = {**os.environ, **self.extra_env, "MIC_WORKER_ATTEMPT_ID": attempt_id,
+               BROWSER_PROCESS_FILE_ENV: str(browser_registry_path)}
         # Keep the MIC run log next to the attempt artefacts (0700 run dir) unless the
         # deployment pinned MIC_LOG_DIR explicitly; otherwise mic.logging_utils would write
         # into the tool's source tree ``logs/``.
@@ -432,9 +510,8 @@ class RunSupervisor:
         # Owned process tree: the worker's group (start_new_session) plus every group found
         # carrying this attempt's marker while it runs (the detached browser and its helpers).
         tree = _OwnedTree(OwnershipSpec(attempt_id=attempt_id, root_pids={proc.pid},
-                                        profile_dir=profile_dir_for(config_dir, env),
-                                        started_epoch=started_epoch),
-                          self._owned_pgid(proc))
+                                        profile_dir=profile_dir_for(config_dir, env)),
+                          self._owned_pgid(proc), registry_path=browser_registry_path)
         last_track = 0.0
         try:
             while True:
@@ -477,12 +554,15 @@ class RunSupervisor:
         elapsed = time.monotonic() - started
         stderr_tail = _tail(self._read(run_dir / "worker.stderr.log"))
         payload, err = read_result_file(result_path, attempt_id)
+        ours = {p for p, _g, _s in tree.refresh()}
+        foreign = profile_processes(tree.spec.profile_dir, ours)
         outcome = SupervisedOutcome(status=STATUS_FAILED, attempt_id=attempt_id,
                                     run_dir=str(run_dir), exit_code=proc.returncode,
                                     stderr_tail=stderr_tail, elapsed_seconds=round(elapsed, 2),
                                     worker_pid=proc.pid, cleanup=cleanup,
                                     owned_process_groups=len(tree.pgids),
-                                    leftover_processes=tree.leftover)
+                                    leftover_processes=tree.leftover,
+                                    foreign_profile_processes=foreign)
         if payload is not None:
             outcome.budget_used = payload.get("budget_used") or {}
             outcome.gateway_requests_sent = payload.get("gateway_requests_sent")

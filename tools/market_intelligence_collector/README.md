@@ -247,13 +247,16 @@ mic reader probe --url https://... --transport http|browser|http_then_browser [-
   用于写 `result.json`、关浏览器。超时/取消先协作停止，再 TERM，5 秒后 KILL **本轮拥有的整个进程树**；worker 正常退出后
   同样检查并回收残留，残留则报告 `cleanup_incomplete`。worker 退出码非 0 时即使写出了 `completed`
   结果也记为 `failed`（`worker_exit_nonzero`），报告保留供诊断。
-  进程树的归属判定（`mic.browser.runner.owned_processes`）不依赖环境变量：Playwright 在 Linux 上以 `detached` 方式启动
-  浏览器（Edge 自成一个会话/进程组，不在 worker 的进程组里），而 Chromium 会清空自己的 `/proc/<pid>/environ`，所以
-  监督者按四条规则累计：已知归属进程组的成员；沿存活父子链从 worker 向下的后代（worker → node 驱动 → Edge 主进程，
-  渲染/GPU 进程与主进程同组）；命令行带 `--user-data-dir=<本部署 MIC profile>` 且在本轮开始之后启动的进程（父链已断的
-  孤儿浏览器；profile 同一时间只属于一轮）；环境中带本轮 `MIC_WORKER_ATTEMPT_ID` 的 Python/Node 辅助进程。运行期间每
-  2 秒刷新一次，发现过的进程组在父链消失后仍被跟踪。结果里 `owned_process_groups` / `leftover_processes` 给出计数。
-  该判定已用真实 Playwright 1.63 + 系统 Edge 验证（驱动被挂起时仅凭 profile 规则即可找到整组 9 个 `msedge` 进程）。
+  进程树的归属判定（`mic.browser.runner.owned_processes`）只认**本轮自己的身份证据**：Playwright 在 Linux 上以
+  `detached` 方式启动浏览器（Edge 自成一个会话/进程组，不在 worker 的进程组里），而 Chromium 会清空自己的
+  `/proc/<pid>/environ`，所以 worker 在浏览器启动成功后立刻把它的后代进程（pid / pgid / `/proc` 启动时刻）登记到本轮运行
+  目录下的 `browser_processes.json`（0600，带 `attempt_id`），监督者据此归属——pid 被复用（启动时刻不符）或登记属于别
+  的 attempt 都不算。再加上：已知归属进程组的成员；沿存活父子链从 worker 向下的后代；环境中带本轮
+  `MIC_WORKER_ATTEMPT_ID` 的 Python/Node 辅助进程。**profile 路径不是归属依据**：同一 profile 上别的进程只计入
+  `foreign_profile_processes` 供诊断，所以争抢同一 profile 失败（`profile_busy`）的一轮绝不会碰持锁一轮的浏览器。运行
+  期间每 2 秒刷新一次，发现过的进程组在父链消失后仍被跟踪；结果里 `owned_process_groups` / `leftover_processes` 给出计数。
+  该判定已用真实 Playwright 1.63 + 系统 Edge 验证（worker 位置登记到整组 9 个 `msedge` 进程，驱动被挂起时仅凭登记即可
+  识别并回收，无残留）。
   本轮产物（`request.json` / `result.json` / 心跳 / `logs/run_<id>.log`）都在 0700 的 attempt 运行目录下；
   未显式设置 `MIC_LOG_DIR` 时，子进程日志不会写进源码树的 `logs/`。
 - 取消与截止在 worker 内部贯穿到底：`RunBudget` 轮询外部取消信号（cancel 文件），每次搜索页/正文/模型请求发送前后、

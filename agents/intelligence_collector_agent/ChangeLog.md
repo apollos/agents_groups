@@ -50,7 +50,7 @@
   不消耗新页面尝试。MIC 测试 361 → 388，Agent 188 不变。
 - 2026-10-03 第二轮审核（30be694）4 项全部接受并修复（MIC 侧，Agent 接口不变）：
   (1) 进程清理改为**整个进程树**：Playwright 以 detached 启动 Edge（独立进程组）且 Chromium 清空自身 environ，
-  监督者改按"已知进程组 / 存活父链后代 / `--user-data-dir=<MIC profile>` 且本轮启动 / 环境标记"四规则累计归属，
+  监督者改按"已知进程组 / 存活父链后代 / worker 登记的浏览器进程 / 环境标记"累计归属（登记规则见第三轮），
   TERM/KILL 与收尾检查覆盖全部归属组，已用真实 Playwright + Edge 验证（驱动挂起时也能找到并回收整组）；
   结果新增 `owned_process_groups` / `leftover_processes`。
   (2) 正文读取返回后立即检查取消/截止；全部工作结束时、收尾（关浏览器）之后发布报告之前再做最终判定，
@@ -59,6 +59,13 @@
   (4) 撤销/过期凭据的 Cookie 清除按实际 Cookie domain 判定范围（含前导点与子域），逐条清除并复核实际数量。
   同时统一了子进程测试对僵尸状态的预期（监督者自己的子进程必须被 wait；孙进程允许处于 Z，但不得仍在运行）。
   MIC 测试 388 → 400，Agent 188 不变。
+- 2026-10-03 第三轮审核 1 项（P1，接受）：争抢同一 profile 失败的一轮曾可能误杀持锁一轮的浏览器——原因是
+  "`--user-data-dir=<MIC profile>` 且本轮启动后"被当作归属依据。改为 worker 在浏览器启动成功后按 attempt 登记浏览器
+  进程（pid / pgid / `/proc` 启动时刻，写入本轮运行目录 `browser_processes.json`，0600），监督者只认本 attempt 的登记
+  且启动时刻必须吻合（排除 pid 复用）；profile 路径彻底退出归属判定，仅作诊断计数 `foreign_profile_processes`。
+  新增回归测试：真实 `ProfileLock` + `RunSupervisor` + 受控子进程，B 抢锁失败报 `profile_busy`、cleanup=complete，
+  A 的浏览器进程不受影响、锁仍由 A 持有。已用真实 Playwright + Edge 复核（登记到整组 9 个 `msedge`，驱动挂起时仅凭
+  登记即可回收，无残留）。MIC 测试 400 → 401，Agent 188 不变。
 
 ---
 

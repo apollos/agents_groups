@@ -121,6 +121,7 @@ class BrowserSession:
     _lock: ProfileLock | None = field(default=None, repr=False)
     _open_pages: int = 0
     started_at: float | None = None
+    browser_processes: list[dict[str, int]] = field(default_factory=list)
     stats: dict[str, int] = field(default_factory=lambda: {
         "navigations": 0, "pages_opened": 0, "pages_closed": 0, "cookies_injected": 0})
     _closed_by_user: bool = False
@@ -175,6 +176,15 @@ class BrowserSession:
                 code = "browser_missing"
             raise BrowserUnavailable(code, msg[:400]) from exc
         self.started_at = self.clock()
+        # Register the browser's identity (pid / pgid / starttime) for the supervisor while the
+        # parent chain worker -> driver -> browser is intact: this, not the profile path, is
+        # what makes a process ours (an attempt that lost the profile-lock race must never
+        # signal the lock holder's browser).
+        try:
+            from mic.browser.runner import register_browser_processes
+            self.browser_processes = register_browser_processes()
+        except Exception:  # noqa: BLE001 - diagnostics only
+            self.browser_processes = []
         try:
             self._context.on("close", self._on_context_close)
         except Exception:  # noqa: BLE001 - test doubles may not support events
