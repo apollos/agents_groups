@@ -75,6 +75,13 @@
   （浏览器被回收、foreign=0）；真实 Playwright 启动器 + 替身浏览器 + SIGKILL node 驱动（`browser_launch_failed`，
   残留替身仅凭开关被归属）；`/proc` 不可读 → `cleanup_incomplete`。真实 Edge 复核：仅凭开关归属整组 9 个 `msedge`
   + crashpad 辅助进程，关闭后无残留。MIC 测试 401 → 404，Agent 188 不变。
+- 2026-10-03 第五轮审核 1 项（P2，接受）：回收阶段一次瞬时 `/proc` 扫描失败且缓存为空时，`_reap_tree` 提前返回
+  `complete`，最终复核又只看"是否失败过"不看结果，出现 `cleanup=complete` 但 `leftover_processes=1`、浏览器仍存活。
+  修复：扫描失败在 `alive()` 中按"无法判断 = 仍存活"处理，回收阶段持续等待/升级直到一次真实扫描确认为空；最终复核
+  （`_verify_cleanup`）只在真实读到 `/proc` 且无残留时报告 `complete`，发现残留则再回收一轮并再复核，仍有残留报
+  `cleanup_incomplete`。新增回归（真实子进程 + 注入扫描失败）：运行期扫描全失败 + 回收起点再失败一次后恢复并发现残留
+  → 浏览器被回收、`leftover=0`；第一轮回收全程失明、仅最终复核看到残留 → 再回收一轮并复核通过。MIC 测试 404 → 406，
+  Agent 188 不变。
 
 ---
 

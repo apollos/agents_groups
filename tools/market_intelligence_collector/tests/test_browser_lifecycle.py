@@ -665,6 +665,85 @@ def test_cleanup_is_unverified_when_proc_cannot_be_read(tmp_path, stub_module, m
     assert "/proc" in out.error_message and not out.ok
 
 
+def test_transient_scan_failure_then_recovery_with_leftover_is_not_complete(tmp_path, stub_module, monkeypatch):
+    """Review (5th round): /proc scans fail while the worker runs (cache stays empty) and once
+    more at the start of the reap, then recover. The recovered scan finds the worker's
+    detached browser alive - that must be reaped (or reported), never "cleanup=complete
+    with leftover_processes=1"."""
+    import mic.browser.runner as runner
+
+    real = runner._proc_table
+    runs_root = tmp_path / "runs"
+    state = {"post_exit_failures": 0, "calls": 0}
+
+    def flaky(*a, **k):
+        state["calls"] += 1
+        result_written = any(p.exists() for p in runs_root.glob("*/result.json"))
+        if not result_written:
+            raise runner.ProcTableUnavailable("scan failed while worker runs")  # cache stays empty
+        if state["post_exit_failures"] < 1:
+            state["post_exit_failures"] += 1
+            raise runner.ProcTableUnavailable("one more failure at reap time")
+        return real(*a, **k)
+    monkeypatch.setattr(runner, "_proc_table", flaky)
+    sup = _supervisor(tmp_path, stub_module, grace=0.5)
+    out = _run(sup, "launch_crash_marked_browser", attempt_id="att-flaky")
+    child_pid = int((Path(out.run_dir) / "child.pid").read_text())
+    try:
+        assert state["post_exit_failures"] == 1 and state["calls"] > 2  # scans did recover
+        # A failed scan is "cannot tell", not "gone": the reap waits for a real scan, finds the
+        # browser, escalates TERM -> KILL and only then is cleanup complete.
+        assert out.status == "failed" and out.error_code == "browser_launch_failed"
+        assert out.cleanup == "complete" and out.leftover_processes == 0
+        assert out.owned_process_groups >= 2
+        _assert_not_running(child_pid)
+    finally:
+        try:
+            os.kill(child_pid, 9)
+        except ProcessLookupError:
+            pass
+
+
+def test_residue_found_only_by_final_scan_is_reaped_and_reverified(tmp_path, stub_module, monkeypatch):
+    """Review (5th round), harder variant: every scan during the first reap phase is blind, so
+    the browser's group is never discovered there; the final verification scan is the first
+    to see it. The supervisor must reap again and re-verify instead of passing the earlier
+    verdict through."""
+    import mic.browser.runner as runner
+
+    real = runner._proc_table
+    state = {"blind": False, "reaps": 0}
+
+    def flaky(*a, **k):
+        if state["blind"]:
+            raise runner.ProcTableUnavailable("blind during first reap")
+        return real(*a, **k)
+    monkeypatch.setattr(runner, "_proc_table", flaky)
+    sup = _supervisor(tmp_path, stub_module, grace=0.3)
+    orig_reap = sup._reap_tree
+
+    def reap(tree):
+        state["reaps"] += 1
+        state["blind"] = state["reaps"] == 1
+        try:
+            return orig_reap(tree)
+        finally:
+            state["blind"] = False
+    monkeypatch.setattr(sup, "_reap_tree", reap)
+    out = _run(sup, "launch_crash_marked_browser", attempt_id="att-blind")
+    child_pid = int((Path(out.run_dir) / "child.pid").read_text())
+    try:
+        assert state["reaps"] == 2  # first pass blind -> final scan found residue -> reaped again
+        assert out.status == "failed" and out.error_code == "browser_launch_failed"
+        assert out.cleanup == "complete" and out.leftover_processes == 0
+        _assert_not_running(child_pid)
+    finally:
+        try:
+            os.kill(child_pid, 9)
+        except ProcessLookupError:
+            pass
+
+
 def test_losing_profile_lock_race_never_touches_lock_holders_browser(tmp_path, stub_module):
     """Review (3rd round): attempt A holds the real ProfileLock and is starting its browser;
     attempt B starts at the same time, gets profile_busy and cleans up. B must not signal A's

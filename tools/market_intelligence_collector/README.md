@@ -257,7 +257,9 @@ mic reader probe --url https://... --transport http|browser|http_then_browser [-
   带本轮 `MIC_WORKER_ATTEMPT_ID` 的 Python/Node 辅助进程。**profile 路径不是归属依据**：同一 profile 上别的进程只计入
   `foreign_profile_processes` 供诊断，所以争抢同一 profile 失败（`profile_busy`）的一轮绝不会碰持锁一轮的浏览器。运行
   期间每 2 秒刷新一次，发现过的进程组在父链消失后仍被跟踪；结果里 `owned_process_groups` / `leftover_processes` 给出计数。
-  `/proc` 读不到时不会把"没看到"当成"都没了"：收尾复核失败即报告 `cleanup=unverified` → `cleanup_incomplete`。
+  `/proc` 读不到时不会把"没看到"当成"都没了"：扫描失败在回收阶段按"仍存活"处理（继续等待/升级，直到一次真实扫描
+  确认为空）；收尾复核只有在**真实读到 `/proc` 且一无所获**时才报告 `complete`——复核发现残留则再回收一轮并再复核，
+  仍有残留报 `cleanup_incomplete`，复核本身读不到 `/proc` 报 `cleanup=unverified` → `cleanup_incomplete`。
   该判定已用真实 Playwright 1.63 + 系统 Edge 验证（仅凭命令行开关即可归属整组 9 个 `msedge` + crashpad 辅助进程；驱动被
   SIGKILL 的真实启动器故障下，残留的替身浏览器仅凭开关被认出并回收，无残留）。
   本轮产物（`request.json` / `result.json` / 心跳 / `logs/run_<id>.log`）都在 0700 的 attempt 运行目录下；

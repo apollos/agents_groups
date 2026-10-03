@@ -412,7 +412,8 @@ class _OwnedTree:
         self.registry_path = registry_path
         self.pgids: set[int] = {worker_pgid} if worker_pgid is not None else set()
         self.leftover = 0
-        self.scan_failed = False          # a scan could not read /proc: cleanup is unverified
+        self.scan_failed = False          # some scan could not read /proc since the flag was reset
+        self.last_scan_ok = True          # the most recent scan actually read /proc
         self._last: list[tuple[int, int, str]] = []
 
     def refresh(self) -> list[tuple[int, int, str]]:
@@ -430,7 +431,9 @@ class _OwnedTree:
             procs = owned_processes(self.spec, self.pgids)
         except ProcTableUnavailable:
             self.scan_failed = True
+            self.last_scan_ok = False
             return self._last
+        self.last_scan_ok = True
         self._last = procs
         my_pgid = os.getpgid(0)
         for _pid, pgrp, _state in procs:
@@ -440,7 +443,11 @@ class _OwnedTree:
         return procs
 
     def alive(self) -> bool:
-        return bool(self.refresh())
+        """True while something owned is alive - or while we cannot tell. A failed scan with
+        an empty cache must not read as "gone" (review: it let ``_reap_tree`` return
+        "complete" early while the browser was still running)."""
+        procs = self.refresh()
+        return bool(procs) or not self.last_scan_ok
 
     def wait_gone(self, seconds: float, poll: float = 0.1) -> bool:
         deadline = time.monotonic() + max(0.0, seconds)
@@ -602,12 +609,12 @@ class RunSupervisor:
         elapsed = time.monotonic() - started
         stderr_tail = _tail(self._read(run_dir / "worker.stderr.log"))
         payload, err = read_result_file(result_path, attempt_id)
-        # Final verification scan. If /proc cannot be read now, "complete" is not a claim we
-        # can make - report cleanup as unverified (-> cleanup_incomplete, no auto-retry).
-        tree.scan_failed = False
-        ours = {p for p, _g, _s in tree.refresh()}
-        if tree.scan_failed and cleanup == "complete":
-            cleanup = "unverified"
+        # Final verification scan. "complete" is only claimed when this scan read /proc AND
+        # found nothing owned. Residue found late (e.g. an earlier scan failed and the cache
+        # was empty) is reaped once more and re-verified; an unreadable /proc leaves cleanup
+        # "unverified". Both map to cleanup_incomplete (no automatic retry on the profile).
+        cleanup, leftovers = self._verify_cleanup(tree, cleanup)
+        ours = {p for p, _g, _s in leftovers}
         foreign = profile_processes(tree.spec.profile_dir, ours)
         outcome = SupervisedOutcome(status=STATUS_FAILED, attempt_id=attempt_id,
                                     run_dir=str(run_dir), exit_code=proc.returncode,
@@ -706,6 +713,27 @@ class RunSupervisor:
         if self._wait(proc, self.grace_seconds) and tree.wait_gone(self.grace_seconds):
             return "complete"
         return STATUS_CLEANUP_INCOMPLETE
+
+    def _verify_cleanup(self, tree: _OwnedTree, cleanup: str) -> tuple[str, list[tuple[int, int, str]]]:
+        """Final check behind ``_terminate`` / ``_reap_tree``: returns the cleanup state and
+        the owned processes still alive (from a scan that really read /proc)."""
+        tree.scan_failed = False
+        leftovers = tree.refresh()
+        if not tree.last_scan_ok:
+            return "unverified", leftovers   # neither "complete" nor a leftover count is known
+        if leftovers:
+            # Residue found by a real scan (possibly only now, if earlier scans were blind):
+            # escalate once more exactly like after a normal exit, then look again.
+            self._reap_tree(tree)
+            tree.scan_failed = False
+            leftovers = tree.refresh()
+            if not tree.last_scan_ok:
+                return "unverified", leftovers
+            if leftovers:
+                return STATUS_CLEANUP_INCOMPLETE, leftovers
+        # Verified gone by a scan that read /proc: complete, whatever the earlier phase
+        # concluded (a KILL may have taken effect only after its grace ran out).
+        return "complete", leftovers
 
     def _reap_tree(self, tree: _OwnedTree) -> str:
         """After a normal worker exit: descendants (browser, helpers) must be gone too."""
