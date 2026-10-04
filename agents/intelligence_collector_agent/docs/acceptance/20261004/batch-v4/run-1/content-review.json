@@ -1,0 +1,2486 @@
+{
+  "search_run_id": "run_2cd5c76ce307",
+  "queries": [
+    {
+      "id": "q_3b5341150486",
+      "query_text": "宁德时代 动力电池 中标",
+      "query_family": "orders_tender",
+      "priority_score": 122.0,
+      "executed": 1
+    },
+    {
+      "id": "q_e023ade97c67",
+      "query_text": "宁德时代 重大合同 公告",
+      "query_family": "official_ir",
+      "priority_score": 115.0,
+      "executed": 1
+    }
+  ],
+  "search_pages": [
+    {
+      "query_requested": "宁德时代 动力电池 中标",
+      "query_observed": "宁德时代 动力电池 中标",
+      "engine": "bing",
+      "status": "ok",
+      "error_code": null,
+      "result_count": null
+    },
+    {
+      "query_requested": "宁德时代 重大合同 公告",
+      "query_observed": "宁德时代 重大合同 公告",
+      "engine": "bing",
+      "status": "ok",
+      "error_code": null,
+      "result_count": null
+    }
+  ],
+  "query_families_executed": [
+    "official_ir",
+    "orders_tender"
+  ],
+  "query_families_live_verified": [
+    "official_ir",
+    "orders_tender"
+  ],
+  "funnel": {
+    "search_hits": 20,
+    "selected_for_read": 6,
+    "read_ok": 4,
+    "date_gate_passed": 1,
+    "model_analyzed": 1,
+    "schema_valid": 1,
+    "admitted": 1,
+    "formal_records": 12,
+    "read_failure_reasons": {
+      "article_scope_unresolved": 1,
+      "anti_bot_page": 1
+    },
+    "time_window_filtered": {
+      "outside_time_window": 2,
+      "publication_time_unverified": 1
+    },
+    "admission_reasons": {
+      "accepted": 1
+    }
+  },
+  "sources": [
+    {
+      "id": "link_92d9dd3c52d1",
+      "title": "宁德时代新能源科技股份有限公司_最新招标采购公告_采招网",
+      "url": "https://www.bidcenter.com.cn/enterprise/ndsdxnykjgfyxgs/",
+      "domain": "bidcenter.com.cn",
+      "source_type": "media",
+      "triage_score": 66.0,
+      "triage_decision": "link_record_only",
+      "read_status": "pending",
+      "metadata": {
+        "query_family": "orders_tender",
+        "discovery": {
+          "engine": "bing",
+          "page_index": 1,
+          "rank_in_page": 1,
+          "page_attempt_id": "spa_ca4071f892f1",
+          "adapter_version": "bing-dom-20261001",
+          "retrieved_at": "2026-10-04T16:06:12.277040+00:00",
+          "raw_href": "https://www.bidcenter.com.cn/enterprise/ndsdxnykjgfyxgs/",
+          "url_resolution": "direct",
+          "display_url": "https://www.bidcenter.com.cn › enterprise › ndsdxnykjgfyxgs",
+          "date_text": null,
+          "result_kind": "organic",
+          "relevance": {
+            "relevant": false,
+            "target_match": true,
+            "task_match": true,
+            "content_form_ok": false,
+            "site_ok": true,
+            "matched_terms": [
+              "宁德时代新能源科技股份有限公司",
+              "宁德时代",
+              "动力电池",
+              "中标"
+            ],
+            "reasons": [
+              "enterprise_directory"
+            ]
+          },
+          "relevance_rules_version": "relevance_rules_v1",
+          "query_id": "q_3b5341150486"
+        },
+        "triage_reason": "命中目标实体(宁德时代新能源科技股份有限公司, 宁德时代)；含强事实词(中标)；来源类型=media；score=66; read gate: content_form",
+        "matched_signals": [
+          "target_entity_match",
+          "strong_fact_keyword",
+          "tender_keyword",
+          "read_gate:content_form"
+        ],
+        "need_model": false
+      },
+      "read_attempts": [],
+      "model_outputs": [],
+      "merged": [],
+      "admission": null
+    },
+    {
+      "id": "link_e2599a34f6c7",
+      "title": "宁德时代电子采购平台_ 宁德时代招标 _锂电设备采购_原材料 ...",
+      "url": "https://catlbid.ccpc360.com/",
+      "domain": "catlbid.ccpc360.com",
+      "source_type": "media",
+      "triage_score": 55.0,
+      "triage_decision": "link_record_only",
+      "read_status": "pending",
+      "metadata": {
+        "query_family": "orders_tender",
+        "discovery": {
+          "engine": "bing",
+          "page_index": 1,
+          "rank_in_page": 2,
+          "page_attempt_id": "spa_ca4071f892f1",
+          "adapter_version": "bing-dom-20261001",
+          "retrieved_at": "2026-10-04T16:06:12.277040+00:00",
+          "raw_href": "https://catlbid.ccpc360.com/",
+          "url_resolution": "direct",
+          "display_url": "https://catlbid.ccpc360.com",
+          "date_text": null,
+          "result_kind": "organic",
+          "relevance": {
+            "relevant": false,
+            "target_match": true,
+            "task_match": true,
+            "content_form_ok": false,
+            "site_ok": true,
+            "matched_terms": [
+              "宁德时代",
+              "中标"
+            ],
+            "reasons": [
+              "homepage"
+            ]
+          },
+          "relevance_rules_version": "relevance_rules_v1",
+          "query_id": "q_3b5341150486"
+        },
+        "triage_reason": "命中目标实体(宁德时代)；含强事实词(中标)；来源类型=media；score=55",
+        "matched_signals": [
+          "target_entity_match",
+          "strong_fact_keyword",
+          "tender_keyword"
+        ],
+        "need_model": false
+      },
+      "read_attempts": [],
+      "model_outputs": [],
+      "merged": [],
+      "admission": null
+    },
+    {
+      "id": "link_2b3189581598",
+      "title": "宁德时代 招标信息 - 爱企查",
+      "url": "https://aiqicha.baidu.com/details/ugknowledge?id=47e443bca877ed2f2e90ee3ebbe0c976",
+      "domain": "aiqicha.baidu.com",
+      "source_type": "media",
+      "triage_score": 59.0,
+      "triage_decision": "read",
+      "read_status": "failed",
+      "metadata": {
+        "query_family": "orders_tender",
+        "discovery": {
+          "engine": "bing",
+          "page_index": 1,
+          "rank_in_page": 3,
+          "page_attempt_id": "spa_ca4071f892f1",
+          "adapter_version": "bing-dom-20261001",
+          "retrieved_at": "2026-10-04T16:06:12.277040+00:00",
+          "raw_href": "https://aiqicha.baidu.com/details/ugknowledge?id=47e443bca877ed2f2e90ee3ebbe0c976",
+          "url_resolution": "direct",
+          "display_url": "https://aiqicha.baidu.com › details › ugknowledge",
+          "date_text": null,
+          "result_kind": "organic",
+          "relevance": {
+            "relevant": true,
+            "target_match": true,
+            "task_match": true,
+            "content_form_ok": true,
+            "site_ok": true,
+            "matched_terms": [
+              "宁德时代",
+              "动力电池",
+              "中标"
+            ],
+            "reasons": []
+          },
+          "relevance_rules_version": "relevance_rules_v1",
+          "query_id": "q_3b5341150486"
+        },
+        "triage_reason": "命中目标实体(宁德时代, 动力电池)；含强事实词(中标)；来源类型=media；score=59",
+        "matched_signals": [
+          "target_entity_match",
+          "strong_fact_keyword",
+          "tender_keyword"
+        ],
+        "need_model": false
+      },
+      "read_attempts": [
+        {
+          "read_status": "failed",
+          "failure_reason": "article_scope_unresolved",
+          "http_status": 200,
+          "content_length": null,
+          "extracted_title": "宁德时代 招标信息",
+          "extracted_publish_time": null,
+          "content_hash": null,
+          "transport": "http",
+          "publication_time": {},
+          "time_window": {
+            "status": "publication_time_unverified",
+            "allowed": false,
+            "reason": "no_explicit_publication_date"
+          },
+          "body_scope_status": "unresolved",
+          "body_scope_reason": "article_container_not_found"
+        }
+      ],
+      "model_outputs": [],
+      "merged": [],
+      "admission": null
+    },
+    {
+      "id": "link_29c786933e8a",
+      "title": "远景能源、 宁德时代中标 ！河北100MW/400MWh储能系统 ...",
+      "url": "https://news.bjx.com.cn/html/20260915/1512829.shtml",
+      "domain": "news.bjx.com.cn",
+      "source_type": "media",
+      "triage_score": 79.0,
+      "triage_decision": "read",
+      "read_status": "failed",
+      "metadata": {
+        "query_family": "orders_tender",
+        "discovery": {
+          "engine": "bing",
+          "page_index": 1,
+          "rank_in_page": 4,
+          "page_attempt_id": "spa_ca4071f892f1",
+          "adapter_version": "bing-dom-20261001",
+          "retrieved_at": "2026-10-04T16:06:12.277040+00:00",
+          "raw_href": "https://news.bjx.com.cn/html/20260915/1512829.shtml",
+          "url_resolution": "direct",
+          "display_url": "https://news.bjx.com.cn › html",
+          "date_text": null,
+          "result_kind": "organic",
+          "relevance": {
+            "relevant": true,
+            "target_match": true,
+            "task_match": true,
+            "content_form_ok": true,
+            "site_ok": true,
+            "matched_terms": [
+              "宁德时代",
+              "中标"
+            ],
+            "reasons": []
+          },
+          "relevance_rules_version": "relevance_rules_v1",
+          "query_id": "q_3b5341150486"
+        },
+        "triage_reason": "命中目标实体(宁德时代)；含强事实词(MWh, 中标)；来源类型=media；score=79",
+        "matched_signals": [
+          "target_entity_match",
+          "amount_mentioned",
+          "strong_fact_keyword",
+          "tender_keyword"
+        ],
+        "need_model": true
+      },
+      "read_attempts": [
+        {
+          "read_status": "failed",
+          "failure_reason": "anti_bot_page",
+          "http_status": 200,
+          "content_length": null,
+          "extracted_title": "滑动验证页面",
+          "extracted_publish_time": null,
+          "content_hash": null,
+          "transport": "browser",
+          "publication_time": {},
+          "time_window": {
+            "status": "publication_time_unverified",
+            "allowed": false,
+            "reason": "no_explicit_publication_date"
+          },
+          "body_scope_status": "unresolved",
+          "body_scope_reason": "article_container_not_found"
+        }
+      ],
+      "model_outputs": [],
+      "merged": [],
+      "admission": null
+    },
+    {
+      "id": "link_48653e315601",
+      "title": "远景能源、 宁德时代中标 ！河北100MW/400MWh储能系统 ...",
+      "url": "https://www.energytrend.cn/news/20260915-148614.html",
+      "domain": "energytrend.cn",
+      "source_type": "media",
+      "triage_score": 83.0,
+      "triage_decision": "read",
+      "read_status": "read",
+      "metadata": {
+        "query_family": "orders_tender",
+        "discovery": {
+          "engine": "bing",
+          "page_index": 1,
+          "rank_in_page": 5,
+          "page_attempt_id": "spa_ca4071f892f1",
+          "adapter_version": "bing-dom-20261001",
+          "retrieved_at": "2026-10-04T16:06:12.277040+00:00",
+          "raw_href": "https://www.energytrend.cn/news/20260915-148614.html",
+          "url_resolution": "direct",
+          "display_url": "https://www.energytrend.cn › news",
+          "date_text": null,
+          "result_kind": "organic",
+          "relevance": {
+            "relevant": true,
+            "target_match": true,
+            "task_match": true,
+            "content_form_ok": true,
+            "site_ok": true,
+            "matched_terms": [
+              "宁德时代",
+              "中标"
+            ],
+            "reasons": []
+          },
+          "relevance_rules_version": "relevance_rules_v1",
+          "query_id": "q_3b5341150486"
+        },
+        "triage_reason": "命中目标实体(宁德时代, 锂电池)；含强事实词(MWh, 中标)；来源类型=media；score=83",
+        "matched_signals": [
+          "target_entity_match",
+          "amount_mentioned",
+          "strong_fact_keyword",
+          "tender_keyword"
+        ],
+        "need_model": true
+      },
+      "read_attempts": [
+        {
+          "read_status": "read",
+          "failure_reason": null,
+          "http_status": 200,
+          "content_length": 241,
+          "extracted_title": "远景能源、宁德时代中标！河北100MW/400MWh储能系统采购中标公示",
+          "extracted_publish_time": "2026-09-15 06:41:00.000000",
+          "content_hash": "090e9bdbaba259a63f4d8fa9fb7de36e796fdc7f73e296300b584dceb166fc46",
+          "transport": "http",
+          "publication_time": {
+            "status": "known",
+            "published_at": "2026-09-15T14:41:00+08:00",
+            "precision": "second",
+            "source": "energytrend:entry-header.newsdate",
+            "candidates": [
+              {
+                "published_at": "2026-09-15T14:41:00+08:00",
+                "precision": "second",
+                "source": "energytrend:entry-header.newsdate"
+              }
+            ]
+          },
+          "time_window": {
+            "status": "in_window",
+            "allowed": true,
+            "published_at": "2026-09-15T14:41:00+08:00",
+            "source": "energytrend:entry-header.newsdate"
+          },
+          "body_scope_status": "scoped",
+          "body_scope_reason": null
+        }
+      ],
+      "model_outputs": [
+        {
+          "model_run_id": "mrun_5269799d3dbe",
+          "schema_valid": 1,
+          "decision": "save_structured",
+          "overall_score": 74.0,
+          "confidence": 0.82,
+          "validation_errors": {
+            "errors": [],
+            "warnings": [
+              "relation evidence quarantined: relations[0] review_id=relation-review-98338efc414d7a63; reasons=object_not_literal",
+              "relation evidence quarantined: relations[1] review_id=relation-review-1580e52a2bfb05e5; reasons=object_not_literal,competitor_statement_unverified",
+              "events[1].metrics.amount: amount_not_supported_by_citation; held for review",
+              "quality review: events[1].metrics.amount; 金额或币种缺少可验证依据; quality-3deb21908d50a24c",
+              "quality review: events[0].event_date; 日期跨段归属未验证; quality-1ef4fb0f02cef722",
+              "quality review: facts[0].period; 日期跨段归属未验证; quality-997370c56149d0c1",
+              "quality review: facts[1].period; 日期跨段归属未验证; quality-332ce414e4409ed8",
+              "quality review: facts[2].period; 日期跨段归属未验证; quality-056e74c19a30d4c3",
+              "quality review: facts[4].period; 日期跨段归属未验证; quality-af701644de763818",
+              "quality review: metrics[0].period; 日期跨段归属未验证; quality-cbb83b626f9e22b1",
+              "quality review: metrics[1].period; 日期跨段归属未验证; quality-fc17ca4d02a98dd7",
+              "quality review: metrics[2].period; 日期跨段归属未验证; quality-dd97efe25fbfafcd",
+              "quality review: metrics[3].period; 日期跨段归属未验证; quality-350da61e6d01c0ac",
+              "quality review: metrics[4].period; 日期跨段归属未验证; quality-33953ee47bcf8cd0",
+              "quality review: events[0].entities.counterparty; 交易对手角色或跨段归属未验证; quality-b8081b7047cd79e5",
+              "quality review: events[1].entities.counterparty; 交易对手角色或跨段归属未验证; quality-726721ca2f5ecf4e",
+              "quality review: customer_supplier_signals[0]; 客户供应商身份或角色缺少正文支持; quality-ab8bde2e29889a1e",
+              "quality review: price_cost_margin_signals[0]; 缺少该趋势、份额或利润判断的必要证据; quality-58c1296c6d07a49b",
+              "quality review: price_cost_margin_signals[1]; 缺少该趋势、份额或利润判断的必要证据; quality-ded049b8c6001d39",
+              "quality review: catalysts[0]; 当前催化剂结构缺少贯通入库的证据定位，尚不能核实事项与预期日期; quality-e751f53fff8aab14",
+              "quality review: metrics[1].interpretation; 报价不能单独证明成本、利润或替代经济性; quality-7b49e0bcc50c34fc",
+              "quality review: metrics[3].interpretation; 报价不能单独证明成本、利润或替代经济性; quality-17f2adc1f1e2ba0e",
+              "quality review: risks[0]; 风险判断超出所引正文的必要依据; quality-533d5ac8b52dc99b",
+              "quality review: risks[1]; 风险判断超出所引正文的必要依据; quality-28b916b786355c57",
+              "quality review: metrics[3].interpretation; 报价口径存疑，不能用作经济比较基准; quality-ca69dd441fd3258c",
+              "quality review: analyst_questions[0].reason; 报价比较前提的供货范围与口径待核实; quality-357b00c8aab53a98",
+              "quality review: metrics[4].interpretation; 竞争影响判断缺少中标以外的竞争依据; quality-e875c745bc4a241f",
+              "quality review: brief.why_it_matters; 报价口径存疑，不能用作可比基准; quality-2d957f2eebbb0349",
+              "quality review: brief.why_it_matters; 收入或利润贡献缺少基数及可核实依据; quality-0dda18bc9eb29675",
+              "quality review: brief.uncertainty; 成本或盈利含义超出所引正文; quality-a05930b4089b0a12"
+            ]
+          }
+        }
+      ],
+      "merged": [
+        {
+          "id": "merged_4041dd5e3817",
+          "decision": "save_structured",
+          "overall_score": 74.0,
+          "confidence": 0.82,
+          "merge_method": "single_model"
+        }
+      ],
+      "admission": {
+        "decision_after": "save_structured",
+        "decision_before": "save_structured",
+        "min_overall_score": 70,
+        "overall_score": 74.0,
+        "reason": "accepted",
+        "retained_counts_after_admission": {
+          "catalysts": 0,
+          "customer_supplier_signals": 0,
+          "events": 2,
+          "facts": 5,
+          "metrics": 5,
+          "policy_signals": 0,
+          "price_cost_margin_signals": 0,
+          "relations": 0,
+          "risks": 0
+        },
+        "source_link_id": "link_48653e315601",
+        "stage": "merge_admission",
+        "validated_counts_before_admission": {
+          "catalysts": 0,
+          "customer_supplier_signals": 0,
+          "events": 2,
+          "facts": 5,
+          "metrics": 5,
+          "policy_signals": 0,
+          "price_cost_margin_signals": 0,
+          "relations": 0,
+          "risks": 0
+        }
+      }
+    },
+    {
+      "id": "link_5aa4c07b58c1",
+      "title": "宁德时代新能源科技有限公司_最新招标采购公告_采招网",
+      "url": "https://www.bidcenter.com.cn/enterprise/ndsdxnykjyxgs/1",
+      "domain": "bidcenter.com.cn",
+      "source_type": "media",
+      "triage_score": 44.0,
+      "triage_decision": "link_record_only",
+      "read_status": "pending",
+      "metadata": {
+        "query_family": "orders_tender",
+        "discovery": {
+          "engine": "bing",
+          "page_index": 1,
+          "rank_in_page": 6,
+          "page_attempt_id": "spa_ca4071f892f1",
+          "adapter_version": "bing-dom-20261001",
+          "retrieved_at": "2026-10-04T16:06:12.277040+00:00",
+          "raw_href": "https://www.bidcenter.com.cn/enterprise/ndsdxnykjyxgs/1",
+          "url_resolution": "direct",
+          "display_url": "https://www.bidcenter.com.cn › enterprise › ndsdxnykjyxgs",
+          "date_text": null,
+          "result_kind": "organic",
+          "relevance": {
+            "relevant": false,
+            "target_match": true,
+            "task_match": false,
+            "content_form_ok": false,
+            "site_ok": true,
+            "matched_terms": [
+              "宁德时代"
+            ],
+            "reasons": [
+              "task_keywords_missing",
+              "enterprise_directory"
+            ]
+          },
+          "relevance_rules_version": "relevance_rules_v1",
+          "query_id": "q_3b5341150486"
+        },
+        "triage_reason": "命中目标实体(宁德时代, 锂电池)；来源类型=media；score=44",
+        "matched_signals": [
+          "target_entity_match"
+        ],
+        "need_model": false
+      },
+      "read_attempts": [],
+      "model_outputs": [],
+      "merged": [],
+      "admission": null
+    },
+    {
+      "id": "link_f725ae20b9a3",
+      "title": "宁德时代电子采购平台_新能源电池招标 _储能工程采购_锂电 ...",
+      "url": "https://catlproc.ccpc360.com/",
+      "domain": "catlproc.ccpc360.com",
+      "source_type": "media",
+      "triage_score": 38.0,
+      "triage_decision": "link_record_only",
+      "read_status": "pending",
+      "metadata": {
+        "query_family": "orders_tender",
+        "discovery": {
+          "engine": "bing",
+          "page_index": 1,
+          "rank_in_page": 7,
+          "page_attempt_id": "spa_ca4071f892f1",
+          "adapter_version": "bing-dom-20261001",
+          "retrieved_at": "2026-10-04T16:06:12.277040+00:00",
+          "raw_href": "https://catlproc.ccpc360.com/",
+          "url_resolution": "direct",
+          "display_url": "https://catlproc.ccpc360.com",
+          "date_text": null,
+          "result_kind": "organic",
+          "relevance": {
+            "relevant": false,
+            "target_match": true,
+            "task_match": false,
+            "content_form_ok": false,
+            "site_ok": true,
+            "matched_terms": [
+              "宁德时代"
+            ],
+            "reasons": [
+              "task_keywords_missing",
+              "homepage"
+            ]
+          },
+          "relevance_rules_version": "relevance_rules_v1",
+          "query_id": "q_3b5341150486"
+        },
+        "triage_reason": "命中目标实体(宁德时代)；来源类型=media；score=38",
+        "matched_signals": [
+          "target_entity_match"
+        ],
+        "need_model": false
+      },
+      "read_attempts": [],
+      "model_outputs": [],
+      "merged": [],
+      "admission": null
+    },
+    {
+      "id": "link_a58efa8f032d",
+      "title": "宁德时代电子采购平台_ 宁德时代招标 _锂电设备采购_原材料招标",
+      "url": "https://www.bidgg.com/catlbid/",
+      "domain": "bidgg.com",
+      "source_type": "media",
+      "triage_score": 42.0,
+      "triage_decision": "link_record_only",
+      "read_status": "pending",
+      "metadata": {
+        "query_family": "orders_tender",
+        "discovery": {
+          "engine": "bing",
+          "page_index": 1,
+          "rank_in_page": 8,
+          "page_attempt_id": "spa_ca4071f892f1",
+          "adapter_version": "bing-dom-20261001",
+          "retrieved_at": "2026-10-04T16:06:12.277040+00:00",
+          "raw_href": "https://www.bidgg.com/catlbid/",
+          "url_resolution": "direct",
+          "display_url": "https://www.bidgg.com › catlbid",
+          "date_text": null,
+          "result_kind": "organic",
+          "relevance": {
+            "relevant": false,
+            "target_match": true,
+            "task_match": false,
+            "content_form_ok": true,
+            "site_ok": true,
+            "matched_terms": [
+              "宁德时代",
+              "CATL"
+            ],
+            "reasons": [
+              "task_keywords_missing"
+            ]
+          },
+          "relevance_rules_version": "relevance_rules_v1",
+          "query_id": "q_3b5341150486"
+        },
+        "triage_reason": "命中目标实体(宁德时代, CATL)；来源类型=media；score=42",
+        "matched_signals": [
+          "target_entity_match"
+        ],
+        "need_model": false
+      },
+      "read_attempts": [],
+      "model_outputs": [],
+      "merged": [],
+      "admission": null
+    },
+    {
+      "id": "link_324ccc0a629c",
+      "title": "41亿的EPC大项目， 中标揭榜！_ 电池 _山西省_生产能力",
+      "url": "https://www.sohu.com/a/1020812474_121124004",
+      "domain": "sohu.com",
+      "source_type": "media",
+      "triage_score": 45.0,
+      "triage_decision": "link_record_only",
+      "read_status": "pending",
+      "metadata": {
+        "query_family": "orders_tender",
+        "discovery": {
+          "engine": "bing",
+          "page_index": 1,
+          "rank_in_page": 9,
+          "page_attempt_id": "spa_ca4071f892f1",
+          "adapter_version": "bing-dom-20261001",
+          "retrieved_at": "2026-10-04T16:06:12.277040+00:00",
+          "raw_href": "https://www.sohu.com/a/1020812474_121124004",
+          "url_resolution": "direct",
+          "display_url": "https://www.sohu.com",
+          "date_text": null,
+          "result_kind": "organic",
+          "relevance": {
+            "relevant": false,
+            "target_match": false,
+            "task_match": true,
+            "content_form_ok": true,
+            "site_ok": true,
+            "matched_terms": [
+              "中标"
+            ],
+            "reasons": [
+              "target_identity_missing"
+            ]
+          },
+          "relevance_rules_version": "relevance_rules_v1",
+          "query_id": "q_3b5341150486"
+        },
+        "triage_reason": "含强事实词(亿元, 亿)；来源类型=media；score=45; read gate: no_target_or_related_entity",
+        "matched_signals": [
+          "amount_mentioned",
+          "strong_fact_keyword",
+          "tender_keyword",
+          "read_gate:no_target_or_related_entity"
+        ],
+        "need_model": false
+      },
+      "read_attempts": [],
+      "model_outputs": [],
+      "merged": [],
+      "admission": null
+    },
+    {
+      "id": "link_6cd851bbb792",
+      "title": "储能周报｜101条招标 、93条中标信息汇总，SNEC 2026 ...",
+      "url": "https://cn.solarbe.com/news/20260615/50024362.html",
+      "domain": "cn.solarbe.com",
+      "source_type": "media",
+      "triage_score": 18.0,
+      "triage_decision": "skip_for_now",
+      "read_status": "pending",
+      "metadata": {
+        "query_family": "orders_tender",
+        "discovery": {
+          "engine": "bing",
+          "page_index": 1,
+          "rank_in_page": 10,
+          "page_attempt_id": "spa_ca4071f892f1",
+          "adapter_version": "bing-dom-20261001",
+          "retrieved_at": "2026-10-04T16:06:12.277040+00:00",
+          "raw_href": "https://cn.solarbe.com/news/20260615/50024362.html",
+          "url_resolution": "direct",
+          "display_url": "https://cn.solarbe.com › news",
+          "date_text": null,
+          "result_kind": "organic",
+          "relevance": {
+            "relevant": false,
+            "target_match": false,
+            "task_match": true,
+            "content_form_ok": true,
+            "site_ok": true,
+            "matched_terms": [
+              "中标"
+            ],
+            "reasons": [
+              "target_identity_missing"
+            ]
+          },
+          "relevance_rules_version": "relevance_rules_v1",
+          "query_id": "q_3b5341150486"
+        },
+        "triage_reason": "含强事实词(中标)；来源类型=media；score=18",
+        "matched_signals": [
+          "strong_fact_keyword",
+          "tender_keyword",
+          "policy_keyword"
+        ],
+        "need_model": false
+      },
+      "read_attempts": [],
+      "model_outputs": [],
+      "merged": [],
+      "admission": null
+    },
+    {
+      "id": "link_0f226d4351e3",
+      "title": "宁德时代 （300750） 公告列表 _ 数据中心 _ 东方财富网",
+      "url": "https://data.eastmoney.com/notices/stock/300750.html",
+      "domain": "data.eastmoney.com",
+      "source_type": "media",
+      "triage_score": 49.0,
+      "triage_decision": "skip_for_now",
+      "read_status": "pending",
+      "metadata": {
+        "query_family": "official_ir",
+        "discovery": {
+          "engine": "bing",
+          "page_index": 1,
+          "rank_in_page": 1,
+          "page_attempt_id": "spa_3bcd2cc8acec",
+          "adapter_version": "bing-dom-20261001",
+          "retrieved_at": "2026-10-04T16:06:13.587945+00:00",
+          "raw_href": "https://data.eastmoney.com/notices/stock/300750.html",
+          "url_resolution": "direct",
+          "display_url": "https://data.eastmoney.com › notices › stock",
+          "date_text": null,
+          "result_kind": "organic",
+          "relevance": {
+            "relevant": false,
+            "target_match": true,
+            "task_match": false,
+            "content_form_ok": false,
+            "site_ok": true,
+            "matched_terms": [
+              "宁德时代",
+              "300750"
+            ],
+            "reasons": [
+              "task_keywords_missing",
+              "stock_directory"
+            ]
+          },
+          "relevance_rules_version": "relevance_rules_v1",
+          "query_id": "q_e023ade97c67"
+        },
+        "triage_reason": "命中目标实体(宁德时代, 300750)；来源类型=media；score=49",
+        "matched_signals": [
+          "target_entity_match"
+        ],
+        "need_model": false
+      },
+      "read_attempts": [],
+      "model_outputs": [],
+      "merged": [],
+      "admission": null
+    },
+    {
+      "id": "link_f3c19397baa7",
+      "title": "公司公告 _容百科技：关于与宁德时代签署日常经营重大合同的 ...",
+      "url": "https://vip.stock.finance.sina.com.cn/corp/view/vCB_AllBulletinDetail.php?id=11913341",
+      "domain": "vip.stock.finance.sina.com.cn",
+      "source_type": "media",
+      "triage_score": 81.0,
+      "triage_decision": "link_record_only",
+      "read_status": "link_record_only",
+      "metadata": {
+        "query_family": "official_ir",
+        "discovery": {
+          "engine": "bing",
+          "page_index": 1,
+          "rank_in_page": 2,
+          "page_attempt_id": "spa_3bcd2cc8acec",
+          "adapter_version": "bing-dom-20261001",
+          "retrieved_at": "2026-10-04T16:06:13.587945+00:00",
+          "raw_href": "https://vip.stock.finance.sina.com.cn/corp/view/vCB_AllBulletinDetail.php?id=11913341",
+          "url_resolution": "direct",
+          "display_url": "https://vip.stock.finance.sina.com.cn › corp › view › vCB_All...",
+          "date_text": null,
+          "result_kind": "organic",
+          "relevance": {
+            "relevant": true,
+            "target_match": true,
+            "task_match": true,
+            "content_form_ok": true,
+            "site_ok": true,
+            "matched_terms": [
+              "宁德时代",
+              "重大合同"
+            ],
+            "reasons": []
+          },
+          "relevance_rules_version": "relevance_rules_v1",
+          "query_id": "q_e023ade97c67"
+        },
+        "triage_reason": "时间窗过滤: outside_time_window",
+        "matched_signals": [
+          "target_entity_match",
+          "amount_mentioned",
+          "strong_fact_keyword",
+          "time_window:outside_time_window"
+        ],
+        "need_model": false
+      },
+      "read_attempts": [
+        {
+          "read_status": "read",
+          "failure_reason": null,
+          "http_status": 200,
+          "content_length": 4146,
+          "extracted_title": "容百科技：关于与宁德时代签署日常经营重大合同的公告",
+          "extracted_publish_time": "2026-01-13 16:00:00.000000",
+          "content_hash": "12018ce10892a94f653137a65281f370a87b159554971d3faf16be22d74d57ec",
+          "transport": "http",
+          "publication_time": {
+            "status": "known",
+            "published_at": "2026-01-14T00:00:00+08:00",
+            "precision": "day",
+            "source": "sina:allbulletin.announcement-date",
+            "candidates": [
+              {
+                "published_at": "2026-01-14T00:00:00+08:00",
+                "precision": "day",
+                "source": "sina:allbulletin.announcement-date"
+              }
+            ]
+          },
+          "time_window": {
+            "status": "outside_time_window",
+            "allowed": false,
+            "published_at": "2026-01-14T00:00:00+08:00",
+            "source": "sina:allbulletin.announcement-date"
+          },
+          "body_scope_status": "scoped",
+          "body_scope_reason": null
+        }
+      ],
+      "model_outputs": [],
+      "merged": [],
+      "admission": null
+    },
+    {
+      "id": "link_65f1d59370ad",
+      "title": "宁德时代重大合同 _ 数据中心 _ 东方财富网",
+      "url": "https://data.eastmoney.com/zdht/detail/300750.html",
+      "domain": "data.eastmoney.com",
+      "source_type": "media",
+      "triage_score": 80.0,
+      "triage_decision": "link_record_only",
+      "read_status": "pending",
+      "metadata": {
+        "query_family": "official_ir",
+        "discovery": {
+          "engine": "bing",
+          "page_index": 1,
+          "rank_in_page": 3,
+          "page_attempt_id": "spa_3bcd2cc8acec",
+          "adapter_version": "bing-dom-20261001",
+          "retrieved_at": "2026-10-04T16:06:13.587945+00:00",
+          "raw_href": "https://data.eastmoney.com/zdht/detail/300750.html",
+          "url_resolution": "direct",
+          "display_url": "https://data.eastmoney.com › zdht › detail",
+          "date_text": null,
+          "result_kind": "organic",
+          "relevance": {
+            "relevant": false,
+            "target_match": true,
+            "task_match": true,
+            "content_form_ok": false,
+            "site_ok": true,
+            "matched_terms": [
+              "宁德时代",
+              "重大合同"
+            ],
+            "reasons": [
+              "stock_directory"
+            ]
+          },
+          "relevance_rules_version": "relevance_rules_v1",
+          "query_id": "q_e023ade97c67"
+        },
+        "triage_reason": "命中目标实体(宁德时代)；含强事实词(亿元, 亿)；来源类型=media；score=80; read gate: content_form",
+        "matched_signals": [
+          "target_entity_match",
+          "amount_mentioned",
+          "strong_fact_keyword",
+          "read_gate:content_form"
+        ],
+        "need_model": false
+      },
+      "read_attempts": [],
+      "model_outputs": [],
+      "merged": [],
+      "admission": null
+    },
+    {
+      "id": "link_3e5e25b4cb49",
+      "title": "宁波容百新能源科技股份有限公司 关于与宁德时代签署日常 ...",
+      "url": "https://static.cninfo.com.cn/finalpage/2026-01-14/1224932346.PDF",
+      "domain": "static.cninfo.com.cn",
+      "source_type": "exchange",
+      "triage_score": 61.0,
+      "triage_decision": "link_record_only",
+      "read_status": "link_record_only",
+      "metadata": {
+        "query_family": "official_ir",
+        "discovery": {
+          "engine": "bing",
+          "page_index": 1,
+          "rank_in_page": 4,
+          "page_attempt_id": "spa_3bcd2cc8acec",
+          "adapter_version": "bing-dom-20261001",
+          "retrieved_at": "2026-10-04T16:06:13.587945+00:00",
+          "raw_href": "https://static.cninfo.com.cn/finalpage/2026-01-14/1224932346.PDF",
+          "url_resolution": "direct",
+          "display_url": "https://static.cninfo.com.cn › finalpage › ...",
+          "date_text": null,
+          "result_kind": "organic",
+          "relevance": {
+            "relevant": false,
+            "target_match": true,
+            "task_match": false,
+            "content_form_ok": true,
+            "site_ok": true,
+            "matched_terms": [
+              "宁德时代"
+            ],
+            "reasons": [
+              "task_keywords_missing"
+            ]
+          },
+          "relevance_rules_version": "relevance_rules_v1",
+          "query_id": "q_e023ade97c67"
+        },
+        "triage_reason": "时间窗过滤: publication_time_unverified",
+        "matched_signals": [
+          "target_entity_match",
+          "high_credibility_source",
+          "time_window:publication_time_unverified"
+        ],
+        "need_model": false
+      },
+      "read_attempts": [
+        {
+          "read_status": "read",
+          "failure_reason": null,
+          "http_status": 200,
+          "content_length": 5038,
+          "extracted_title": "",
+          "extracted_publish_time": null,
+          "content_hash": "85e6b4c0d035275d1b97cfcd885a902e6e2041ed310997a7d67e7c846e5638d3",
+          "transport": "http",
+          "publication_time": {
+            "status": "unknown",
+            "published_at": null,
+            "reason": "pdf_publication_not_verified"
+          },
+          "time_window": {
+            "status": "publication_time_unverified",
+            "allowed": false,
+            "reason": "pdf_publication_not_verified"
+          },
+          "body_scope_status": null,
+          "body_scope_reason": null
+        }
+      ],
+      "model_outputs": [],
+      "merged": [],
+      "admission": null
+    },
+    {
+      "id": "link_38314a08b0d6",
+      "title": "上市公司公告 - 深圳证券交易所",
+      "url": "https://www.szse.cn/disclosure/listed/notice/index.html?name=%E5%AE%81%E5%BE%B7%E6%97%B6%E4%BB%A3&stock=300750&r=1697870331501",
+      "domain": "szse.cn",
+      "source_type": "exchange",
+      "triage_score": 25.0,
+      "triage_decision": "skip_for_now",
+      "read_status": "pending",
+      "metadata": {
+        "query_family": "official_ir",
+        "discovery": {
+          "engine": "bing",
+          "page_index": 1,
+          "rank_in_page": 5,
+          "page_attempt_id": "spa_3bcd2cc8acec",
+          "adapter_version": "bing-dom-20261001",
+          "retrieved_at": "2026-10-04T16:06:13.587945+00:00",
+          "raw_href": "https://www.szse.cn/disclosure/listed/notice/index.html?name=%E5%AE%81%E5%BE%B7%E6%97%B6%E4%BB%A3&stock=300750&r=1697870331501",
+          "url_resolution": "direct",
+          "display_url": "https://www.szse.cn › disclosure › listed › notice › index.html...",
+          "date_text": null,
+          "result_kind": "organic",
+          "relevance": {
+            "relevant": false,
+            "target_match": false,
+            "task_match": false,
+            "content_form_ok": false,
+            "site_ok": true,
+            "matched_terms": [],
+            "reasons": [
+              "target_identity_missing",
+              "task_keywords_missing",
+              "listing_path"
+            ]
+          },
+          "relevance_rules_version": "relevance_rules_v1",
+          "query_id": "q_e023ade97c67"
+        },
+        "triage_reason": "来源类型=exchange；score=25",
+        "matched_signals": [
+          "high_credibility_source"
+        ],
+        "need_model": false
+      },
+      "read_attempts": [],
+      "model_outputs": [],
+      "merged": [],
+      "admission": null
+    },
+    {
+      "id": "link_56376f536f76",
+      "title": "公司公告 _龙蟠科技：关于与宁德时代新能源科技股份有限公司 ...",
+      "url": "https://vip.stock.finance.sina.com.cn/corp/view/vCB_AllBulletinDetail.php?id=11460795",
+      "domain": "vip.stock.finance.sina.com.cn",
+      "source_type": "media",
+      "triage_score": 44.0,
+      "triage_decision": "link_record_only",
+      "read_status": "pending",
+      "metadata": {
+        "query_family": "official_ir",
+        "discovery": {
+          "engine": "bing",
+          "page_index": 1,
+          "rank_in_page": 6,
+          "page_attempt_id": "spa_3bcd2cc8acec",
+          "adapter_version": "bing-dom-20261001",
+          "retrieved_at": "2026-10-04T16:06:13.587945+00:00",
+          "raw_href": "https://vip.stock.finance.sina.com.cn/corp/view/vCB_AllBulletinDetail.php?id=11460795",
+          "url_resolution": "direct",
+          "display_url": "https://vip.stock.finance.sina.com.cn › corp › view › vCB_All...",
+          "date_text": null,
+          "result_kind": "organic",
+          "relevance": {
+            "relevant": false,
+            "target_match": true,
+            "task_match": false,
+            "content_form_ok": true,
+            "site_ok": true,
+            "matched_terms": [
+              "宁德时代新能源科技股份有限公司",
+              "宁德时代"
+            ],
+            "reasons": [
+              "task_keywords_missing"
+            ]
+          },
+          "relevance_rules_version": "relevance_rules_v1",
+          "query_id": "q_e023ade97c67"
+        },
+        "triage_reason": "命中目标实体(宁德时代新能源科技股份有限公司, 宁德时代)；来源类型=media；score=44",
+        "matched_signals": [
+          "target_entity_match"
+        ],
+        "need_model": false
+      },
+      "read_attempts": [],
+      "model_outputs": [],
+      "merged": [],
+      "admission": null
+    },
+    {
+      "id": "link_710a8b8309ca",
+      "title": "湖北万润新能源科技股份有限公司 关于与宁德时代新能源科技 ...",
+      "url": "https://static.cninfo.com.cn/finalpage/2025-05-20/1223588269.PDF",
+      "domain": "static.cninfo.com.cn",
+      "source_type": "exchange",
+      "triage_score": 58.0,
+      "triage_decision": "read",
+      "read_status": "pending",
+      "metadata": {
+        "query_family": "official_ir",
+        "discovery": {
+          "engine": "bing",
+          "page_index": 1,
+          "rank_in_page": 7,
+          "page_attempt_id": "spa_3bcd2cc8acec",
+          "adapter_version": "bing-dom-20261001",
+          "retrieved_at": "2026-10-04T16:06:13.587945+00:00",
+          "raw_href": "https://static.cninfo.com.cn/finalpage/2025-05-20/1223588269.PDF",
+          "url_resolution": "direct",
+          "display_url": "https://static.cninfo.com.cn › finalpage › ...",
+          "date_text": null,
+          "result_kind": "organic",
+          "relevance": {
+            "relevant": false,
+            "target_match": true,
+            "task_match": false,
+            "content_form_ok": true,
+            "site_ok": true,
+            "matched_terms": [
+              "宁德时代"
+            ],
+            "reasons": [
+              "task_keywords_missing"
+            ]
+          },
+          "relevance_rules_version": "relevance_rules_v1",
+          "query_id": "q_e023ade97c67"
+        },
+        "triage_reason": "命中目标实体(宁德时代)；来源类型=exchange；score=58",
+        "matched_signals": [
+          "target_entity_match",
+          "high_credibility_source"
+        ],
+        "need_model": false
+      },
+      "read_attempts": [],
+      "model_outputs": [],
+      "merged": [],
+      "admission": null
+    },
+    {
+      "id": "link_e2cb213e5d9d",
+      "title": "公告是董秘审查的 没有经董事长签发_违约_公司_ 宁德",
+      "url": "https://www.sohu.com/a/977638486_122249661",
+      "domain": "sohu.com",
+      "source_type": "media",
+      "triage_score": 43.0,
+      "triage_decision": "link_record_only",
+      "read_status": "pending",
+      "metadata": {
+        "query_family": "official_ir",
+        "discovery": {
+          "engine": "bing",
+          "page_index": 1,
+          "rank_in_page": 8,
+          "page_attempt_id": "spa_3bcd2cc8acec",
+          "adapter_version": "bing-dom-20261001",
+          "retrieved_at": "2026-10-04T16:06:13.587945+00:00",
+          "raw_href": "https://www.sohu.com/a/977638486_122249661",
+          "url_resolution": "direct",
+          "display_url": "https://www.sohu.com",
+          "date_text": null,
+          "result_kind": "organic",
+          "relevance": {
+            "relevant": true,
+            "target_match": true,
+            "task_match": true,
+            "content_form_ok": true,
+            "site_ok": true,
+            "matched_terms": [
+              "宁德时代",
+              "重大合同"
+            ],
+            "reasons": []
+          },
+          "relevance_rules_version": "relevance_rules_v1",
+          "query_id": "q_e023ade97c67"
+        },
+        "triage_reason": "命中目标实体(宁德时代)；含强事实词(合同)；来源类型=media；score=43",
+        "matched_signals": [
+          "target_entity_match",
+          "strong_fact_keyword"
+        ],
+        "need_model": false
+      },
+      "read_attempts": [],
+      "model_outputs": [],
+      "merged": [],
+      "admission": null
+    },
+    {
+      "id": "link_da31f7e23613",
+      "title": "容百科技因重大合同公告误导性陈述收行政处罚事先告知书 ...",
+      "url": "https://www.sohu.com/a/984630766_122014422",
+      "domain": "sohu.com",
+      "source_type": "media",
+      "triage_score": 59.0,
+      "triage_decision": "link_record_only",
+      "read_status": "link_record_only",
+      "metadata": {
+        "query_family": "official_ir",
+        "discovery": {
+          "engine": "bing",
+          "page_index": 1,
+          "rank_in_page": 9,
+          "page_attempt_id": "spa_3bcd2cc8acec",
+          "adapter_version": "bing-dom-20261001",
+          "retrieved_at": "2026-10-04T16:06:13.587945+00:00",
+          "raw_href": "https://www.sohu.com/a/984630766_122014422",
+          "url_resolution": "direct",
+          "display_url": "https://www.sohu.com",
+          "date_text": null,
+          "result_kind": "organic",
+          "relevance": {
+            "relevant": true,
+            "target_match": true,
+            "task_match": true,
+            "content_form_ok": true,
+            "site_ok": true,
+            "matched_terms": [
+              "宁德时代新能源科技股份有限公司",
+              "宁德时代",
+              "重大合同"
+            ],
+            "reasons": []
+          },
+          "relevance_rules_version": "relevance_rules_v1",
+          "query_id": "q_e023ade97c67"
+        },
+        "triage_reason": "时间窗过滤: outside_time_window",
+        "matched_signals": [
+          "target_entity_match",
+          "strong_fact_keyword",
+          "risk_keyword",
+          "time_window:outside_time_window"
+        ],
+        "need_model": false
+      },
+      "read_attempts": [
+        {
+          "read_status": "read",
+          "failure_reason": null,
+          "http_status": 200,
+          "content_length": 1044,
+          "extracted_title": "容百科技因重大合同公告误导性陈述收行政处罚事先告知书 公司及两高管合计拟被罚950万元_宁波容_合作_协议",
+          "extracted_publish_time": "2026-02-06 13:25:00.000000",
+          "content_hash": "4f6741cfcef8296f33343224f4d9a54d66125c84f12710b8bbdc3d9ccfca249c",
+          "transport": "http",
+          "publication_time": {
+            "status": "known",
+            "published_at": "2026-02-06T21:25:00+08:00",
+            "precision": "second",
+            "source": "sohu:#news-time",
+            "candidates": [
+              {
+                "published_at": "2026-02-06T21:25:00+08:00",
+                "precision": "second",
+                "source": "sohu:#news-time"
+              }
+            ]
+          },
+          "time_window": {
+            "status": "outside_time_window",
+            "allowed": false,
+            "published_at": "2026-02-06T21:25:00+08:00",
+            "source": "sohu:#news-time"
+          },
+          "body_scope_status": "scoped",
+          "body_scope_reason": null
+        }
+      ],
+      "model_outputs": [],
+      "merged": [],
+      "admission": null
+    },
+    {
+      "id": "link_912073eb12f0",
+      "title": "容百科技因重大合同公告误导性陈述收行政处罚 公司及董事长 ...",
+      "url": "https://finance.sina.cn/2026-04-10/detail-inhtztiw4911861.d.html?vt=4",
+      "domain": "finance.sina.cn",
+      "source_type": "media",
+      "triage_score": 18.0,
+      "triage_decision": "skip_for_now",
+      "read_status": "pending",
+      "metadata": {
+        "query_family": "official_ir",
+        "discovery": {
+          "engine": "bing",
+          "page_index": 1,
+          "rank_in_page": 10,
+          "page_attempt_id": "spa_3bcd2cc8acec",
+          "adapter_version": "bing-dom-20261001",
+          "retrieved_at": "2026-10-04T16:06:13.587945+00:00",
+          "raw_href": "https://finance.sina.cn/2026-04-10/detail-inhtztiw4911861.d.html?vt=4",
+          "url_resolution": "direct",
+          "display_url": "https://finance.sina.cn › detail-inhtztiw...",
+          "date_text": null,
+          "result_kind": "organic",
+          "relevance": {
+            "relevant": false,
+            "target_match": false,
+            "task_match": true,
+            "content_form_ok": true,
+            "site_ok": true,
+            "matched_terms": [
+              "重大合同"
+            ],
+            "reasons": [
+              "target_identity_missing"
+            ]
+          },
+          "relevance_rules_version": "relevance_rules_v1",
+          "query_id": "q_e023ade97c67"
+        },
+        "triage_reason": "含强事实词(合同, 处罚)；来源类型=media；score=18",
+        "matched_signals": [
+          "strong_fact_keyword",
+          "risk_keyword"
+        ],
+        "need_model": false
+      },
+      "read_attempts": [],
+      "model_outputs": [],
+      "merged": [],
+      "admission": null
+    }
+  ],
+  "formal_records": [
+    {
+      "record_type": "facts",
+      "record_id": "fact_07d8226e272c",
+      "merged_analysis_id": "merged_4041dd5e3817",
+      "source_link_id": "link_48653e315601",
+      "source": {
+        "url": "https://www.energytrend.cn/news/20260915-148614.html",
+        "title": "远景能源、 宁德时代中标 ！河北100MW/400MWh储能系统 ...",
+        "source_type": "media",
+        "published_at": "2026-09-15 06:41:00.000000",
+        "content_hash": "090e9bdbaba259a63f4d8fa9fb7de36e796fdc7f73e296300b584dceb166fc46"
+      },
+      "record": {
+        "target_id": "company_300750",
+        "fact_type": "order",
+        "fact_statement": "宁德时代中标河北任丘智弘新型技术路线独立储能试点项目二标段钠电池储能系统，中标价4141.622万元。",
+        "entities": {
+          "subject": "宁德时代",
+          "object": "河北任丘智弘储能试点项目",
+          "product": "钠离子储能系统",
+          "region": "河北任丘"
+        },
+        "metrics": {
+          "amount": 41416220,
+          "currency": "CNY",
+          "volume": 40,
+          "unit": "MWh",
+          "yoy": null,
+          "mom": null,
+          "amount_unit": "元",
+          "amount_raw": 4141.622,
+          "amount_raw_unit": "万元",
+          "amount_evidence": {
+            "passage_id": "p2",
+            "quote": "4141.622万元"
+          },
+          "period_review": {
+            "candidate": "2026-09-15",
+            "status": "pending_review",
+            "candidate_passages": [
+              {
+                "passage_id": "p0",
+                "quotes": [
+                  "2026年9月15日"
+                ]
+              }
+            ]
+          }
+        },
+        "period": null,
+        "direction": "positive",
+        "evidence_locator": {
+          "passage_id": "p2",
+          "section": "正文第3段",
+          "table_id": null,
+          "excerpt": "二标段为钠电池储能系统，10MW/40MWh钠离子储能系统，宁德时代中标价为4141.622万元，合单价1.035元/Wh。"
+        },
+        "confidence": 0.9,
+        "created_at": "2026-10-04 16:06:38.306520"
+      }
+    },
+    {
+      "record_type": "facts",
+      "record_id": "fact_317902e7f49f",
+      "merged_analysis_id": "merged_4041dd5e3817",
+      "source_link_id": "link_48653e315601",
+      "source": {
+        "url": "https://www.energytrend.cn/news/20260915-148614.html",
+        "title": "远景能源、 宁德时代中标 ！河北100MW/400MWh储能系统 ...",
+        "source_type": "media",
+        "published_at": "2026-09-15 06:41:00.000000",
+        "content_hash": "090e9bdbaba259a63f4d8fa9fb7de36e796fdc7f73e296300b584dceb166fc46"
+      },
+      "record": {
+        "target_id": "company_300750",
+        "fact_type": "price",
+        "fact_statement": "宁德时代二标段钠电池储能系统中标单价为1.035元/Wh。",
+        "entities": {
+          "subject": "宁德时代",
+          "object": "二标段",
+          "product": "钠离子储能系统",
+          "region": "河北任丘"
+        },
+        "metrics": {
+          "amount": null,
+          "currency": "CNY",
+          "volume": null,
+          "unit": "元/Wh",
+          "yoy": null,
+          "mom": null,
+          "unit_price": 1.035,
+          "unit_price_unit": "元/Wh",
+          "unit_price_evidence": {
+            "passage_id": "p2",
+            "quote": "1.035元/Wh"
+          },
+          "amount_reclassified_as": "unit_price",
+          "period_review": {
+            "candidate": "2026-09-15",
+            "status": "pending_review",
+            "candidate_passages": [
+              {
+                "passage_id": "p0",
+                "quotes": [
+                  "2026年9月15日"
+                ]
+              }
+            ]
+          }
+        },
+        "period": null,
+        "direction": "neutral",
+        "evidence_locator": {
+          "passage_id": "p2",
+          "section": "正文第3段",
+          "table_id": null,
+          "excerpt": "二标段为钠电池储能系统，10MW/40MWh钠离子储能系统，宁德时代中标价为4141.622万元，合单价1.035元/Wh。"
+        },
+        "confidence": 0.9,
+        "created_at": "2026-10-04 16:06:38.306549"
+      }
+    },
+    {
+      "record_type": "facts",
+      "record_id": "fact_c32dd23e75c2",
+      "merged_analysis_id": "merged_4041dd5e3817",
+      "source_link_id": "link_48653e315601",
+      "source": {
+        "url": "https://www.energytrend.cn/news/20260915-148614.html",
+        "title": "远景能源、 宁德时代中标 ！河北100MW/400MWh储能系统 ...",
+        "source_type": "media",
+        "published_at": "2026-09-15 06:41:00.000000",
+        "content_hash": "090e9bdbaba259a63f4d8fa9fb7de36e796fdc7f73e296300b584dceb166fc46"
+      },
+      "record": {
+        "target_id": "company_300750",
+        "fact_type": "order",
+        "fact_statement": "一标段磷酸铁锂电池储能系统由远景能源以19461.6万元中标，折合单价0.518元/Wh。",
+        "entities": {
+          "subject": "远景能源",
+          "object": "一标段",
+          "product": "磷酸铁锂储能系统",
+          "region": "河北任丘"
+        },
+        "metrics": {
+          "amount": 194616000,
+          "currency": "CNY",
+          "volume": 360,
+          "unit": "MWh",
+          "yoy": null,
+          "mom": null,
+          "amount_unit": "元",
+          "amount_raw": 19461.6,
+          "amount_raw_unit": "万元",
+          "amount_evidence": {
+            "passage_id": "p1",
+            "quote": "19461.6万元"
+          },
+          "period_review": {
+            "candidate": "2026-09-15",
+            "status": "pending_review",
+            "candidate_passages": [
+              {
+                "passage_id": "p0",
+                "quotes": [
+                  "2026年9月15日"
+                ]
+              }
+            ]
+          },
+          "source_price_basis_status": "pending_review"
+        },
+        "period": null,
+        "direction": "neutral",
+        "evidence_locator": {
+          "passage_id": "p1",
+          "section": "正文第2段",
+          "table_id": null,
+          "excerpt": "项目共两个标段，一标段为磷酸铁锂电池储能系统，30MW/120MWh大容量磷酸铁锂+60MW/240MWh长寿命磷酸铁锂，远景能源中标价为19461.6万元，合单价0.518元/Wh；"
+        },
+        "confidence": 0.85,
+        "created_at": "2026-10-04 16:06:38.306568"
+      }
+    },
+    {
+      "record_type": "facts",
+      "record_id": "fact_092816fd3654",
+      "merged_analysis_id": "merged_4041dd5e3817",
+      "source_link_id": "link_48653e315601",
+      "source": {
+        "url": "https://www.energytrend.cn/news/20260915-148614.html",
+        "title": "远景能源、 宁德时代中标 ！河北100MW/400MWh储能系统 ...",
+        "source_type": "media",
+        "published_at": "2026-09-15 06:41:00.000000",
+        "content_hash": "090e9bdbaba259a63f4d8fa9fb7de36e796fdc7f73e296300b584dceb166fc46"
+      },
+      "record": {
+        "target_id": "company_300750",
+        "fact_type": "order",
+        "fact_statement": "项目名称为河北任丘智弘100MW/400MWh新型技术路线磷酸铁锂电池+钠电池独立储能试点项目储能系统设备采购，中标结果于2026年9月15日公示。",
+        "entities": {
+          "subject": "河北任丘智弘",
+          "object": "储能系统设备采购",
+          "product": "磷酸铁锂电池+钠电池",
+          "region": "河北任丘"
+        },
+        "metrics": {
+          "amount": null,
+          "currency": null,
+          "volume": 400,
+          "unit": "MWh",
+          "yoy": null,
+          "mom": null
+        },
+        "period": "2026-09-15",
+        "direction": "neutral",
+        "evidence_locator": {
+          "passage_id": "p0",
+          "section": "正文第1段",
+          "table_id": null,
+          "excerpt": "2026年9月15日，河北任丘智弘100MW/400MWh新型技术路线磷酸铁锂电池+钠电池独立储能试点项目储能系统设备采购中标结果公示。"
+        },
+        "confidence": 0.85,
+        "created_at": "2026-10-04 16:06:38.306584"
+      }
+    },
+    {
+      "record_type": "facts",
+      "record_id": "fact_3a1c0de90516",
+      "merged_analysis_id": "merged_4041dd5e3817",
+      "source_link_id": "link_48653e315601",
+      "source": {
+        "url": "https://www.energytrend.cn/news/20260915-148614.html",
+        "title": "远景能源、 宁德时代中标 ！河北100MW/400MWh储能系统 ...",
+        "source_type": "media",
+        "published_at": "2026-09-15 06:41:00.000000",
+        "content_hash": "090e9bdbaba259a63f4d8fa9fb7de36e796fdc7f73e296300b584dceb166fc46"
+      },
+      "record": {
+        "target_id": "company_300750",
+        "fact_type": "product",
+        "fact_statement": "二标段为10MW/40MWh钠离子储能系统，属钠电池储能技术路线应用。",
+        "entities": {
+          "subject": "项目二标段",
+          "object": "钠离子储能系统",
+          "product": "钠离子储能系统",
+          "region": "河北任丘"
+        },
+        "metrics": {
+          "amount": null,
+          "currency": null,
+          "volume": 40,
+          "unit": "MWh",
+          "yoy": null,
+          "mom": null,
+          "period_review": {
+            "candidate": "2026-09-15",
+            "status": "pending_review",
+            "candidate_passages": [
+              {
+                "passage_id": "p0",
+                "quotes": [
+                  "2026年9月15日"
+                ]
+              }
+            ]
+          }
+        },
+        "period": null,
+        "direction": "positive",
+        "evidence_locator": {
+          "passage_id": "p2",
+          "section": "正文第3段",
+          "table_id": null,
+          "excerpt": "二标段为钠电池储能系统，10MW/40MWh钠离子储能系统，宁德时代中标价为4141.622万元，合单价1.035元/Wh。"
+        },
+        "confidence": 0.85,
+        "created_at": "2026-10-04 16:06:38.306605"
+      }
+    },
+    {
+      "record_type": "metrics",
+      "record_id": "metric_a564e7c43d4e",
+      "merged_analysis_id": "merged_4041dd5e3817",
+      "source_link_id": "link_48653e315601",
+      "source": {
+        "url": "https://www.energytrend.cn/news/20260915-148614.html",
+        "title": "远景能源、 宁德时代中标 ！河北100MW/400MWh储能系统 ...",
+        "source_type": "media",
+        "published_at": "2026-09-15 06:41:00.000000",
+        "content_hash": "090e9bdbaba259a63f4d8fa9fb7de36e796fdc7f73e296300b584dceb166fc46"
+      },
+      "record": {
+        "target_id": "company_300750",
+        "metric_name": "宁德时代钠电储能系统中标金额",
+        "metric_value": 4141.622,
+        "unit": "万元",
+        "period": null,
+        "scope": {
+          "product": "钠离子储能系统",
+          "region": "河北任丘",
+          "segment": "二标段",
+          "period_review": {
+            "candidate": "2026-09-15",
+            "status": "pending_review",
+            "candidate_passages": [
+              {
+                "passage_id": "p0",
+                "quotes": [
+                  "2026年9月15日"
+                ]
+              }
+            ]
+          }
+        },
+        "comparison": {
+          "yoy": null,
+          "mom": null,
+          "wow": null
+        },
+        "interpretation": "公司在该试点项目中的钠电储能中标金额。",
+        "impact_channels": [
+          "revenue"
+        ],
+        "evidence_locator": {
+          "passage_id": "p2",
+          "section": null,
+          "table_id": null,
+          "excerpt": "二标段为钠电池储能系统，10MW/40MWh钠离子储能系统，宁德时代中标价为4141.622万元，合单价1.035元/Wh。"
+        },
+        "confidence": 0.9,
+        "created_at": "2026-10-04 16:06:38.306623"
+      }
+    },
+    {
+      "record_type": "metrics",
+      "record_id": "metric_bfa878978903",
+      "merged_analysis_id": "merged_4041dd5e3817",
+      "source_link_id": "link_48653e315601",
+      "source": {
+        "url": "https://www.energytrend.cn/news/20260915-148614.html",
+        "title": "远景能源、 宁德时代中标 ！河北100MW/400MWh储能系统 ...",
+        "source_type": "media",
+        "published_at": "2026-09-15 06:41:00.000000",
+        "content_hash": "090e9bdbaba259a63f4d8fa9fb7de36e796fdc7f73e296300b584dceb166fc46"
+      },
+      "record": {
+        "target_id": "company_300750",
+        "metric_name": "宁德时代钠电储能系统中标单价",
+        "metric_value": 1.035,
+        "unit": "元/Wh",
+        "period": null,
+        "scope": {
+          "product": "钠离子储能系统",
+          "region": "河北任丘",
+          "segment": "二标段",
+          "period_review": {
+            "candidate": "2026-09-15",
+            "status": "pending_review",
+            "candidate_passages": [
+              {
+                "passage_id": "p0",
+                "quotes": [
+                  "2026年9月15日"
+                ]
+              }
+            ]
+          },
+          "economic_interpretation_review": {
+            "status": "pending_review",
+            "interpretation": "钠电储能系统单位价格，高于同项目磷酸铁锂单价（0.518元/Wh）约一倍。",
+            "impact_channels": [
+              "revenue",
+              "margin"
+            ]
+          }
+        },
+        "comparison": {
+          "yoy": null,
+          "mom": null,
+          "wow": null
+        },
+        "interpretation": "来源报价观察；经济含义待核查。",
+        "impact_channels": [],
+        "evidence_locator": {
+          "passage_id": "p2",
+          "section": null,
+          "table_id": null,
+          "excerpt": "二标段为钠电池储能系统，10MW/40MWh钠离子储能系统，宁德时代中标价为4141.622万元，合单价1.035元/Wh。"
+        },
+        "confidence": 0.9,
+        "created_at": "2026-10-04 16:06:38.306651"
+      }
+    },
+    {
+      "record_type": "metrics",
+      "record_id": "metric_941dde8ca3e1",
+      "merged_analysis_id": "merged_4041dd5e3817",
+      "source_link_id": "link_48653e315601",
+      "source": {
+        "url": "https://www.energytrend.cn/news/20260915-148614.html",
+        "title": "远景能源、 宁德时代中标 ！河北100MW/400MWh储能系统 ...",
+        "source_type": "media",
+        "published_at": "2026-09-15 06:41:00.000000",
+        "content_hash": "090e9bdbaba259a63f4d8fa9fb7de36e796fdc7f73e296300b584dceb166fc46"
+      },
+      "record": {
+        "target_id": "company_300750",
+        "metric_name": "二标段钠电储能容量",
+        "metric_value": 40.0,
+        "unit": "MWh",
+        "period": null,
+        "scope": {
+          "product": "钠离子储能系统",
+          "region": "河北任丘",
+          "segment": "二标段",
+          "period_review": {
+            "candidate": "2026-09-15",
+            "status": "pending_review",
+            "candidate_passages": [
+              {
+                "passage_id": "p0",
+                "quotes": [
+                  "2026年9月15日"
+                ]
+              }
+            ]
+          }
+        },
+        "comparison": {
+          "yoy": null,
+          "mom": null,
+          "wow": null
+        },
+        "interpretation": "钠电储能系统规模10MW/40MWh（2小时系统）。",
+        "impact_channels": [
+          "demand"
+        ],
+        "evidence_locator": {
+          "passage_id": "p2",
+          "section": null,
+          "table_id": null,
+          "excerpt": "二标段为钠电池储能系统，10MW/40MWh钠离子储能系统，宁德时代中标价为4141.622万元，合单价1.035元/Wh。"
+        },
+        "confidence": 0.85,
+        "created_at": "2026-10-04 16:06:38.306668"
+      }
+    },
+    {
+      "record_type": "metrics",
+      "record_id": "metric_98ad74b0ac1b",
+      "merged_analysis_id": "merged_4041dd5e3817",
+      "source_link_id": "link_48653e315601",
+      "source": {
+        "url": "https://www.energytrend.cn/news/20260915-148614.html",
+        "title": "远景能源、 宁德时代中标 ！河北100MW/400MWh储能系统 ...",
+        "source_type": "media",
+        "published_at": "2026-09-15 06:41:00.000000",
+        "content_hash": "090e9bdbaba259a63f4d8fa9fb7de36e796fdc7f73e296300b584dceb166fc46"
+      },
+      "record": {
+        "target_id": "company_300750",
+        "metric_name": "磷酸铁锂储能系统中标单价",
+        "metric_value": 0.518,
+        "unit": "元/Wh",
+        "period": null,
+        "scope": {
+          "product": "磷酸铁锂储能系统",
+          "region": "河北任丘",
+          "segment": "一标段",
+          "period_review": {
+            "candidate": "2026-09-15",
+            "status": "pending_review",
+            "candidate_passages": [
+              {
+                "passage_id": "p0",
+                "quotes": [
+                  "2026年9月15日"
+                ]
+              }
+            ]
+          },
+          "economic_interpretation_review": {
+            "status": "pending_review",
+            "interpretation": "作为钠电单价对比基准，反映钠电路线当前成本仍偏高。",
+            "impact_channels": [
+              "cost",
+              "margin"
+            ]
+          },
+          "source_price_basis_review": {
+            "passage_id": "p1",
+            "amount_yuan": "194616000.0",
+            "capacity_MWh": "360",
+            "quoted_price_yuan_per_Wh": "0.518",
+            "computed_price_yuan_per_Wh": "0.5406",
+            "condition": "若金额、容量与单价对应同一供货范围，则数值不相容；范围尚未确认"
+          },
+          "source_price_basis_status": "pending_review",
+          "usable_as_price_benchmark": false,
+          "source_price_analysis_review": {
+            "interpretation": "来源报价观察；经济含义待核查。",
+            "impact_channels": []
+          }
+        },
+        "comparison": {
+          "yoy": null,
+          "mom": null,
+          "wow": null
+        },
+        "interpretation": "来源报价观察；供货范围与报价口径待核查，暂不用于成本或利润比较。",
+        "impact_channels": [],
+        "evidence_locator": {
+          "passage_id": "p1",
+          "section": null,
+          "table_id": null,
+          "excerpt": "项目共两个标段，一标段为磷酸铁锂电池储能系统，30MW/120MWh大容量磷酸铁锂+60MW/240MWh长寿命磷酸铁锂，远景能源中标价为19461.6万元，合单价0.518元/Wh；"
+        },
+        "confidence": 0.85,
+        "created_at": "2026-10-04 16:06:38.306683"
+      }
+    },
+    {
+      "record_type": "metrics",
+      "record_id": "metric_0210f27bcbe9",
+      "merged_analysis_id": "merged_4041dd5e3817",
+      "source_link_id": "link_48653e315601",
+      "source": {
+        "url": "https://www.energytrend.cn/news/20260915-148614.html",
+        "title": "远景能源、 宁德时代中标 ！河北100MW/400MWh储能系统 ...",
+        "source_type": "media",
+        "published_at": "2026-09-15 06:41:00.000000",
+        "content_hash": "090e9bdbaba259a63f4d8fa9fb7de36e796fdc7f73e296300b584dceb166fc46"
+      },
+      "record": {
+        "target_id": "company_300750",
+        "metric_name": "一标段磷酸铁锂中标金额",
+        "metric_value": 19461.6,
+        "unit": "万元",
+        "period": null,
+        "scope": {
+          "product": "磷酸铁锂储能系统",
+          "region": "河北任丘",
+          "segment": "一标段",
+          "period_review": {
+            "candidate": "2026-09-15",
+            "status": "pending_review",
+            "candidate_passages": [
+              {
+                "passage_id": "p0",
+                "quotes": [
+                  "2026年9月15日"
+                ]
+              }
+            ]
+          },
+          "economic_interpretation_review": {
+            "status": "pending_review",
+            "interpretation": "竞争方远景能源中标金额，用于横向比较规模。",
+            "impact_channels": [
+              "revenue"
+            ]
+          }
+        },
+        "comparison": {
+          "yoy": null,
+          "mom": null,
+          "wow": null
+        },
+        "interpretation": "用于横向比较规模；对目标公司竞争影响的判断缺少依据，待核查。",
+        "impact_channels": [],
+        "evidence_locator": {
+          "passage_id": "p1",
+          "section": null,
+          "table_id": null,
+          "excerpt": "项目共两个标段，一标段为磷酸铁锂电池储能系统，30MW/120MWh大容量磷酸铁锂+60MW/240MWh长寿命磷酸铁锂，远景能源中标价为19461.6万元，合单价0.518元/Wh；"
+        },
+        "confidence": 0.85,
+        "created_at": "2026-10-04 16:06:38.306698"
+      }
+    },
+    {
+      "record_type": "events",
+      "record_id": "evt_c15658c4a2fa",
+      "merged_analysis_id": "merged_4041dd5e3817",
+      "source_link_id": "link_48653e315601",
+      "source": {
+        "url": "https://www.energytrend.cn/news/20260915-148614.html",
+        "title": "远景能源、 宁德时代中标 ！河北100MW/400MWh储能系统 ...",
+        "source_type": "media",
+        "published_at": "2026-09-15 06:41:00.000000",
+        "content_hash": "090e9bdbaba259a63f4d8fa9fb7de36e796fdc7f73e296300b584dceb166fc46"
+      },
+      "record": {
+        "target_id": "company_300750",
+        "event_type": "major_order",
+        "event_date": null,
+        "summary": "宁德时代中标河北任丘智弘100MW/400MWh独立储能试点项目二标段10MW/40MWh钠电池储能系统，中标价4141.622万元，单价1.035元/Wh。",
+        "entities": {
+          "subject": "宁德时代",
+          "counterparty": null,
+          "regulator": null,
+          "product": "钠离子储能系统",
+          "counterparty_candidate": "河北任丘智弘（项目业主/招标方）",
+          "counterparty_status": "pending_review"
+        },
+        "metrics": {
+          "amount": 41416220,
+          "currency": "CNY",
+          "capacity": 40,
+          "volume": null,
+          "amount_unit": "元",
+          "amount_raw": 4141.622,
+          "amount_raw_unit": "万元",
+          "amount_evidence": {
+            "passage_id": "p2",
+            "quote": "4141.622万元"
+          },
+          "event_date_review": {
+            "candidate": "2026-09-15",
+            "status": "pending_review",
+            "candidate_passages": [
+              {
+                "passage_id": "p0",
+                "quotes": [
+                  "2026年9月15日"
+                ]
+              }
+            ]
+          }
+        },
+        "impact": {
+          "direction": "positive",
+          "channels": [
+            "revenue",
+            "demand"
+          ],
+          "horizon": "1m",
+          "magnitude_guess": "low"
+        },
+        "tracking_variables": [],
+        "source_corroboration_status": "single_source",
+        "evidence_locator": {
+          "passage_id": "p2",
+          "section": null,
+          "table_id": null,
+          "excerpt": "二标段为钠电池储能系统，10MW/40MWh钠离子储能系统，宁德时代中标价为4141.622万元，合单价1.035元/Wh。"
+        },
+        "confidence": 0.85,
+        "created_at": "2026-10-04 16:06:38.306717"
+      }
+    },
+    {
+      "record_type": "events",
+      "record_id": "evt_f6e6562ba72c",
+      "merged_analysis_id": "merged_4041dd5e3817",
+      "source_link_id": "link_48653e315601",
+      "source": {
+        "url": "https://www.energytrend.cn/news/20260915-148614.html",
+        "title": "远景能源、 宁德时代中标 ！河北100MW/400MWh储能系统 ...",
+        "source_type": "media",
+        "published_at": "2026-09-15 06:41:00.000000",
+        "content_hash": "090e9bdbaba259a63f4d8fa9fb7de36e796fdc7f73e296300b584dceb166fc46"
+      },
+      "record": {
+        "target_id": "company_300750",
+        "event_type": "tender",
+        "event_date": "2026-09-15 00:00:00.000000",
+        "summary": "河北任丘智弘独立储能试点项目储能系统设备采购中标结果公示，两标段分别由远景能源与宁德时代中标。",
+        "entities": {
+          "subject": "河北任丘智弘",
+          "counterparty": null,
+          "regulator": null,
+          "product": "磷酸铁锂电池+钠电池储能系统",
+          "counterparty_candidate": "远景能源、宁德时代",
+          "counterparty_status": "pending_review"
+        },
+        "metrics": {
+          "amount": null,
+          "currency": "CNY",
+          "capacity": 400,
+          "volume": null,
+          "amount_candidate": 23603.222,
+          "amount_status": "pending_review"
+        },
+        "impact": {
+          "direction": "neutral",
+          "channels": [
+            "demand"
+          ],
+          "horizon": "1m",
+          "magnitude_guess": "low"
+        },
+        "tracking_variables": [],
+        "source_corroboration_status": "single_source",
+        "evidence_locator": {
+          "passage_id": "p0",
+          "section": null,
+          "table_id": null,
+          "excerpt": "2026年9月15日，河北任丘智弘100MW/400MWh新型技术路线磷酸铁锂电池+钠电池独立储能试点项目储能系统设备采购中标结果公示。"
+        },
+        "confidence": 0.8,
+        "created_at": "2026-10-04 16:06:38.306753"
+      }
+    }
+  ],
+  "rejected_candidates": [],
+  "briefs_not_formal": [
+    {
+      "one_sentence": "河北任丘智弘100MW/400MWh独立储能试点项目公示中标结果，宁德时代以4141.622万元中标二标段10MW/40MWh钠电池储能系统，折合单价1.035元/Wh。",
+      "what_happened": "2026年9月15日项目储能系统设备采购中标结果公示，共两个标段：一标段30MW/120MWh大容量磷酸铁锂+60MW/240MWh长寿命磷酸铁锂由远景能源以19461.6万元（0.518元/Wh）中标；二标段10MW/40MWh钠离子储能系统由宁德时代以4141.622万元（1.035元/Wh）中标。",
+      "why_it_matters": "该订单为宁德时代钠离子电池储能系统在电网侧独立储能试点中的落地，验证钠电技术路线商业化，具备技术路线与定价信号意义；同项目两个标段报价的供货范围与口径尚未核实，不作为可比基准。订单对公司收入的贡献尚未核实。",
+      "uncertainty": "仅为中标公示，项目业主与招标主体细节不明；成本或盈利含义待核查。",
+      "confidence": 0.82
+    }
+  ],
+  "coverage_gaps_not_formal": [
+    {
+      "id": "gap_9bbfba518244",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "missing_official_source",
+      "description": "仅为媒体转载的中标公示，缺少招标方或交易平台发布的原始中标公告链接。",
+      "suggested_next_queries": "[\"\\u4efb\\u4e18\\u667a\\u5f18\\u50a8\\u80fd \\u4e2d\\u6807\\u516c\\u544a \\u539f\\u59cb\", \"\\u6cb3\\u5317 \\u50a8\\u80fd\\u8bd5\\u70b9 \\u4e2d\\u6807\\u516c\\u793a \\u5b98\\u65b9\"]",
+      "priority": "high",
+      "status": "open",
+      "created_at": "2026-10-04 16:06:38.306818"
+    },
+    {
+      "id": "gap_c20b6d25dbf6",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "missing_customer_confirmation",
+      "description": "项目业主/招标主体（河北任丘智弘）身份与背景未在来源中说明。",
+      "suggested_next_queries": "[\"\\u6cb3\\u5317\\u4efb\\u4e18\\u667a\\u5f18 \\u4f01\\u4e1a\\u4fe1\\u606f\", \"\\u4efb\\u4e18\\u667a\\u5f18\\u50a8\\u80fd \\u4e1a\\u4e3b\"]",
+      "priority": "medium",
+      "status": "open",
+      "created_at": "2026-10-04 16:06:38.306837"
+    },
+    {
+      "id": "gap_ba81acfd2f27",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "missing_metric",
+      "description": "缺少宁德时代储能业务整体订单量、钠电产能及交付节奏等量化信息。",
+      "suggested_next_queries": "[\"\\u5b81\\u5fb7\\u65f6\\u4ee3 \\u94a0\\u79bb\\u5b50\\u7535\\u6c60 \\u4ea7\\u80fd 2026\", \"\\u5b81\\u5fb7\\u65f6\\u4ee3 \\u50a8\\u80fd \\u8ba2\\u5355 \\u5728\\u624b\"]",
+      "priority": "medium",
+      "status": "open",
+      "created_at": "2026-10-04 16:06:38.306849"
+    },
+    {
+      "id": "gap_86cf4f97f1b5",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "relation_evidence_unverified",
+      "description": "待核查关系：宁德时代 — supplier_of — 河北任丘智弘储能试点项目（业主）；原引用=p2；引用正文未出现完整客体名称，实体身份或项目业主待核查。未作为结构化关系保留。review_id=relation-review-98338efc414d7a63",
+      "suggested_next_queries": "[]",
+      "priority": "high",
+      "status": "open",
+      "created_at": "2026-10-04 16:06:38.306861"
+    },
+    {
+      "id": "gap_b51b562c8027",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "relation_evidence_unverified",
+      "description": "待核查关系：远景能源 — competitor_of — 宁德时代；原引用=p1；引用正文未出现完整客体名称，实体身份或项目业主待核查；未找到规则可识别的明确肯定竞争关系陈述；共同出现或分别中标不足以确认竞争关系。未作为结构化关系保留。review_id=relation-review-1580e52a2bfb05e5",
+      "suggested_next_queries": "[]",
+      "priority": "high",
+      "status": "open",
+      "created_at": "2026-10-04 16:06:38.306872"
+    },
+    {
+      "id": "gap_f4ac587014bb",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "extraction_quality_review",
+      "description": "待核查 events[1].metrics.amount：金额或币种缺少可验证依据；review_id=quality-3deb21908d50a24c",
+      "suggested_next_queries": "[]",
+      "priority": "high",
+      "status": "open",
+      "created_at": "2026-10-04 16:06:38.306883"
+    },
+    {
+      "id": "gap_b498f9a697b4",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "extraction_quality_review",
+      "description": "待核查 events[0].event_date：日期跨段归属未验证；review_id=quality-1ef4fb0f02cef722",
+      "suggested_next_queries": "[]",
+      "priority": "high",
+      "status": "open",
+      "created_at": "2026-10-04 16:06:38.306894"
+    },
+    {
+      "id": "gap_0afa5c8aa445",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "extraction_quality_review",
+      "description": "待核查 facts[0].period：日期跨段归属未验证；review_id=quality-997370c56149d0c1",
+      "suggested_next_queries": "[]",
+      "priority": "high",
+      "status": "open",
+      "created_at": "2026-10-04 16:06:38.306904"
+    },
+    {
+      "id": "gap_ff3c70a48e45",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "extraction_quality_review",
+      "description": "待核查 facts[1].period：日期跨段归属未验证；review_id=quality-332ce414e4409ed8",
+      "suggested_next_queries": "[]",
+      "priority": "high",
+      "status": "open",
+      "created_at": "2026-10-04 16:06:38.306915"
+    },
+    {
+      "id": "gap_576dd68a97d6",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "extraction_quality_review",
+      "description": "待核查 facts[2].period：日期跨段归属未验证；review_id=quality-056e74c19a30d4c3",
+      "suggested_next_queries": "[]",
+      "priority": "high",
+      "status": "open",
+      "created_at": "2026-10-04 16:06:38.306925"
+    },
+    {
+      "id": "gap_5434563d1b89",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "extraction_quality_review",
+      "description": "待核查 facts[4].period：日期跨段归属未验证；review_id=quality-af701644de763818",
+      "suggested_next_queries": "[]",
+      "priority": "high",
+      "status": "open",
+      "created_at": "2026-10-04 16:06:38.306936"
+    },
+    {
+      "id": "gap_4068de64cf55",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "extraction_quality_review",
+      "description": "待核查 metrics[0].period：日期跨段归属未验证；review_id=quality-cbb83b626f9e22b1",
+      "suggested_next_queries": "[]",
+      "priority": "high",
+      "status": "open",
+      "created_at": "2026-10-04 16:06:38.306947"
+    },
+    {
+      "id": "gap_f53abb3a7826",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "extraction_quality_review",
+      "description": "待核查 metrics[1].period：日期跨段归属未验证；review_id=quality-fc17ca4d02a98dd7",
+      "suggested_next_queries": "[]",
+      "priority": "high",
+      "status": "open",
+      "created_at": "2026-10-04 16:06:38.306960"
+    },
+    {
+      "id": "gap_41412cada39b",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "extraction_quality_review",
+      "description": "待核查 metrics[2].period：日期跨段归属未验证；review_id=quality-dd97efe25fbfafcd",
+      "suggested_next_queries": "[]",
+      "priority": "high",
+      "status": "open",
+      "created_at": "2026-10-04 16:06:38.306971"
+    },
+    {
+      "id": "gap_3e98e565b72c",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "extraction_quality_review",
+      "description": "待核查 metrics[3].period：日期跨段归属未验证；review_id=quality-350da61e6d01c0ac",
+      "suggested_next_queries": "[]",
+      "priority": "high",
+      "status": "open",
+      "created_at": "2026-10-04 16:06:38.306982"
+    },
+    {
+      "id": "gap_66fc384b41c6",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "extraction_quality_review",
+      "description": "待核查 metrics[4].period：日期跨段归属未验证；review_id=quality-33953ee47bcf8cd0",
+      "suggested_next_queries": "[]",
+      "priority": "high",
+      "status": "open",
+      "created_at": "2026-10-04 16:06:38.306993"
+    },
+    {
+      "id": "gap_6a58dd630bc8",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "extraction_quality_review",
+      "description": "待核查 events[0].entities.counterparty：交易对手角色或跨段归属未验证；review_id=quality-b8081b7047cd79e5",
+      "suggested_next_queries": "[]",
+      "priority": "high",
+      "status": "open",
+      "created_at": "2026-10-04 16:06:38.307003"
+    },
+    {
+      "id": "gap_e62694a8e5ca",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "extraction_quality_review",
+      "description": "待核查 events[1].entities.counterparty：交易对手角色或跨段归属未验证；review_id=quality-726721ca2f5ecf4e",
+      "suggested_next_queries": "[]",
+      "priority": "high",
+      "status": "open",
+      "created_at": "2026-10-04 16:06:38.307014"
+    },
+    {
+      "id": "gap_2db31b990700",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "extraction_quality_review",
+      "description": "待核查 customer_supplier_signals[0]：客户供应商身份或角色缺少正文支持；review_id=quality-ab8bde2e29889a1e",
+      "suggested_next_queries": "[]",
+      "priority": "high",
+      "status": "open",
+      "created_at": "2026-10-04 16:06:38.307030"
+    },
+    {
+      "id": "gap_2729f4f181bc",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "extraction_quality_review",
+      "description": "待核查 price_cost_margin_signals[0]：缺少该趋势、份额或利润判断的必要证据；review_id=quality-58c1296c6d07a49b",
+      "suggested_next_queries": "[]",
+      "priority": "high",
+      "status": "open",
+      "created_at": "2026-10-04 16:06:38.307040"
+    },
+    {
+      "id": "gap_830046f8ea2b",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "extraction_quality_review",
+      "description": "待核查 price_cost_margin_signals[1]：缺少该趋势、份额或利润判断的必要证据；review_id=quality-ded049b8c6001d39",
+      "suggested_next_queries": "[]",
+      "priority": "high",
+      "status": "open",
+      "created_at": "2026-10-04 16:06:38.307050"
+    },
+    {
+      "id": "gap_30085093c7ec",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "extraction_quality_review",
+      "description": "待核查 catalysts[0]：当前催化剂结构缺少贯通入库的证据定位，尚不能核实事项与预期日期；review_id=quality-e751f53fff8aab14；审查记录={\"action\": \"quarantine_catalyst\", \"detail\": {\"scope\": \"待核查线索；不由已发生的中标推定未来交付、投运安排或经济影响\"}, \"original\": {\"catalyst_id\": null, \"catalyst_type\": \"tender_result\", \"confidence\": 0.75, \"description\": \"宁德时代钠电池储能系统中标河北独立储能试点项目，验证钠电储能商业化落地。\", \"expected_date\": \"2026-09-15\", \"potential_impact\": \"正面，提供钠电储能订单与定价参照，规模有限但具示范意义。\"}, \"path\": \"catalysts[0]\", \"reason\": \"当前催化剂结构缺少贯通入库的证据定位，尚不能核实事项与预期日期\", \"review_id\": \"quality-e751f53fff8aab14\"}",
+      "suggested_next_queries": "[]",
+      "priority": "high",
+      "status": "open",
+      "created_at": "2026-10-04 16:06:38.307060"
+    },
+    {
+      "id": "gap_e8b48f31202d",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "extraction_quality_review",
+      "description": "待核查 metrics[1].interpretation：报价不能单独证明成本、利润或替代经济性；review_id=quality-7b49e0bcc50c34fc",
+      "suggested_next_queries": "[]",
+      "priority": "high",
+      "status": "open",
+      "created_at": "2026-10-04 16:06:38.307071"
+    },
+    {
+      "id": "gap_337919dd55fe",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "extraction_quality_review",
+      "description": "待核查 metrics[3].interpretation：报价不能单独证明成本、利润或替代经济性；review_id=quality-17f2adc1f1e2ba0e",
+      "suggested_next_queries": "[]",
+      "priority": "high",
+      "status": "open",
+      "created_at": "2026-10-04 16:06:38.307085"
+    },
+    {
+      "id": "gap_7f1cbe93d315",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "extraction_quality_review",
+      "description": "待核查 risks[0]：风险判断超出所引正文的必要依据；review_id=quality-533d5ac8b52dc99b",
+      "suggested_next_queries": "[]",
+      "priority": "high",
+      "status": "open",
+      "created_at": "2026-10-04 16:06:38.307095"
+    },
+    {
+      "id": "gap_68aa59eb2be7",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "extraction_quality_review",
+      "description": "待核查 risks[1]：风险判断超出所引正文的必要依据；review_id=quality-28b916b786355c57",
+      "suggested_next_queries": "[]",
+      "priority": "high",
+      "status": "open",
+      "created_at": "2026-10-04 16:06:38.307106"
+    },
+    {
+      "id": "gap_0db91f4bb610",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "source_price_basis_mismatch",
+      "description": "来源报价口径待核查：{\"amount_yuan\": \"194616000.0\", \"capacity_MWh\": \"360\", \"computed_price_yuan_per_Wh\": \"0.5406\", \"condition\": \"若金额、容量与单价对应同一供货范围，则数值不相容；范围尚未确认\", \"passage_id\": \"p1\", \"quoted_price_yuan_per_Wh\": \"0.518\"}",
+      "suggested_next_queries": "[]",
+      "priority": "high",
+      "status": "open",
+      "created_at": "2026-10-04 16:06:38.307117"
+    },
+    {
+      "id": "gap_4e0a6dde11a6",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "extraction_quality_review",
+      "description": "待核查 metrics[3].interpretation：报价口径存疑，不能用作经济比较基准；review_id=quality-ca69dd441fd3258c",
+      "suggested_next_queries": "[]",
+      "priority": "high",
+      "status": "open",
+      "created_at": "2026-10-04 16:06:38.307191"
+    },
+    {
+      "id": "gap_18213a8047c5",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "extraction_quality_review",
+      "description": "待核查 analyst_questions[0].reason：报价比较前提的供货范围与口径待核实；review_id=quality-357b00c8aab53a98",
+      "suggested_next_queries": "[]",
+      "priority": "high",
+      "status": "open",
+      "created_at": "2026-10-04 16:06:38.307205"
+    },
+    {
+      "id": "gap_973257ff3917",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "extraction_quality_review",
+      "description": "待核查 metrics[4].interpretation：竞争影响判断缺少中标以外的竞争依据；review_id=quality-e875c745bc4a241f",
+      "suggested_next_queries": "[]",
+      "priority": "high",
+      "status": "open",
+      "created_at": "2026-10-04 16:06:38.307216"
+    },
+    {
+      "id": "gap_d0d0f8b7f3d0",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "extraction_quality_review",
+      "description": "待核查 brief.why_it_matters：报价口径存疑，不能用作可比基准；review_id=quality-2d957f2eebbb0349",
+      "suggested_next_queries": "[]",
+      "priority": "high",
+      "status": "open",
+      "created_at": "2026-10-04 16:06:38.307227"
+    },
+    {
+      "id": "gap_e9b35605d29d",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "extraction_quality_review",
+      "description": "待核查 brief.why_it_matters：收入或利润贡献缺少基数及可核实依据；review_id=quality-0dda18bc9eb29675",
+      "suggested_next_queries": "[]",
+      "priority": "high",
+      "status": "open",
+      "created_at": "2026-10-04 16:06:38.307237"
+    },
+    {
+      "id": "gap_98cfe3b894bd",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "extraction_quality_review",
+      "description": "待核查 brief.uncertainty：成本或盈利含义超出所引正文；review_id=quality-a05930b4089b0a12",
+      "suggested_next_queries": "[]",
+      "priority": "high",
+      "status": "open",
+      "created_at": "2026-10-04 16:06:38.307248"
+    },
+    {
+      "id": "gap_521e216669e5",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "outside_time_window",
+      "description": "时间窗检查: 2 篇来源因 outside_time_window 保留链接但未提取近期情报。",
+      "suggested_next_queries": "[]",
+      "priority": "medium",
+      "status": "open",
+      "created_at": "2026-10-04 16:07:26.337530"
+    },
+    {
+      "id": "gap_9e8eb0928eeb",
+      "search_run_id": "run_2cd5c76ce307",
+      "target_id": "company_300750",
+      "gap_type": "publication_time_unverified",
+      "description": "时间窗检查: 1 篇来源因 publication_time_unverified 保留链接但未提取近期情报。",
+      "suggested_next_queries": "[]",
+      "priority": "medium",
+      "status": "open",
+      "created_at": "2026-10-04 16:07:26.337612"
+    }
+  ],
+  "model_requests": [
+    {
+      "error_type": null,
+      "finish_reason": "stop",
+      "is_mock": false,
+      "model_config_id": "openclaw_research",
+      "model_run_id": null,
+      "output_tokens": 1071,
+      "output_truncated": false,
+      "requested_max_tokens": 65536,
+      "requested_model": "openclaw/main",
+      "served_model": "openclaw/main",
+      "source_link_id": null,
+      "status": "success",
+      "task_name": "serp_batch_triage"
+    },
+    {
+      "error_type": null,
+      "finish_reason": "stop",
+      "is_mock": false,
+      "model_config_id": "openclaw_research",
+      "model_run_id": "mrun_5269799d3dbe",
+      "output_tokens": 4365,
+      "output_truncated": false,
+      "requested_max_tokens": 65536,
+      "requested_model": "openclaw/main",
+      "served_model": "openclaw/main",
+      "source_link_id": "link_48653e315601",
+      "status": "success",
+      "task_name": "bundle_extraction"
+    }
+  ],
+  "effect": {
+    "database_read_only": true,
+    "new_model_calls": 0,
+    "new_searches": 0
+  }
+}

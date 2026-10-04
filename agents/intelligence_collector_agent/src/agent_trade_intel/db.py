@@ -82,6 +82,21 @@ def _apply_migrations(con: sqlite3.Connection) -> None:
     # design 8.3): stable task_key, attempt token, worker pid, heartbeat, deadline, result path,
     # and a unique *active* attempt per task_key. CREATE TABLE/INDEX IF NOT EXISTS in SCHEMA_SQL.
     con.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (8)")
+    # v9 (Codex review F3): business-event identity. structured_events gains a business_key
+    # (subject + action family), a dedup_status and a source_count; every source-level event
+    # row is recorded in structured_event_sources and linked to its business event, so a
+    # republished / reworded / retyped copy adds evidence instead of a new event.
+    event_cols = {row["name"] for row in con.execute("PRAGMA table_info(structured_events)")}
+    for column, ddl in (
+        ("business_key", "TEXT"),
+        ("dedup_status", "TEXT"),
+        ("source_count", "INTEGER NOT NULL DEFAULT 1"),
+    ):
+        if column not in event_cols:
+            con.execute(f"ALTER TABLE structured_events ADD COLUMN {column} {ddl}")
+    # Index after the column exists (SCHEMA_SQL runs before migrations on legacy databases).
+    con.execute("CREATE INDEX IF NOT EXISTS idx_structured_events_business ON structured_events(target_id, business_key)")
+    con.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (9)")
 
 
 def dumps_json(value: Any) -> str:
@@ -263,10 +278,33 @@ CREATE TABLE IF NOT EXISTS structured_events (
   source_run_id TEXT,
   payload_json TEXT NOT NULL DEFAULT '{}',
   idempotency_key TEXT UNIQUE,
+  business_key TEXT,
+  dedup_status TEXT,
+  source_count INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_structured_events_target ON structured_events(target_id, ticker, event_date);
 CREATE INDEX IF NOT EXISTS idx_structured_events_type ON structured_events(event_type, event_date);
+
+-- Source-level event rows (one per MIC event per source/run) linked to the business event
+-- they evidence. content_key is the exact-content idempotency key of that source row.
+CREATE TABLE IF NOT EXISTS structured_event_sources (
+  content_key TEXT PRIMARY KEY,
+  event_id TEXT NOT NULL,
+  target_id TEXT,
+  source_run_id TEXT,
+  source_link_id TEXT,
+  source_url TEXT,
+  source_domain TEXT,
+  published_at TEXT,
+  event_type TEXT,
+  summary_cn TEXT,
+  link_status TEXT NOT NULL,
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_structured_event_sources_event ON structured_event_sources(event_id);
+CREATE INDEX IF NOT EXISTS idx_structured_event_sources_run ON structured_event_sources(source_run_id);
 
 CREATE TABLE IF NOT EXISTS market_features (
   feature_id TEXT PRIMARY KEY,

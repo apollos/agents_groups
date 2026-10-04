@@ -1,0 +1,542 @@
+{
+  "execution_verified": true,
+  "usable": true,
+  "business_positive_candidate": true,
+  "real_model_used": true,
+  "checks": {
+    "one_task_planned": true,
+    "one_collection_attempt": true,
+    "both_messages_acked_once": true,
+    "request_and_task_done": true,
+    "result_published_once": true,
+    "supervisor_completed_and_reaped": true,
+    "gateway_requests_within_budget": true,
+    "mic_budget_within_caps": true,
+    "run_time_within_deadline": true,
+    "reported_budget_limits_match": true,
+    "agent_output_usable": true,
+    "mic_database_counts_match_report": true,
+    "formal_records_passed_date_gate": true,
+    "all_model_requests_real_and_64k": true,
+    "agent_event_ledger_consistent": true,
+    "browser_cleanup_complete": true,
+    "acceptance_demand_suspended": true,
+    "no_active_demands": true,
+    "no_collection_messages_left": true,
+    "no_active_attempts_left": true
+  },
+  "search_run_id": "run_2cd5c76ce307",
+  "ids": {
+    "demand_id": "collector_acceptance_catl_20261004-v4",
+    "task_id": "task_eaacc38f7d934eeebae2",
+    "task_idempotency_key": "collection_task:collector_acceptance_catl_20261004-v4:mic_deep_collect:company_300750:2026-10-05",
+    "collect_message_id": "msg_a2bfc2449f614a1eb04e",
+    "collect_ticket_id": "ticket_ad9cf7345a0740a9b7ea",
+    "agent_run_id": "run_25f7b63860f44e4db907",
+    "attempt_ids": [
+      "attempt_d00769d687934cf09194"
+    ],
+    "mic_run_id": "run_2cd5c76ce307"
+  },
+  "collection_diagnostics": {
+    "attempt_id": "attempt_d00769d687934cf09194",
+    "auth_context": {
+      "auth_context_id": null,
+      "auth_mode": "anonymous"
+    },
+    "browser_run": true,
+    "budget_limits": {
+      "max_authenticated_retries_per_origin": 1,
+      "max_authenticated_retries_per_run": 1,
+      "max_browser_read_attempts": 2,
+      "max_engines_per_query": 2,
+      "max_gateway_requests": 3,
+      "max_hits_per_query": 30,
+      "max_http_read_attempts": 6,
+      "max_links_to_read": 6,
+      "max_model_calls": 3,
+      "max_page_seconds": 25,
+      "max_queries": 2,
+      "max_retries_per_page": 0,
+      "max_run_seconds": 300,
+      "max_search_hits": 20,
+      "max_search_pages_per_query": 3,
+      "max_search_pages_per_run": 6,
+      "min_engine_interval_seconds": 3,
+      "results_per_page_cap": 10
+    },
+    "budget_used": {
+      "authenticated_retries": 0,
+      "browser_read_attempts": 1,
+      "gateway_requests_sent": 2,
+      "http_read_attempts": 5,
+      "links_selected_for_read": 6,
+      "model_calls": 2,
+      "queries_attempted": 2,
+      "queries_completed": 2,
+      "search_hits": 20,
+      "search_page_attempts": 2
+    },
+    "cleanup": {
+      "browser_started": true,
+      "cleanup": "complete",
+      "closed_by_user": false,
+      "cookies_injected": 0,
+      "navigations": 3,
+      "pages_closed": 3,
+      "pages_opened": 3,
+      "problems": []
+    },
+    "config_fingerprint": "3d9304f48c988be0",
+    "credential_sweep": null,
+    "elapsed_seconds": 74.68,
+    "execution_status": "completed",
+    "model_requests": [
+      {
+        "error_type": null,
+        "finish_reason": "stop",
+        "is_mock": false,
+        "model_config_id": "openclaw_research",
+        "model_run_id": null,
+        "output_tokens": 1071,
+        "output_truncated": false,
+        "requested_max_tokens": 65536,
+        "requested_model": "openclaw/main",
+        "served_model": "openclaw/main",
+        "source_link_id": null,
+        "status": "success",
+        "task_name": "serp_batch_triage"
+      },
+      {
+        "error_type": null,
+        "finish_reason": "stop",
+        "is_mock": false,
+        "model_config_id": "openclaw_research",
+        "model_run_id": "mrun_5269799d3dbe",
+        "output_tokens": 4365,
+        "output_truncated": false,
+        "requested_max_tokens": 65536,
+        "requested_model": "openclaw/main",
+        "served_model": "openclaw/main",
+        "source_link_id": "link_48653e315601",
+        "status": "success",
+        "task_name": "bundle_extraction"
+      }
+    ],
+    "output_decisions": [
+      {
+        "decision_after": "save_structured",
+        "decision_before": "save_structured",
+        "min_overall_score": 70,
+        "overall_score": 74.0,
+        "reason": "accepted",
+        "retained_counts_after_admission": {
+          "catalysts": 0,
+          "customer_supplier_signals": 0,
+          "events": 2,
+          "facts": 5,
+          "metrics": 5,
+          "policy_signals": 0,
+          "price_cost_margin_signals": 0,
+          "relations": 0,
+          "risks": 0
+        },
+        "source_link_id": "link_48653e315601",
+        "stage": "merge_admission",
+        "validated_counts_before_admission": {
+          "catalysts": 0,
+          "customer_supplier_signals": 0,
+          "events": 2,
+          "facts": 5,
+          "metrics": 5,
+          "policy_signals": 0,
+          "price_cost_margin_signals": 0,
+          "relations": 0,
+          "risks": 0
+        }
+      }
+    ],
+    "output_status": "ok",
+    "page_attempts": {
+      "by_engine": {
+        "bing": 2
+      },
+      "by_status": {
+        "ok": 2
+      },
+      "interrupted": 0,
+      "search_page_attempts": 2
+    },
+    "provider": "browser(bing)",
+    "read_failures": {
+      "anti_bot_page": 1,
+      "article_scope_unresolved": 1
+    },
+    "read_status": "partial",
+    "reuse_analysis": false,
+    "search_errors": [],
+    "search_outcomes": {
+      "completed": 2
+    },
+    "search_reason": null,
+    "search_status": "ok",
+    "stop_reason": null,
+    "time_window_filter": {
+      "basis": "verified_article_publication",
+      "cutoff": "2026-09-04T16:06:11.786456+00:00",
+      "days": 30,
+      "enabled": true,
+      "filtered_by_reason": {
+        "outside_time_window": 2,
+        "publication_time_unverified": 1
+      },
+      "filtered_links": [
+        {
+          "allowed": false,
+          "published_at": "2026-01-14T00:00:00+08:00",
+          "source": "sina:allbulletin.announcement-date",
+          "source_link_id": "link_f3c19397baa7",
+          "status": "outside_time_window",
+          "title": "容百科技：关于与宁德时代签署日常经营重大合同的公告",
+          "url": "https://vip.stock.finance.sina.com.cn/corp/view/vCB_AllBulletinDetail.php?id=11913341"
+        },
+        {
+          "allowed": false,
+          "reason": "pdf_publication_not_verified",
+          "source_link_id": "link_3e5e25b4cb49",
+          "status": "publication_time_unverified",
+          "title": "",
+          "url": "https://static.cninfo.com.cn/finalpage/2026-01-14/1224932346.PDF"
+        },
+        {
+          "allowed": false,
+          "published_at": "2026-02-06T21:25:00+08:00",
+          "source": "sohu:#news-time",
+          "source_link_id": "link_da31f7e23613",
+          "status": "outside_time_window",
+          "title": "容百科技因重大合同公告误导性陈述收行政处罚事先告知书 公司及两高管合计拟被罚950万元_宁波容_合作_协议",
+          "url": "https://www.sohu.com/a/984630766_122014422"
+        }
+      ],
+      "naive_date_timezone": "Asia/Shanghai",
+      "passed": 1,
+      "reference_time": "2026-10-04T16:06:11.786456+00:00"
+    },
+    "usable": true
+  },
+  "agent_quality": {
+    "collection_diagnostics": {
+      "attempt_id": "attempt_d00769d687934cf09194",
+      "auth_context": {
+        "auth_context_id": null,
+        "auth_mode": "anonymous"
+      },
+      "browser_run": true,
+      "budget_used": {
+        "authenticated_retries": 0,
+        "browser_read_attempts": 1,
+        "gateway_requests_sent": 2,
+        "http_read_attempts": 5,
+        "links_selected_for_read": 6,
+        "model_calls": 2,
+        "queries_attempted": 2,
+        "queries_completed": 2,
+        "search_hits": 20,
+        "search_page_attempts": 2
+      },
+      "cleanup": {
+        "browser_started": true,
+        "cleanup": "complete",
+        "closed_by_user": false,
+        "cookies_injected": 0,
+        "navigations": 3,
+        "pages_closed": 3,
+        "pages_opened": 3,
+        "problems": []
+      },
+      "elapsed_seconds": 74.68,
+      "execution_status": "completed",
+      "output_status": "ok",
+      "page_attempts": {
+        "by_engine": {
+          "bing": 2
+        },
+        "by_status": {
+          "ok": 2
+        },
+        "interrupted": 0,
+        "search_page_attempts": 2
+      },
+      "provider": "browser(bing)",
+      "read_failures": {
+        "anti_bot_page": 1,
+        "article_scope_unresolved": 1
+      },
+      "read_status": "partial",
+      "search_outcomes": {
+        "completed": 2
+      },
+      "search_reason": null,
+      "search_status": "ok",
+      "stop_reason": null,
+      "usable": true
+    },
+    "decision": "accept_degraded",
+    "execution_status": "completed",
+    "issues": [
+      {
+        "detail": "no exchange/regulator/official corroboration among event sources",
+        "issue_type": "low_authority_sources_only",
+        "severity": "medium"
+      }
+    ],
+    "links_read": 4,
+    "model_calls": 2,
+    "output_status": "structured_output",
+    "queries_executed": 2,
+    "severity": "P2",
+    "structured_counts": {
+      "catalysts": 0,
+      "customer_supplier_signals": 0,
+      "events": 2,
+      "facts": 5,
+      "metrics": 5,
+      "policy_signals": 0,
+      "price_cost_margin_signals": 0,
+      "relations": 0,
+      "risks": 0
+    },
+    "structured_output_count": 12,
+    "usable": true
+  },
+  "agent_errors": [],
+  "mic_database": {
+    "run_status": "completed",
+    "counts": {
+      "briefs": 1,
+      "facts": 5,
+      "metrics": 5,
+      "events": 2,
+      "relations": 0,
+      "risks": 0,
+      "catalysts": 0,
+      "customer_supplier_signals": 0,
+      "price_cost_margin_signals": 0,
+      "policy_signals": 0,
+      "analyst_questions": 3,
+      "coverage_gaps": 35
+    },
+    "count_mismatches": {},
+    "formal_total": 12,
+    "date_gate_violations": [],
+    "missing_publication_time": [],
+    "sources": [
+      {
+        "id": "link_48653e315601",
+        "title": "远景能源、 宁德时代中标 ！河北100MW/400MWh储能系统 ...",
+        "url": "https://www.energytrend.cn/news/20260915-148614.html",
+        "date_gate_passed": true,
+        "counts": {
+          "briefs": 1,
+          "facts": 5,
+          "metrics": 5,
+          "events": 2,
+          "analyst_questions": 3
+        },
+        "publication_times_utc": [
+          "2026-09-15 06:41:00.000000"
+        ],
+        "model_runs": [
+          {
+            "id": "mrun_5269799d3dbe",
+            "status": "success",
+            "output_tokens": 4365,
+            "error_type": null,
+            "model_name": "openclaw/main",
+            "provider_request_id": "chatcmpl_a6c7aafe-59b6-4637-9f86-254bf62072cf",
+            "request_diagnostics": {
+              "requested_max_tokens": 65536,
+              "finish_reason": "stop",
+              "served_model": "openclaw/main",
+              "is_mock": false,
+              "output_truncated": false
+            }
+          }
+        ]
+      }
+    ],
+    "model_requests": [
+      {
+        "source_link_id": "link_48653e315601",
+        "id": "mrun_5269799d3dbe",
+        "status": "success",
+        "output_tokens": 4365,
+        "error_type": null,
+        "model_name": "openclaw/main",
+        "provider_request_id": "chatcmpl_a6c7aafe-59b6-4637-9f86-254bf62072cf",
+        "request_diagnostics": {
+          "requested_max_tokens": 65536,
+          "finish_reason": "stop",
+          "served_model": "openclaw/main",
+          "is_mock": false,
+          "output_truncated": false
+        }
+      }
+    ],
+    "model_checks": {
+      "all_requests_real": true,
+      "all_requests_capped_at_65536": true,
+      "truncated_requests": [],
+      "served_models": [
+        "openclaw/main"
+      ]
+    }
+  },
+  "attempts": [
+    {
+      "attempt_id": "attempt_d00769d687934cf09194",
+      "state": "completed",
+      "cleanup": "complete",
+      "error_code": null,
+      "worker_pid": 189940,
+      "budget_used_json": {
+        "authenticated_retries": 0,
+        "browser_read_attempts": 1,
+        "gateway_requests_sent": 2,
+        "http_read_attempts": 5,
+        "links_selected_for_read": 6,
+        "model_calls": 2,
+        "queries_attempted": 2,
+        "queries_completed": 2,
+        "search_hits": 20,
+        "search_page_attempts": 2
+      }
+    }
+  ],
+  "supervisor": {
+    "status": "completed",
+    "attempt_id": "attempt_d00769d687934cf09194",
+    "run_dir": "/home/yu/.local/state/agents_groups/collector-acceptance-20261004-v4/mic_runs/attempt_d00769d687934cf09194",
+    "exit_code": 0,
+    "elapsed_seconds": 75.5,
+    "cleanup": "complete",
+    "worker_pid": 189940,
+    "budget_used": {
+      "queries_attempted": 2,
+      "queries_completed": 2,
+      "search_page_attempts": 2,
+      "search_hits": 20,
+      "links_selected_for_read": 6,
+      "http_read_attempts": 5,
+      "browser_read_attempts": 1,
+      "authenticated_retries": 0,
+      "model_calls": 2,
+      "gateway_requests_sent": 2
+    },
+    "gateway_requests_sent": 2,
+    "error_code": null
+  },
+  "message_deliveries": [
+    {
+      "message_id": "msg_3e65ea5bac864926b581",
+      "status": "done",
+      "attempts": 1
+    },
+    {
+      "message_id": "msg_a2bfc2449f614a1eb04e",
+      "status": "done",
+      "attempts": 1
+    }
+  ],
+  "collection_result_messages": [
+    {
+      "output_status": "structured_output",
+      "run_ids": [
+        "run_25f7b63860f44e4db907"
+      ],
+      "status": "success",
+      "task_type": "mic_deep_collect",
+      "ticket_id": "ticket_ad9cf7345a0740a9b7ea",
+      "ticket_type": "COLLECTION_TASK_TICKET",
+      "usable": true
+    }
+  ],
+  "agent_structured_events": 2,
+  "agent_event_ledger": {
+    "mic_event_rows": 2,
+    "source_rows_recorded": 2,
+    "independent_events": 2,
+    "new_events": 2,
+    "linked_rows": 0,
+    "replayed_rows": 0,
+    "events_created_by_this_run": 2
+  },
+  "status": "ACCEPTANCE_RUN_COMPLETE",
+  "workspace": "/home/yu/.local/state/agents_groups/collector-acceptance-20261004-v4",
+  "run_dir": "/home/yu/.local/state/agents_groups/collector-acceptance-20261004-v4/run-1",
+  "label": "20261004-v4",
+  "code": {
+    "branch": "main",
+    "head": "b62a21045d83861462cfa08e4b390e32f06d5861",
+    "dirty": true,
+    "tracked_diff_sha256": "324f5f8fbc84fb9af71fb5ac070aa1020f64dbcefaad907148a4bcf8b88b3895",
+    "untracked_python_sha256": "f0627e1ef58b3d845d316c8fea2ebbba3b809d130615c4516005b6fe97a94e19",
+    "status_porcelain": [
+      "M agents/intelligence_collector_agent/src/agent_trade_intel/agent.py",
+      " M agents/intelligence_collector_agent/src/agent_trade_intel/db.py",
+      " M agents/intelligence_collector_agent/src/agent_trade_intel/persistence.py",
+      " M agents/intelligence_collector_agent/tools/collector_acceptance.py",
+      " M tools/market_intelligence_collector/mic/evidence_review.py",
+      " M tools/market_intelligence_collector/mic/pipeline.py",
+      " M tools/market_intelligence_collector/mic/validate.py",
+      "?? agents/intelligence_collector_agent/src/agent_trade_intel/event_identity.py",
+      "?? agents/intelligence_collector_agent/tests/fixtures/",
+      "?? agents/intelligence_collector_agent/tests/test_business_event_identity.py",
+      "?? tools/market_intelligence_collector/mic/statement_review.py",
+      "?? tools/market_intelligence_collector/tests/test_statement_review.py"
+    ]
+  },
+  "reference_time": "2026-10-04T16:06:11.786456+00:00",
+  "funnel": {
+    "search_hits": 20,
+    "selected_for_read": 6,
+    "read_ok": 4,
+    "date_gate_passed": 1,
+    "model_analyzed": 1,
+    "schema_valid": 1,
+    "admitted": 1,
+    "formal_records": 12,
+    "read_failure_reasons": {
+      "article_scope_unresolved": 1,
+      "anti_bot_page": 1
+    },
+    "time_window_filtered": {
+      "outside_time_window": 2,
+      "publication_time_unverified": 1
+    },
+    "admission_reasons": {
+      "accepted": 1
+    }
+  },
+  "query_families_executed": [
+    "official_ir",
+    "orders_tender"
+  ],
+  "query_families_live_verified": [
+    "official_ir",
+    "orders_tender"
+  ],
+  "formal_record_count": 12,
+  "rejected_candidate_count": 0,
+  "content_review_file": "/home/yu/.local/state/agents_groups/collector-acceptance-20261004-v4/run-1/content-review.json",
+  "batch_usage": {
+    "runs": [
+      {
+        "run_dir": "run-1",
+        "gateway_requests_sent": 2,
+        "status": "ACCEPTANCE_RUN_COMPLETE"
+      }
+    ],
+    "gateway_requests_total": 2
+  }
+}

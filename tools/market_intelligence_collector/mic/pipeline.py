@@ -371,6 +371,9 @@ class Pipeline:
                  call_planner: ModelCallPlanner, stats: RunStats, context: RunContext,
                  window: PublicationWindow) -> None:
         self.vision.reset_run()
+        if getattr(self, "validator", None) is not None:
+            # Statement review needs to tell the target's own award from another party's.
+            self.validator.target_names = [profile.canonical_name, *profile.aliases]
         budget_profile = task_profile.get("budget_profile", {})
         browser_run = self._browser_run
         limits = context.budget.limits

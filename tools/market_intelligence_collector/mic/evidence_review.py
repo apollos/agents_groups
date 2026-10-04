@@ -18,6 +18,7 @@ import re
 from mic.money import cny_amount_supported
 from mic.relation_evidence import _title
 from mic.schemas import CoverageGap
+from mic.statement_review import BASE_FIGURE, StatementReview
 
 NUMBER = r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
 PRICE_UNITS = ("元/Wh", "元/kWh", "元/MWh", "元/吨", "元/公斤", "元/千克", "元/件")
@@ -109,8 +110,11 @@ def quantity_supported(text, value, unit):
 
 
 class EvidenceReview:
-    def __init__(self, bundle, passages, warnings):
+    def __init__(self, bundle, passages, warnings, target_names=None):
         self.bundle, self.warnings = bundle, warnings
+        # Canonical name + aliases of the collection target; lets the statement review
+        # tell "the target won" from "another party won" when judging event impact.
+        self.target_names = [str(n) for n in (target_names or []) if n]
         counts = Counter(p.passage_id for p in passages)
         self.body = {p.passage_id: p.text for p in passages
                      if counts[p.passage_id] == 1 and not _title(p) and p.text.strip()}
@@ -256,7 +260,8 @@ class EvidenceReview:
                 metric.interpretation = "来源报价观察；经济含义待核查。"
                 metric.impact_channels = []
             claims = [part for part in re.split(r"[。；;]", metric.interpretation)
-                      if MATERIALITY.search(part) and part.strip() not in self.text(metric)]
+                      if MATERIALITY.search(part) and part.strip() not in self.text(metric)
+                      and not BASE_FIGURE.search(self.text(metric))]
             if claims:
                 original = {"interpretation": metric.interpretation,
                             "impact_channels": list(metric.impact_channels)}
@@ -294,7 +299,8 @@ class EvidenceReview:
             value = getattr(brief, field)
             parts = re.split(r"(?<=[。；;])", value)
             unsupported = [part for part in parts if MATERIALITY.search(part)
-                           and part.strip().rstrip("。；;") not in combined]
+                           and part.strip().rstrip("。；;") not in combined
+                           and not BASE_FIGURE.search(combined)]
             if unsupported:
                 self.record(f"brief.{field}", "收入或利润贡献缺少基数及可核实依据",
                             value, "hold_materiality")
@@ -307,6 +313,7 @@ class EvidenceReview:
                 self.record("coverage_gaps.missing_customer_confirmation", "仅能说明提供材料中缺少确认", old, "scope_statement")
 
     def source_price_checks(self):
+        self.price_basis_pids = set()
         for pid, text in self.body.items():
             amounts = list(re.finditer(rf"中标价(?:为)?\s*({NUMBER})\s*万元", text))
             prices = list(re.finditer(rf"合单价\s*({NUMBER})\s*元/Wh", text))
@@ -321,6 +328,7 @@ class EvidenceReview:
             half_quantum = Decimal(1).scaleb(quoted.as_tuple().exponent) / 2
             if abs(computed - quoted) <= half_quantum:
                 continue
+            self.price_basis_pids.add(pid)
             detail = {"passage_id": pid, "amount_yuan": str(total), "capacity_MWh": str(cap),
                       "quoted_price_yuan_per_Wh": str(quoted), "computed_price_yuan_per_Wh": str(computed),
                       "condition": "若金额、容量与单价对应同一供货范围，则数值不相容；范围尚未确认"}
@@ -365,4 +373,8 @@ class EvidenceReview:
         apply_gate(self)
         self.review_interpretations()
         self.source_price_checks()
+        # Clause-level pass over facts / events / metrics / brief (Codex F1, F2):
+        # unsupported materiality, competition, economics and comparability
+        # claims are held wherever they appear, not only in metric interpretations.
+        StatementReview(self).apply()
         return self.items

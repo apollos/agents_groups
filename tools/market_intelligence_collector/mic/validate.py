@@ -37,8 +37,10 @@ class ValidationReport:
 
 
 class BundleValidator:
-    def __init__(self, output_limits: dict):
+    def __init__(self, output_limits: dict, target_names: list[str] | None = None):
         self.limits = output_limits or {}
+        # Set per run by the pipeline (canonical name + aliases of the current target).
+        self.target_names: list[str] = list(target_names or [])
 
     def validate(self, raw: dict, passages: list[Passage]) -> ValidationReport:
         errors: list[str] = []
@@ -57,7 +59,7 @@ class BundleValidator:
         passage_text = {p.passage_id: p.text for p in passages}
         valid_pids = set(passage_text)
         self._check_evidence(bundle, valid_pids, warnings)
-        review = EvidenceReview(bundle, passages, warnings) if strict else None
+        review = EvidenceReview(bundle, passages, warnings, target_names=self.target_names) if strict else None
         if review:
             review.separate_prices()
         normalize_bundle_amounts(bundle, passage_text, warnings)

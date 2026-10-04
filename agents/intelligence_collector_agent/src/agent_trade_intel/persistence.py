@@ -3,7 +3,8 @@ from __future__ import annotations
 from typing import Any
 
 from .adapters.common import ToolResult
-from .db import SQLiteStore, dumps_json
+from .db import SQLiteStore, dumps_json, loads_json
+from .event_identity import EventSignature, signature
 from .ids import make_idempotency_key, new_id, stable_hash, utc_now_iso
 from .variable_mapper import CandidateVariableMapper
 
@@ -55,7 +56,13 @@ class ResultPersister:
 
     def save_mic_structures(self, *, task: dict[str, Any], result: ToolResult) -> dict[str, int]:
         report = result.result if isinstance(result.result, dict) else {}
-        counts = {"events": 0, "coverage_gaps": 0, "event_variable_links": 0}
+        # events            : independent business events created by this save (new事项)
+        # events_linked     : source rows attached as evidence to an existing business event
+        # events_replayed   : exact same source row seen again (idempotent replay)
+        # events_unresolved : rows created without a usable business signature (never merged)
+        # source_event_rows : MIC event rows processed
+        counts = {"events": 0, "events_linked": 0, "events_replayed": 0, "events_unresolved": 0,
+                  "source_event_rows": 0, "coverage_gaps": 0, "event_variable_links": 0}
         target = task.get("target") or {}
         target_id = target.get("target_id") or task.get("target_id")
         ticker = target.get("ticker")
@@ -66,6 +73,7 @@ class ResultPersister:
         top_events = report.get("all_events") or report.get("top_events") or []
         with self.store.session() as con:
             retrieved_at = utc_now_iso()
+            counts["legacy_events_keyed"] = self._backfill_business_keys(con)
             for ev in top_events:
                 summary = ev.get("summary") or ev.get("summary_cn") or str(ev)[:200]
                 event_type = ev.get("event_type") or "other"
@@ -77,10 +85,28 @@ class ResultPersister:
                 source_type = source.get("source_type") or ev.get("source_type")
                 published_at = source.get("published_at") or ev.get("published_at")
                 query_family = source.get("query_family") or ev.get("query_family")
+                counts["source_event_rows"] += 1
+                # Exact-content key: identical replays of the same source row are no-ops.
                 idem = make_idempotency_key("event", target_id or ticker, event_type, event_date or "unknown", stable_hash(summary, 12))
-                existing = con.execute("SELECT event_id FROM structured_events WHERE idempotency_key=?", (idem,)).fetchone()
+                sig = signature(ev, published_at=published_at)
+                # Linked rows live only in the source ledger; legacy rows only on the event.
+                existing = (con.execute("SELECT event_id FROM structured_event_sources WHERE content_key=?", (idem,)).fetchone()
+                            or con.execute("SELECT event_id FROM structured_events WHERE idempotency_key=?", (idem,)).fetchone())
+                linked_to = None
                 if existing:
                     event_id = str(existing["event_id"])
+                    counts["events_replayed"] += 1
+                elif sig is not None and (linked_to := self._matching_business_event(con, target_id, sig)) is not None:
+                    # Same business event from another source / wording / type label:
+                    # add evidence, do not create a new event.
+                    event_id = linked_to
+                    counts["events_linked"] += 1
+                    con.execute(
+                        "UPDATE structured_events SET source_count = source_count + 1, "
+                        "source_corroboration_status = CASE WHEN COALESCE(source_domain, '') <> COALESCE(?, '') "
+                        "THEN 'multi_source' ELSE source_corroboration_status END WHERE event_id = ?",
+                        (source_domain, event_id),
+                    )
                 else:
                     event_id = new_id("event")
                     con.execute(
@@ -90,8 +116,8 @@ class ResultPersister:
                           summary_cn, impact_json, source_refs_json,
                           source_url, source_domain, source_type, published_at, retrieved_at, query_family,
                           confidence, data_quality, source_run_id, payload_json, idempotency_key,
-                          source_corroboration_status
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                          source_corroboration_status, business_key, dedup_status, source_count
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
                         """,
                         (
                             event_id,
@@ -115,9 +141,27 @@ class ResultPersister:
                             dumps_json(ev),
                             idem,
                             ev.get("source_corroboration_status"),
+                            sig.business_key if sig else None,
+                            "keyed" if sig else "unresolved",
                         ),
                     )
                     counts["events"] += 1
+                    if sig is None:
+                        counts["events_unresolved"] += 1
+                con.execute(
+                    """
+                    INSERT OR IGNORE INTO structured_event_sources(
+                      content_key, event_id, target_id, source_run_id, source_link_id, source_url,
+                      source_domain, published_at, event_type, summary_cn, link_status, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        idem, event_id, target_id, report.get("search_run_id"), ev.get("source_link_id"),
+                        source_url, source_domain, published_at, event_type, summary,
+                        "replayed" if existing else ("linked" if linked_to else "primary"),
+                        dumps_json(ev),
+                    ),
+                )
                 # Variable links are saved even for duplicate events: an event first seen without
                 # links can gain them once the target declares tracking_variables.
                 counts["event_variable_links"] += self._save_event_variable_links(
@@ -151,6 +195,57 @@ class ResultPersister:
                 )
                 counts["coverage_gaps"] += 1
         return counts
+
+    @staticmethod
+    def _backfill_business_keys(con) -> int:
+        """Key pre-v9 event rows (dedup_status NULL) so re-extracted copies link to them.
+
+        Additive only: never deletes or rewrites existing events; registers each legacy
+        row as the primary source of its own business event in the ledger.
+        """
+        rows = con.execute(
+            "SELECT event_id, target_id, source_run_id, source_url, source_domain, published_at, "
+            "event_type, summary_cn, payload_json, idempotency_key FROM structured_events "
+            "WHERE dedup_status IS NULL ORDER BY created_at, rowid"
+        ).fetchall()
+        keyed = 0
+        for row in rows:
+            payload = loads_json(row["payload_json"], {})
+            sig = signature(payload, published_at=row["published_at"])
+            con.execute(
+                "UPDATE structured_events SET business_key = ?, dedup_status = ? WHERE event_id = ?",
+                (sig.business_key if sig else None, "keyed" if sig else "unresolved", row["event_id"]),
+            )
+            if row["idempotency_key"]:
+                con.execute(
+                    """
+                    INSERT OR IGNORE INTO structured_event_sources(
+                      content_key, event_id, target_id, source_run_id, source_link_id, source_url,
+                      source_domain, published_at, event_type, summary_cn, link_status, payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'primary', ?)
+                    """,
+                    (
+                        row["idempotency_key"], row["event_id"], row["target_id"], row["source_run_id"],
+                        payload.get("source_link_id"), row["source_url"], row["source_domain"], row["published_at"],
+                        row["event_type"], row["summary_cn"], row["payload_json"],
+                    ),
+                )
+            keyed += 1
+        return keyed
+
+    @staticmethod
+    def _matching_business_event(con, target_id: str | None, sig: EventSignature) -> str | None:
+        """Oldest existing business event this source row is evidence for, or None."""
+        rows = con.execute(
+            "SELECT event_id, payload_json, published_at FROM structured_events "
+            "WHERE target_id IS ? AND business_key = ? AND dedup_status = 'keyed' ORDER BY created_at, rowid",
+            (target_id, sig.business_key),
+        ).fetchall()
+        for row in rows:
+            other = signature(loads_json(row["payload_json"], {}), published_at=row["published_at"])
+            if other is not None and sig.compatible_with(other):
+                return str(row["event_id"])
+        return None
 
     def _save_event_variable_links(
         self,

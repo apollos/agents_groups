@@ -483,6 +483,10 @@ class IntelligenceCollectorAgent:
                 parent_ticket_id=ticket["ticket_id"],
                 correlation_id=ticket.get("correlation_id"),
             )
+        # Ledger counts (source rows / linked evidence) ride along in the result quality so
+        # consumers never read "N new events" when most rows were copies of known events.
+        result.quality["event_ledger"] = {k: saved.get(k, 0) for k in (
+            "source_event_rows", "events", "events_linked", "events_replayed", "events_unresolved")}
         if saved.get("events"):
             self._emit_event_summary(ticket=ticket, target=target, count=saved["events"], run_id=run_id)
         if saved.get("coverage_gaps"):

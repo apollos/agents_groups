@@ -58,10 +58,12 @@ intel-agent --config config/intelligence_collector.yaml read capabilities
 intel-agent --config config/intelligence_collector.yaml report daily --trade-date 2026-06-11
 
 # 真实验收批次（隔离工作区 + 冻结代码指纹 + 批次预算 2 次运行 / 6 次 Gateway 请求）
-# 详见 docs/acceptance/collector_acceptance_20261004.md；需要 GUI 会话、OpenClaw Gateway 已启动
+# 详见 docs/acceptance/collector_acceptance_20261004.md 与 _round2.md；需要 GUI 会话、OpenClaw Gateway 已启动
 python tools/collector_acceptance.py prepare    --workspace ~/.local/state/agents_groups/collector-acceptance-<label> --label <label>
 python tools/collector_acceptance.py run        --workspace ~/.local/state/agents_groups/collector-acceptance-<label>
+#   result.json 含 agent_event_ledger（MIC 事件行 / 独立事件 / 新增 / linked / replayed），检查项 agent_event_ledger_consistent
 python tools/collector_acceptance.py redeliver  --workspace ... --run-dir .../run-1   # 同一消息重投，必须复用 run、零新模型调用
-python tools/collector_acceptance.py next-cycle --workspace ... --run-dir .../run-1   # 隔离副本 + 假时钟，不发真实请求
+python tools/collector_acceptance.py next-cycle --workspace ... --run-dir .../run-1   # 隔离副本 + 假时钟，不发真实请求；
+#   含"改写摘要/换类型/换来源 id 的同一事项在下一周期重存 → 0 新事件、全部 linked"与原样重放 → 全部 replayed 两项检查
 python tools/collector_acceptance.py summary    --workspace ...
 ```

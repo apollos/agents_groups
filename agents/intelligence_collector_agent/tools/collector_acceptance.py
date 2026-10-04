@@ -543,6 +543,17 @@ def audit(root, manifest, steps):
         events = rows(data, "SELECT * FROM structured_events WHERE source_run_id=?", (report.get("search_run_id"),),
                       ("payload_json", "impact_json", "source_refs_json"))
         expected = report.get("all_events") or report.get("top_events") or []
+        # Business-event ledger (Codex F3): MIC source rows -> Agent business events.
+        # "Agent event rows == MIC event rows" is no longer the assertion; the ledger
+        # must account for every source row as primary / linked / replayed.
+        ledger_rows = rows(data, "SELECT content_key,event_id,link_status,source_domain FROM structured_event_sources WHERE source_run_id=?",
+                           (report.get("search_run_id"),))
+        ledger = {"mic_event_rows": len(expected), "source_rows_recorded": len(ledger_rows),
+                  "independent_events": len({r["event_id"] for r in ledger_rows}),
+                  "new_events": sum(1 for r in ledger_rows if r["link_status"] == "primary"),
+                  "linked_rows": sum(1 for r in ledger_rows if r["link_status"] == "linked"),
+                  "replayed_rows": sum(1 for r in ledger_rows if r["link_status"] == "replayed"),
+                  "events_created_by_this_run": len(events)}
         used = diag.get("budget_used", {})
         sent = used.get("gateway_requests_sent", 0)
         checks = {
@@ -565,16 +576,18 @@ def audit(root, manifest, steps):
             "formal_records_passed_date_gate": bool(mic) and not mic["date_gate_violations"] and not mic["missing_publication_time"],
             "all_model_requests_real_and_64k": bool(mic and mic["model_checks"]["all_requests_real"]
                                                    and mic["model_checks"]["all_requests_capped_at_65536"]) if (mic and mic["model_requests"]) else None,
-            "agent_events_match_report": (len(events) == len(expected)) if (events or expected) else None,
+            "agent_event_ledger_consistent": (ledger["source_rows_recorded"] == ledger["mic_event_rows"]
+                                              and ledger["new_events"] + ledger["linked_rows"] + ledger["replayed_rows"] == ledger["source_rows_recorded"]
+                                              and ledger["new_events"] == ledger["events_created_by_this_run"]) if expected else None,
             "browser_cleanup_complete": diag.get("cleanup", {}).get("cleanup") == "complete",
             "acceptance_demand_suspended": data.execute("SELECT status FROM collection_demands WHERE demand_id=?", (demand_id,)).fetchone()[0] == "suspended",
             "no_active_demands": data.execute("SELECT COUNT(*) FROM collection_demands WHERE status='active'").fetchone()[0] == 0,
             "no_collection_messages_left": bus.execute("SELECT COUNT(*) FROM messages WHERE topic='intelligence.collection' AND status IN ('open','in_progress')").fetchone()[0] == 0,
             "no_active_attempts_left": data.execute("SELECT COUNT(*) FROM collection_attempt WHERE state IN ('starting','running','cancelling')").fetchone()[0] == 0,
         }
-        engineering = [k for k in checks if k not in ("agent_output_usable", "agent_events_match_report", "all_model_requests_real_and_64k")]
+        engineering = [k for k in checks if k not in ("agent_output_usable", "agent_event_ledger_consistent", "all_model_requests_real_and_64k")]
         execution_verified = all(checks[k] for k in engineering) and checks["all_model_requests_real_and_64k"] is not False \
-            and checks["agent_events_match_report"] is not False
+            and checks["agent_event_ledger_consistent"] is not False
         return {"execution_verified": execution_verified, "usable": quality.get("usable") is True,
                 "business_positive_candidate": execution_verified and quality.get("usable") is True and bool(mic and mic["formal_total"]),
                 "real_model_used": isinstance(sent, int) and sent > 0,
@@ -586,7 +599,7 @@ def audit(root, manifest, steps):
                 "collection_diagnostics": diag, "agent_quality": quality, "agent_errors": errors,
                 "mic_database": mic, "attempts": attempts, "supervisor": steps.get("supervisor"),
                 "message_deliveries": deliveries, "collection_result_messages": results,
-                "agent_structured_events": len(events)}
+                "agent_structured_events": len(events), "agent_event_ledger": ledger}
 
 
 def content_review(root, report):
@@ -857,22 +870,53 @@ def next_cycle(root, run_dir):
         pending = [m for m in open_collection_messages()
                    if m["payload"].get("ticket_type") == "COLLECTION_TASK_TICKET"]
         new_task = agent.tickets.get(pending[0]["payload"]["ticket_id"])["payload"] if len(pending) == 1 else None
-        # Same facts in a later cycle: re-saving the identical MIC report for the
-        # old task must not create new Agent events (idempotent event keys).
+        # Same business facts in a later cycle (Codex F3 / Q4): the next-cycle task
+        # re-extracts the same award notice from another copy — new run id, new
+        # link ids, reworded summaries, swapped type labels. Business events must
+        # not grow; the rows must attach as linked evidence. An exact replay of
+        # the old report is additionally a pure no-op.
         from agent_trade_intel.adapters.common import ToolResult
         with agent.data_store.session() as con:
             old_task = unpack(con.execute("SELECT payload_json FROM collection_tasks WHERE task_id=?",
                                           (result["ids"]["task_id"],)).fetchone()["payload_json"])
             events_before = con.execute("SELECT COUNT(*) FROM structured_events").fetchone()[0]
+            ledger_before = con.execute("SELECT COUNT(*) FROM structured_event_sources").fetchone()[0]
             old_report = unpack(con.execute("SELECT result_json FROM collection_runs WHERE run_id=?",
                                             (result["ids"]["agent_run_id"],)).fetchone()["result_json"])
+        old_events = old_report.get("all_events") or old_report.get("top_events") or []
+        rewritten = []
+        for ev in copy.deepcopy(old_events):
+            ev["summary"] = "转载：" + str(ev.get("summary", "")).replace("中标", "成功中标")
+            ev["event_type"] = {"major_order": "tender", "tender": "major_order"}.get(ev.get("event_type"), ev.get("event_type"))
+            if ev.get("source_link_id"):
+                ev["source_link_id"] = str(ev["source_link_id"]) + "_next"
+            rewritten.append(ev)
+        next_report = {**old_report, "search_run_id": str(old_report.get("search_run_id")) + "_next",
+                       "all_events": rewritten, "top_events": rewritten[:5]}
+        next_task_for_save = new_task or {**old_task, "task_id": "task_next_cycle",
+                                          "idempotency_key": str(old_key) + ":next"}
+        resaved_next = agent.persister.save_mic_structures(
+            task=next_task_for_save, result=ToolResult(tool_name="market_intelligence_collector", operation="collect_intelligence",
+                                                       request={}, status="success", result=next_report))
+        with agent.data_store.session() as con:
+            events_after_next = con.execute("SELECT COUNT(*) FROM structured_events").fetchone()[0]
+            ledger_after_next = con.execute("SELECT COUNT(*) FROM structured_event_sources").fetchone()[0]
         replay = ToolResult(tool_name="market_intelligence_collector", operation="collect_intelligence", request={},
                             status="success", result=old_report)
         resaved = agent.persister.save_mic_structures(task=old_task, result=replay)
         with agent.data_store.session() as con:
             events_after = con.execute("SELECT COUNT(*) FROM structured_events").fetchone()[0]
         agent.registry.apply_lifecycle(demand_id, "suspend")
-        checks = {"same_facts_resaved_create_no_new_events": events_after == events_before and resaved.get("events", 0) == 0,
+        event_ledger = {"events_before": events_before, "events_after_rewritten_next_cycle": events_after_next,
+                        "events_after_exact_replay": events_after, "ledger_rows_before": ledger_before,
+                        "ledger_rows_after_rewritten_next_cycle": ledger_after_next,
+                        "rewritten_save_counts": resaved_next, "exact_replay_counts": resaved}
+        checks = {"same_facts_rewritten_next_cycle_add_no_events": (
+                      bool(old_events) and events_after_next == events_before and resaved_next.get("events", 0) == 0
+                      and resaved_next.get("events_linked", 0) == len(old_events)
+                      and ledger_after_next == ledger_before + len(old_events)),
+                  "same_facts_exact_replay_is_noop": events_after == events_before and resaved.get("events", 0) == 0
+                      and resaved.get("events_linked", 0) == 0 and resaved.get("events_replayed", 0) == len(old_events),
                   "same_day_retick_deduplicated_at_task_layer": same_day["status"] == "ok" and same_day_dedup,
                   "next_day_creates_one_request": next_day["status"] == "ok" and len(next_day["created"]) == 2,
                   "next_day_plans_one_task": plan.get("status") == "processed" and plan.get("result", {}).get("task_count") == 1,
@@ -886,7 +930,7 @@ def next_cycle(root, run_dir):
                "same_day_task_rows_before_after": [tasks_before, tasks_after_same_day],
                "next_day_tick": next_day, "plan": plan,
                "new_task": {k: new_task.get(k) for k in ("task_id", "idempotency_key", "as_of", "task_type")} if new_task else None,
-               "old_task_idempotency_key": old_key, "checks": checks,
+               "old_task_idempotency_key": old_key, "event_ledger": event_ledger, "checks": checks,
                "effect": {"databases": "throw-away copy only", "new_model_calls": 0, "browser_launch": False,
                           "workspace_databases_modified": False}}
     save(run_dir / "next-cycle.json", out)
