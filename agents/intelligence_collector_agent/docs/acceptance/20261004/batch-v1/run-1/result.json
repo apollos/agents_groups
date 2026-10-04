@@ -1,0 +1,644 @@
+{
+  "execution_verified": true,
+  "usable": false,
+  "business_positive_candidate": false,
+  "real_model_used": true,
+  "checks": {
+    "one_task_planned": true,
+    "one_collection_attempt": true,
+    "both_messages_acked_once": true,
+    "request_and_task_done": true,
+    "result_published_once": true,
+    "supervisor_completed_and_reaped": true,
+    "gateway_requests_within_budget": true,
+    "mic_budget_within_caps": true,
+    "run_time_within_deadline": true,
+    "reported_budget_limits_match": true,
+    "agent_output_usable": false,
+    "mic_database_counts_match_report": true,
+    "formal_records_passed_date_gate": true,
+    "all_model_requests_real_and_64k": true,
+    "agent_events_match_report": null,
+    "browser_cleanup_complete": true,
+    "acceptance_demand_suspended": true,
+    "no_active_demands": true,
+    "no_collection_messages_left": true,
+    "no_active_attempts_left": true
+  },
+  "search_run_id": "run_f3ba5ed4c1e7",
+  "ids": {
+    "demand_id": "collector_acceptance_catl_20261004_v1",
+    "task_id": "task_ba3dd36d30084572ba76",
+    "task_idempotency_key": "collection_task:collector_acceptance_catl_20261004_v1:mic_deep_collect:company_300750:2026-10-04",
+    "collect_message_id": "msg_ad424a029917434e8db2",
+    "collect_ticket_id": "ticket_9a6d5d3612c540d78619",
+    "agent_run_id": "run_e2179910d84d47798ae6",
+    "attempt_ids": [
+      "attempt_0ad250b10bff49f4af6d"
+    ],
+    "mic_run_id": "run_f3ba5ed4c1e7"
+  },
+  "collection_diagnostics": {
+    "attempt_id": "attempt_0ad250b10bff49f4af6d",
+    "auth_context": {
+      "auth_context_id": null,
+      "auth_mode": "anonymous"
+    },
+    "browser_run": true,
+    "budget_limits": {
+      "max_authenticated_retries_per_origin": 1,
+      "max_authenticated_retries_per_run": 1,
+      "max_browser_read_attempts": 2,
+      "max_engines_per_query": 2,
+      "max_gateway_requests": 3,
+      "max_hits_per_query": 30,
+      "max_http_read_attempts": 6,
+      "max_links_to_read": 6,
+      "max_model_calls": 3,
+      "max_page_seconds": 25,
+      "max_queries": 2,
+      "max_retries_per_page": 0,
+      "max_run_seconds": 300,
+      "max_search_hits": 20,
+      "max_search_pages_per_query": 3,
+      "max_search_pages_per_run": 6,
+      "min_engine_interval_seconds": 3,
+      "results_per_page_cap": 10
+    },
+    "budget_used": {
+      "authenticated_retries": 0,
+      "browser_read_attempts": 1,
+      "gateway_requests_sent": 3,
+      "http_read_attempts": 5,
+      "links_selected_for_read": 6,
+      "model_calls": 3,
+      "queries_attempted": 2,
+      "queries_completed": 2,
+      "search_hits": 20,
+      "search_page_attempts": 2
+    },
+    "cleanup": {
+      "browser_started": true,
+      "cleanup": "complete",
+      "closed_by_user": false,
+      "cookies_injected": 0,
+      "navigations": 3,
+      "pages_closed": 3,
+      "pages_opened": 3,
+      "problems": []
+    },
+    "config_fingerprint": "3d9304f48c988be0",
+    "credential_sweep": null,
+    "elapsed_seconds": 96.57,
+    "execution_status": "completed",
+    "model_requests": [
+      {
+        "error_type": null,
+        "finish_reason": "stop",
+        "is_mock": false,
+        "model_config_id": "openclaw_research",
+        "model_run_id": null,
+        "output_tokens": 873,
+        "output_truncated": false,
+        "requested_max_tokens": 65536,
+        "requested_model": "openclaw/main",
+        "served_model": "openclaw/main",
+        "source_link_id": null,
+        "status": "success",
+        "task_name": "serp_batch_triage"
+      },
+      {
+        "error_type": null,
+        "finish_reason": "stop",
+        "is_mock": false,
+        "model_config_id": "openclaw_research",
+        "model_run_id": "mrun_8ad877ae5d80",
+        "output_tokens": 7759,
+        "output_truncated": false,
+        "requested_max_tokens": 65536,
+        "requested_model": "openclaw/main",
+        "served_model": "openclaw/main",
+        "source_link_id": "link_ebe3045c1ee8",
+        "status": "success",
+        "task_name": "bundle_extraction"
+      },
+      {
+        "error_type": null,
+        "finish_reason": "stop",
+        "is_mock": false,
+        "model_config_id": "openclaw_research",
+        "model_run_id": "mrun_7a3ad0cf647a",
+        "output_tokens": 5955,
+        "output_truncated": false,
+        "requested_max_tokens": 65536,
+        "requested_model": "openclaw/main",
+        "served_model": "openclaw/main",
+        "source_link_id": "link_b62ff7f9a3e3",
+        "status": "success",
+        "task_name": "bundle_extraction"
+      }
+    ],
+    "output_decisions": [
+      {
+        "decision_after": "link_only",
+        "decision_before": "save_structured",
+        "min_overall_score": 70,
+        "overall_score": 64.0,
+        "reason": "below_min_overall_score",
+        "retained_counts_after_admission": {
+          "catalysts": 0,
+          "customer_supplier_signals": 0,
+          "events": 0,
+          "facts": 0,
+          "metrics": 0,
+          "policy_signals": 0,
+          "price_cost_margin_signals": 0,
+          "relations": 0,
+          "risks": 0
+        },
+        "source_link_id": "link_ebe3045c1ee8",
+        "stage": "merge_admission",
+        "validated_counts_before_admission": {
+          "catalysts": 0,
+          "customer_supplier_signals": 0,
+          "events": 2,
+          "facts": 5,
+          "metrics": 6,
+          "policy_signals": 0,
+          "price_cost_margin_signals": 0,
+          "relations": 0,
+          "risks": 1
+        }
+      },
+      {
+        "decision_after": "link_only",
+        "decision_before": "save_structured",
+        "min_overall_score": 70,
+        "overall_score": 62.0,
+        "reason": "below_min_overall_score",
+        "retained_counts_after_admission": {
+          "catalysts": 0,
+          "customer_supplier_signals": 0,
+          "events": 0,
+          "facts": 0,
+          "metrics": 0,
+          "policy_signals": 0,
+          "price_cost_margin_signals": 0,
+          "relations": 0,
+          "risks": 0
+        },
+        "source_link_id": "link_b62ff7f9a3e3",
+        "stage": "merge_admission",
+        "validated_counts_before_admission": {
+          "catalysts": 0,
+          "customer_supplier_signals": 0,
+          "events": 3,
+          "facts": 5,
+          "metrics": 5,
+          "policy_signals": 0,
+          "price_cost_margin_signals": 0,
+          "relations": 0,
+          "risks": 1
+        }
+      }
+    ],
+    "output_status": "no_structured_output",
+    "page_attempts": {
+      "by_engine": {
+        "bing": 2
+      },
+      "by_status": {
+        "ok": 2
+      },
+      "interrupted": 0,
+      "search_page_attempts": 2
+    },
+    "provider": "browser(bing)",
+    "read_failures": {
+      "article_scope_unresolved": 1
+    },
+    "read_status": "partial",
+    "reuse_analysis": false,
+    "search_errors": [],
+    "search_outcomes": {
+      "completed": 2
+    },
+    "search_reason": null,
+    "search_status": "ok",
+    "stop_reason": null,
+    "time_window_filter": {
+      "basis": "verified_article_publication",
+      "cutoff": "2026-09-04T13:43:17.145021+00:00",
+      "days": 30,
+      "enabled": true,
+      "filtered_by_reason": {
+        "outside_time_window": 1,
+        "publication_time_unverified": 2
+      },
+      "filtered_links": [
+        {
+          "allowed": false,
+          "published_at": "2026-01-14T00:00:00+08:00",
+          "source": "sina:allbulletin.announcement-date",
+          "source_link_id": "link_76f80da97dee",
+          "status": "outside_time_window",
+          "title": "容百科技：关于与宁德时代签署日常经营重大合同的公告",
+          "url": "https://vip.stock.finance.sina.com.cn/corp/view/vCB_AllBulletinDetail.php?id=11913341"
+        },
+        {
+          "allowed": false,
+          "reason": "pdf_publication_not_verified",
+          "source_link_id": "link_6af018d7982e",
+          "status": "publication_time_unverified",
+          "title": "",
+          "url": "https://static.cninfo.com.cn/finalpage/2026-01-14/1224932346.PDF"
+        },
+        {
+          "allowed": false,
+          "reason": "pdf_publication_not_verified",
+          "source_link_id": "link_c8ff08a0dc80",
+          "status": "publication_time_unverified",
+          "title": "",
+          "url": "https://static.cninfo.com.cn/finalpage/2025-05-20/1223588269.PDF"
+        }
+      ],
+      "naive_date_timezone": "Asia/Shanghai",
+      "passed": 2,
+      "reference_time": "2026-10-04T13:43:17.145021+00:00"
+    },
+    "usable": false
+  },
+  "agent_quality": {
+    "collection_diagnostics": {
+      "attempt_id": "attempt_0ad250b10bff49f4af6d",
+      "auth_context": {
+        "auth_context_id": null,
+        "auth_mode": "anonymous"
+      },
+      "browser_run": true,
+      "budget_used": {
+        "authenticated_retries": 0,
+        "browser_read_attempts": 1,
+        "gateway_requests_sent": 3,
+        "http_read_attempts": 5,
+        "links_selected_for_read": 6,
+        "model_calls": 3,
+        "queries_attempted": 2,
+        "queries_completed": 2,
+        "search_hits": 20,
+        "search_page_attempts": 2
+      },
+      "cleanup": {
+        "browser_started": true,
+        "cleanup": "complete",
+        "closed_by_user": false,
+        "cookies_injected": 0,
+        "navigations": 3,
+        "pages_closed": 3,
+        "pages_opened": 3,
+        "problems": []
+      },
+      "elapsed_seconds": 96.57,
+      "execution_status": "completed",
+      "output_status": "no_structured_output",
+      "page_attempts": {
+        "by_engine": {
+          "bing": 2
+        },
+        "by_status": {
+          "ok": 2
+        },
+        "interrupted": 0,
+        "search_page_attempts": 2
+      },
+      "provider": "browser(bing)",
+      "read_failures": {
+        "article_scope_unresolved": 1
+      },
+      "read_status": "partial",
+      "search_outcomes": {
+        "completed": 2
+      },
+      "search_reason": null,
+      "search_status": "ok",
+      "stop_reason": null,
+      "usable": false
+    },
+    "decision": "accept_degraded",
+    "execution_status": "completed",
+    "issues": [
+      {
+        "detail": "tool completed but produced no structured facts, metrics, events or signals",
+        "issue_type": "no_structured_output",
+        "severity": "medium"
+      }
+    ],
+    "links_read": 5,
+    "model_calls": 3,
+    "output_status": "no_structured_output",
+    "queries_executed": 2,
+    "severity": "P2",
+    "structured_counts": {
+      "catalysts": 0,
+      "customer_supplier_signals": 0,
+      "events": 0,
+      "facts": 0,
+      "metrics": 0,
+      "policy_signals": 0,
+      "price_cost_margin_signals": 0,
+      "relations": 0,
+      "risks": 0
+    },
+    "structured_output_count": 0,
+    "usable": false
+  },
+  "agent_errors": [],
+  "mic_database": {
+    "run_status": "completed",
+    "counts": {
+      "briefs": 2,
+      "facts": 0,
+      "metrics": 0,
+      "events": 0,
+      "relations": 0,
+      "risks": 0,
+      "catalysts": 0,
+      "customer_supplier_signals": 0,
+      "price_cost_margin_signals": 0,
+      "policy_signals": 0,
+      "analyst_questions": 8,
+      "coverage_gaps": 63
+    },
+    "count_mismatches": {},
+    "formal_total": 0,
+    "date_gate_violations": [],
+    "missing_publication_time": [],
+    "sources": [
+      {
+        "id": "link_b62ff7f9a3e3",
+        "title": "远景能源、 宁德时代中标 ！河北100MW/400MWh储能系统 ...",
+        "url": "https://news.bjx.com.cn/html/20260915/1512829.shtml",
+        "date_gate_passed": true,
+        "counts": {
+          "briefs": 1,
+          "analyst_questions": 4
+        },
+        "publication_times_utc": [
+          "2026-09-15 03:47:00.000000"
+        ],
+        "model_runs": [
+          {
+            "id": "mrun_7a3ad0cf647a",
+            "status": "success",
+            "output_tokens": 5955,
+            "error_type": null,
+            "model_name": "openclaw/main",
+            "provider_request_id": "chatcmpl_554074eb-829e-46eb-ab8b-ca8132ad1943",
+            "request_diagnostics": {
+              "requested_max_tokens": 65536,
+              "finish_reason": "stop",
+              "served_model": "openclaw/main",
+              "is_mock": false,
+              "output_truncated": false
+            }
+          }
+        ]
+      },
+      {
+        "id": "link_ebe3045c1ee8",
+        "title": "远景能源、 宁德时代中标 ！河北100MW/400MWh储能系统 ...",
+        "url": "https://www.energytrend.cn/news/20260915-148614.html",
+        "date_gate_passed": true,
+        "counts": {
+          "briefs": 1,
+          "analyst_questions": 4
+        },
+        "publication_times_utc": [
+          "2026-09-15 06:41:00.000000"
+        ],
+        "model_runs": [
+          {
+            "id": "mrun_8ad877ae5d80",
+            "status": "success",
+            "output_tokens": 7759,
+            "error_type": null,
+            "model_name": "openclaw/main",
+            "provider_request_id": "chatcmpl_b31d10c4-6600-4ef5-bc5b-a63d75f6960e",
+            "request_diagnostics": {
+              "requested_max_tokens": 65536,
+              "finish_reason": "stop",
+              "served_model": "openclaw/main",
+              "is_mock": false,
+              "output_truncated": false
+            }
+          }
+        ]
+      }
+    ],
+    "model_requests": [
+      {
+        "source_link_id": "link_b62ff7f9a3e3",
+        "id": "mrun_7a3ad0cf647a",
+        "status": "success",
+        "output_tokens": 5955,
+        "error_type": null,
+        "model_name": "openclaw/main",
+        "provider_request_id": "chatcmpl_554074eb-829e-46eb-ab8b-ca8132ad1943",
+        "request_diagnostics": {
+          "requested_max_tokens": 65536,
+          "finish_reason": "stop",
+          "served_model": "openclaw/main",
+          "is_mock": false,
+          "output_truncated": false
+        }
+      },
+      {
+        "source_link_id": "link_ebe3045c1ee8",
+        "id": "mrun_8ad877ae5d80",
+        "status": "success",
+        "output_tokens": 7759,
+        "error_type": null,
+        "model_name": "openclaw/main",
+        "provider_request_id": "chatcmpl_b31d10c4-6600-4ef5-bc5b-a63d75f6960e",
+        "request_diagnostics": {
+          "requested_max_tokens": 65536,
+          "finish_reason": "stop",
+          "served_model": "openclaw/main",
+          "is_mock": false,
+          "output_truncated": false
+        }
+      }
+    ],
+    "model_checks": {
+      "all_requests_real": true,
+      "all_requests_capped_at_65536": true,
+      "truncated_requests": [],
+      "served_models": [
+        "openclaw/main"
+      ]
+    }
+  },
+  "attempts": [
+    {
+      "attempt_id": "attempt_0ad250b10bff49f4af6d",
+      "state": "completed",
+      "cleanup": "complete",
+      "error_code": null,
+      "worker_pid": 125002,
+      "budget_used_json": {
+        "authenticated_retries": 0,
+        "browser_read_attempts": 1,
+        "gateway_requests_sent": 3,
+        "http_read_attempts": 5,
+        "links_selected_for_read": 6,
+        "model_calls": 3,
+        "queries_attempted": 2,
+        "queries_completed": 2,
+        "search_hits": 20,
+        "search_page_attempts": 2
+      }
+    }
+  ],
+  "supervisor": {
+    "status": "completed",
+    "attempt_id": "attempt_0ad250b10bff49f4af6d",
+    "run_dir": "/home/yu/.local/state/agents_groups/collector-acceptance-20261004-v1/mic_runs/attempt_0ad250b10bff49f4af6d",
+    "exit_code": 0,
+    "elapsed_seconds": 97.41,
+    "cleanup": "complete",
+    "worker_pid": 125002,
+    "budget_used": {
+      "queries_attempted": 2,
+      "queries_completed": 2,
+      "search_page_attempts": 2,
+      "search_hits": 20,
+      "links_selected_for_read": 6,
+      "http_read_attempts": 5,
+      "browser_read_attempts": 1,
+      "authenticated_retries": 0,
+      "model_calls": 3,
+      "gateway_requests_sent": 3
+    },
+    "gateway_requests_sent": 3,
+    "error_code": null
+  },
+  "message_deliveries": [
+    {
+      "message_id": "msg_caff16269fdc48f580a8",
+      "status": "done",
+      "attempts": 1
+    },
+    {
+      "message_id": "msg_ad424a029917434e8db2",
+      "status": "done",
+      "attempts": 1
+    }
+  ],
+  "collection_result_messages": [
+    {
+      "output_status": "no_structured_output",
+      "run_ids": [
+        "run_e2179910d84d47798ae6"
+      ],
+      "status": "success",
+      "task_type": "mic_deep_collect",
+      "ticket_id": "ticket_9a6d5d3612c540d78619",
+      "ticket_type": "COLLECTION_TASK_TICKET",
+      "usable": false
+    }
+  ],
+  "agent_structured_events": 0,
+  "status": "ACCEPTANCE_RUN_COMPLETE",
+  "workspace": "/home/yu/.local/state/agents_groups/collector-acceptance-20261004-v1",
+  "run_dir": "/home/yu/.local/state/agents_groups/collector-acceptance-20261004-v1/run-1",
+  "label": "20261004_v1",
+  "code": {
+    "branch": "main",
+    "head": "534440bcf3ee2ed86c2510c8cef49a88c476f931",
+    "dirty": true,
+    "tracked_diff_sha256": "9976951d1685c7d4d9bf604e2a93774ff879cef56c35f9d9d1c5fb454c08d68a",
+    "untracked_python_sha256": "fb9ef752964c75da8fff6cf3be093357bac7d54e7f9afabdeb5d3be843c3aae0",
+    "status_porcelain": [
+      "M tools/market_intelligence_collector/mic/article_scope.py",
+      " M tools/market_intelligence_collector/mic/browser/doctor.py",
+      " M tools/market_intelligence_collector/mic/browser/profile_lock.py",
+      " M tools/market_intelligence_collector/mic/browser/relevance.py",
+      " M tools/market_intelligence_collector/mic/evidence_review.py",
+      " M tools/market_intelligence_collector/mic/merge.py",
+      " M tools/market_intelligence_collector/mic/modeling/adapter.py",
+      " M tools/market_intelligence_collector/mic/modeling/call_planner.py",
+      " M tools/market_intelligence_collector/mic/pipeline.py",
+      " M tools/market_intelligence_collector/mic/planner.py",
+      " M tools/market_intelligence_collector/mic/reader.py",
+      " M tools/market_intelligence_collector/mic/schemas.py",
+      " M tools/market_intelligence_collector/mic/search.py",
+      " M tools/market_intelligence_collector/mic/store/database.py",
+      " M tools/market_intelligence_collector/mic/store/models.py",
+      " M tools/market_intelligence_collector/mic/store/repository.py",
+      " M tools/market_intelligence_collector/mic/validate.py",
+      " M tools/market_intelligence_collector/tests/conftest.py",
+      " M tools/market_intelligence_collector/tests/test_article_evidence_gate.py",
+      " M tools/market_intelligence_collector/tests/test_audit_fixes.py",
+      " M tools/market_intelligence_collector/tests/test_browser_cli_doctor.py",
+      " M tools/market_intelligence_collector/tests/test_browser_lifecycle.py",
+      " M tools/market_intelligence_collector/tests/test_browser_pipeline.py",
+      " M tools/market_intelligence_collector/tests/test_browser_reader_strategy.py",
+      " M tools/market_intelligence_collector/tests/test_evidence_review.py",
+      "?? agents/intelligence_collector_agent/tools/",
+      "?? agents_groups_cursor_acceptance_handoff_20261004.md",
+      "?? tools/market_intelligence_collector/docs/collection_time_window.md",
+      "?? tools/market_intelligence_collector/mic/publication_time.py",
+      "?? tools/market_intelligence_collector/tests/test_bjx_publication.py",
+      "?? tools/market_intelligence_collector/tests/test_collection_time_window.py",
+      "?? tools/market_intelligence_collector/tests/test_energytrend_publication.py",
+      "?? tools/market_intelligence_collector/tests/test_merge_admission_diagnostics.py",
+      "?? tools/market_intelligence_collector/tests/test_model_request_traceability.py",
+      "?? tools/market_intelligence_collector/tests/test_publication_time.py",
+      "?? tools/market_intelligence_collector/tests/test_query_coverage_followup.py",
+      "?? tools/market_intelligence_collector/tests/test_source_adapters_followup.py",
+      "?? tools/market_intelligence_collector/tests/test_trial_quality_followup.py"
+    ]
+  },
+  "reference_time": "2026-10-04T13:43:17.145021+00:00",
+  "funnel": {
+    "search_hits": 20,
+    "selected_for_read": 6,
+    "read_ok": 5,
+    "date_gate_passed": 2,
+    "model_analyzed": 2,
+    "schema_valid": 2,
+    "admitted": 0,
+    "formal_records": 0,
+    "read_failure_reasons": {
+      "article_scope_unresolved": 1
+    },
+    "time_window_filtered": {
+      "outside_time_window": 1,
+      "publication_time_unverified": 2
+    },
+    "admission_reasons": {
+      "below_min_overall_score": 2
+    }
+  },
+  "query_families_executed": [
+    "official_ir",
+    "orders_tender"
+  ],
+  "query_families_live_verified": [
+    "official_ir",
+    "orders_tender"
+  ],
+  "formal_record_count": 0,
+  "rejected_candidate_count": 2,
+  "content_review_file": "/home/yu/.local/state/agents_groups/collector-acceptance-20261004-v1/run-1/content-review.json",
+  "batch_usage": {
+    "runs": [
+      {
+        "run_dir": "run-1",
+        "gateway_requests_sent": 3,
+        "status": "ACCEPTANCE_RUN_COMPLETE"
+      }
+    ],
+    "gateway_requests_total": 3
+  }
+}

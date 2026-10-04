@@ -140,7 +140,13 @@ def probe_lock(profile_dir: Path) -> dict[str, Any]:
     lock = ProfileLock(profile_dir, run_id="doctor", attempt_id="doctor")
     if not lock.lock_path.exists():
         return {"locked": False, "lock_path": str(lock.lock_path)}
-    fd = os.open(lock.lock_path, os.O_RDWR)
+    try:
+        fd = os.open(lock.lock_path, os.O_RDWR)
+    except OSError as exc:
+        # Diagnostics must not crash on a lock file this process cannot open
+        # (another user's profile, a read-only sandbox). Report it as unknown.
+        return {"locked": None, "lock_path": str(lock.lock_path),
+                "error": f"{type(exc).__name__}: {exc}"}
     try:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)

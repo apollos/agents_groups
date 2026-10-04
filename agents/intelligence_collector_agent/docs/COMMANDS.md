@@ -56,4 +56,12 @@ intel-agent --config config/intelligence_collector.yaml read capabilities
 
 # 生成 HTML 日报
 intel-agent --config config/intelligence_collector.yaml report daily --trade-date 2026-06-11
+
+# 真实验收批次（隔离工作区 + 冻结代码指纹 + 批次预算 2 次运行 / 6 次 Gateway 请求）
+# 详见 docs/acceptance/collector_acceptance_20261004.md；需要 GUI 会话、OpenClaw Gateway 已启动
+python tools/collector_acceptance.py prepare    --workspace ~/.local/state/agents_groups/collector-acceptance-<label> --label <label>
+python tools/collector_acceptance.py run        --workspace ~/.local/state/agents_groups/collector-acceptance-<label>
+python tools/collector_acceptance.py redeliver  --workspace ... --run-dir .../run-1   # 同一消息重投，必须复用 run、零新模型调用
+python tools/collector_acceptance.py next-cycle --workspace ... --run-dir .../run-1   # 隔离副本 + 假时钟，不发真实请求
+python tools/collector_acceptance.py summary    --workspace ...
 ```

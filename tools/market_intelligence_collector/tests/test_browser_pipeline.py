@@ -7,6 +7,7 @@ models from MIC mock mode. No real browser, network or model is involved.
 from __future__ import annotations
 
 from urllib.parse import parse_qs, urlparse
+from datetime import datetime, timezone
 
 import pytest
 
@@ -33,6 +34,12 @@ def _echo(html: str):
         q = parse_qs(urlparse(url).query).get("q", [""])[0]
         return html.replace('value="宁德时代 中标"', f'value="{q}"')
     return render
+
+
+@pytest.fixture(autouse=True)
+def publication_clock(monkeypatch):
+    monkeypatch.setattr("mic.publication_time.utcnow",
+                        lambda: datetime(2026, 10, 4, tzinfo=timezone.utc))
 
 
 @pytest.fixture
@@ -71,7 +78,11 @@ def _session_for_hits() -> FakeBrowserSession:
 
 
 def test_browser_run_records_attempts_discovery_and_diagnostics(strict_cfg, monkeypatch):
-    loader = FixtureLoader(default=_echo(P1))
+    # The diversified second query asks about major-contract announcements.
+    # Supply cards relevant to both fixture queries instead of only echoing the
+    # new search-box text over a tender-only result page.
+    pages = P1.replace("合同金额", "重大合同金额").replace("供货周期两年", "重大合同公告，供货周期两年")
+    loader = FixtureLoader(default=_echo(pages))
     pipe = _pipeline(strict_cfg, loader, monkeypatch)
     session = _session_for_hits()
     report = pipe.collect_intelligence("company_300750", TASK, run_options={

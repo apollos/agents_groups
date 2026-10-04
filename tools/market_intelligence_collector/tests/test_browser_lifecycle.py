@@ -59,6 +59,24 @@ def test_stale_lock_file_without_holder_is_not_busy(tmp_path):
     lock.release()
 
 
+def test_probe_lock_reports_unopenable_lock_file_instead_of_raising(tmp_path, monkeypatch):
+    profile = tmp_path / "mic-edge"
+    ensure_private_dir(profile)
+    lock = ProfileLock(profile, "r", "a")
+    lock.lock_path.write_text("{}")
+    real_open = os.open
+
+    def deny(path, *args, **kwargs):
+        if str(path) == str(lock.lock_path):
+            raise PermissionError(13, "Permission denied", str(path))
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", deny)
+    result = probe_lock(profile)
+    assert result["locked"] is None
+    assert "PermissionError" in result["error"]
+
+
 def test_private_file_is_0600(tmp_path):
     p = tmp_path / "d" / "x.json"
     write_private_file(p, b"{}")

@@ -56,7 +56,9 @@ def test_doctor_launch_refused_when_disabled(tmp_path):
 
 
 def test_cli_doctor_json_exit_code_nonzero_on_problems(monkeypatch):
-    monkeypatch.delenv("MIC_BROWSER_PROFILE_DIR", raising=False)
+    # A blank value (not delenv) so a deployed .env cannot re-inject the live
+    # profile path via load_dotenv; the doctor must then report it unconfigured.
+    monkeypatch.setenv("MIC_BROWSER_PROFILE_DIR", "")
     result = runner.invoke(app, ["browser", "doctor", "--json"])
     assert result.exit_code == 1
     payload = json.loads(result.stdout)

@@ -23,6 +23,7 @@ from mic.modeling.call_planner import CallBudget, LinkModelResult, ModelCallPlan
 from mic.modeling.vision import VisionExtractor
 from mic.planner import QueryPlanner
 from mic.profile import TargetProfile
+from mic.publication_time import PublicationWindow
 from mic.reader import LinkReader
 from mic.run_context import RunContext, TargetIdentity, config_fingerprint
 from mic.schemas import CoverageGap, SearchHit, TriageResult
@@ -69,6 +70,10 @@ class RunStats:
     search_outcomes: dict[str, int] = field(default_factory=dict)
     search_errors: list[dict] = field(default_factory=list)
     read_failures: dict[str, int] = field(default_factory=dict)
+    time_window_filter: dict[str, Any] = field(default_factory=dict)
+    output_decisions: list[dict[str, Any]] = field(default_factory=list)
+    # One entry per model request actually attempted (A4 traceability).
+    model_requests: list[dict[str, Any]] = field(default_factory=list)
     stop_reason: str | None = None
     execution_status: str = "completed"
     search_hits: int = 0
@@ -134,6 +139,7 @@ class Pipeline:
         ``browser_factory`` (test double for the browser session).
         """
         run_options = dict(run_options or {})
+        window = PublicationWindow.from_value(task_profile.get("time_window"))
         profile_cfg = self.config.get_target_profile(target_id)
         if profile_cfg is None:
             raise ValueError(f"Unknown target_id: {target_id}")
@@ -166,6 +172,8 @@ class Pipeline:
             self.query_plan_version, self.policy_version)
         _, log_path = setup_logging(run_id, console=False)
         stats = RunStats(log_file=str(log_path) if log_path else None)
+        stats.time_window_filter = {**window.describe(), "passed": 0,
+                                    "filtered_by_reason": {}, "filtered_links": []}
         context = self._build_context(run_id, profile, budget_profile, run_calls, run_options)
         self.registry.set_budget(context.budget)
         # The call planner is created from the *effective* limits (deployment ceiling and
@@ -185,7 +193,7 @@ class Pipeline:
         cleanup: dict[str, Any] = {}
         try:
             try:
-                self._execute(run_id, profile, task_profile, call_planner, stats, context)
+                self._execute(run_id, profile, task_profile, call_planner, stats, context, window)
             except RunCancelled as exc:
                 stats.execution_status = "timed_out" if exc.reason == "run_deadline" else "cancelled"
                 stats.stop_reason = exc.reason
@@ -360,7 +368,8 @@ class Pipeline:
     # --- core --------------------------------------------------------------
 
     def _execute(self, run_id: str, profile: TargetProfile, task_profile: dict,
-                 call_planner: ModelCallPlanner, stats: RunStats, context: RunContext) -> None:
+                 call_planner: ModelCallPlanner, stats: RunStats, context: RunContext,
+                 window: PublicationWindow) -> None:
         self.vision.reset_run()
         budget_profile = task_profile.get("budget_profile", {})
         browser_run = self._browser_run
@@ -386,8 +395,15 @@ class Pipeline:
         reuse_enabled = (not browser_run) or bool(
             (context.browser_runtime.get("cache") or {}).get("reuse_analysis"))
 
-        planned = self.planner.plan(profile, task_profile,
-                                    family_feedback=self._family_feedback)
+        # Plan against the effective browser cap, not a possibly larger caller
+        # budget; reserve coverage before selecting same-family query variants.
+        planning_task = task_profile
+        if browser_run:
+            planning_task = {**task_profile,
+                             "budget_profile": {**budget_profile, "max_queries": max_queries}}
+        planned = self.planner.plan(profile, planning_task,
+                                    family_feedback=self._family_feedback,
+                                    coverage_first=browser_run)
         if browser_run and len(planned) > max_queries:
             planned = planned[:max_queries]
         stats.queries_generated = len(planned)
@@ -399,8 +415,8 @@ class Pipeline:
         for qi, pq in enumerate(planned):
             self._check_alive(context)
             if stats.search_hits >= max_hits:
-                # Queries are priority-ordered, so the budget drops the lowest-
-                # value tail - but never silently.
+                # The budget drops the remaining planned tail (coverage-first on
+                # browser runs), with an explicit count rather than silently.
                 stats.queries_skipped_by_hit_budget = len(planned) - qi
                 logger.warning(
                     "hit_budget_truncated_queries run_id=%s max_search_hits=%s "
@@ -479,7 +495,7 @@ class Pipeline:
                 # analyzed for the same target -> clone the structured result
                 # instead of re-reading and re-calling models.
                 prior = None
-                if reuse_enabled:
+                if reuse_enabled and window.days is None:
                     prior = self.repo.find_analyzed_link_by_canonical(
                         canonical, profile.target_id, exclude_run_id=run_id)
                 if prior is not None:
@@ -540,6 +556,8 @@ class Pipeline:
             if read.read_status == "read" and final_canonical in seen_final_canonical:
                 read.read_status, read.failure_reason = "failed", "duplicate_final_url"
             seen_final_canonical.add(final_canonical)
+            freshness = window.assess(read.publication_time)
+            read.fetch_diagnostics["time_window"] = freshness
             self.repo.save_read_attempt({
                 "source_link_id": link_id, "access_profile_id": self.reader.access_profile_id,
                 "read_status": read.read_status, "http_status": read.http_status,
@@ -559,6 +577,27 @@ class Pipeline:
                     access_profile_id=self.reader.access_profile_id)
                 continue
             stats.links_read += 1
+            if window.days is not None:
+                if not freshness["allowed"]:
+                    reason = freshness["status"]
+                    counts = stats.time_window_filter["filtered_by_reason"]
+                    counts[reason] = counts.get(reason, 0) + 1
+                    stats.time_window_filter["filtered_links"].append({
+                        "source_link_id": link_id, "url": hit.url, "title": read.title,
+                        **freshness,
+                    })
+                    self.repo.update_link_triage(
+                        link_id, tri.read_priority, "link_record_only",
+                        reason=f"时间窗过滤: {reason}",
+                        signals=[*tri.matched_signals, f"time_window:{reason}"], need_model=False)
+                    self.repo.update_link_read(
+                        link_id, "link_record_only", read.content_hash, read.simhash,
+                        document_type=read.document_type, access_profile_id=self.reader.access_profile_id)
+                    continue
+                stats.time_window_filter["passed"] += 1
+
+            if read.publication_time.get("status") == "known":
+                hit.publish_time_guess = read.publish_time
 
             # Content-hash reuse (spec 15.1 A): same body within this run.
             if read.content_hash in seen_content_hash:
@@ -604,7 +643,7 @@ class Pipeline:
             source_metadata = {
                 "source_link_id": link_id, "title": read.title or hit.title,
                 "url": hit.url, "source_name": hit.domain, "source_type": source_type,
-                "publish_time": read.publish_time or hit.publish_time_guess,
+                "publish_time": read.publish_time,
                 "query_family": hit.query_family,
             }
             materiality = tri.read_priority
@@ -660,6 +699,8 @@ class Pipeline:
                         self._model_feedback)
 
             bundle = merge_result.bundle
+            stats.output_decisions.append({"source_link_id": link_id,
+                                           **merge_result.decision_diagnostics})
 
             if bundle.decision in ("save_structured", "link_only"):
                 self._check_alive(context)  # never persist after cancel / past the deadline
@@ -675,7 +716,9 @@ class Pipeline:
         # End of work: a run that is cancelled or past its deadline here is not "completed".
         self._check_alive(context)
         # Persist run-level coverage gaps that weren't tied to a saved link.
-        self.repo.save_coverage_gaps(run_id, profile.target_id, self._run_gaps(stats))
+        run_gaps = self._run_gaps(stats)
+        self.repo.save_coverage_gaps(run_id, profile.target_id, run_gaps)
+        stats.structured["coverage_gaps"] += len(run_gaps)
         stats.model_calls = call_planner.budget.calls_used
         # Model calls are gated by the call planner's own budget (max_model_calls_per_run) and
         # every real HTTP send by ``gateway_requests_sent``; mirror the count into the run budget
@@ -708,6 +751,7 @@ class Pipeline:
             "fetch": read.fetch_diagnostics or {},
             "selected_passage_ids": [p.passage_id for p in read.passages],
             "content_hash": read.content_hash, "document_type": read.document_type,
+            "publication_time": read.publication_time,
         }
 
     def _default_max_hits(self, max_queries: int, cap: int = 800) -> int:
@@ -737,7 +781,16 @@ class Pipeline:
             batch = candidates[i:i + size]
             items = [{"id": lid, "title": h.title, "snippet": h.snippet}
                      for lid, h, _ in batch]
+            before = len(call_planner.triage_results)
             decisions = call_planner.batch_triage(items)
+            for res in call_planner.triage_results[before:]:
+                stats.model_requests.append({
+                    "model_run_id": None, "source_link_id": None,
+                    "task_name": "serp_batch_triage", "model_config_id": res.model_config_id,
+                    "requested_model": res.model_name, "status": res.status,
+                    "error_type": res.error_type, "output_tokens": res.output_tokens,
+                    **(res.request_diagnostics() if hasattr(res, "request_diagnostics") else {}),
+                })
             if not decisions:
                 break  # budget spent or disabled
             stats.batch_triage_calls += 1
@@ -773,6 +826,16 @@ class Pipeline:
                 "cached_tokens": res.cached_tokens, "estimated_cost": res.estimated_cost,
                 "latency_ms": res.latency_ms, "status": res.status,
                 "error_type": res.error_type, "error_message": res.error_message,
+                "provider_request_id": getattr(res, "provider_request_id", None),
+                "request_diagnostics": (res.request_diagnostics()
+                                        if hasattr(res, "request_diagnostics") else None),
+            })
+            stats.model_requests.append({
+                "model_run_id": model_run_id, "source_link_id": link_id,
+                "task_name": link_result.task_name, "model_config_id": res.model_config_id,
+                "requested_model": res.model_name, "status": res.status,
+                "error_type": res.error_type, "output_tokens": res.output_tokens,
+                **(res.request_diagnostics() if hasattr(res, "request_diagnostics") else {}),
             })
             if res.status != "success" or res.parsed is None:
                 self.repo.save_model_output({
@@ -868,6 +931,10 @@ class Pipeline:
 
     def _run_gaps(self, stats: RunStats) -> list[CoverageGap]:
         gaps = []
+        for reason, count in stats.time_window_filter.get("filtered_by_reason", {}).items():
+            gaps.append(CoverageGap(
+                gap_type=reason, priority="medium",
+                description=f"时间窗检查: {count} 篇来源因 {reason} 保留链接但未提取近期情报。"))
         if stats.structured["events"] > 0 and stats.structured["facts"] == 0:
             gaps.append(CoverageGap(
                 gap_type="missing_amount",
@@ -923,6 +990,10 @@ class Pipeline:
             output_status = "no_structured_output"
         else:
             output_status = "ok"
+        if (stats.time_window_filter.get("enabled") and
+                stats.time_window_filter.get("filtered_by_reason") and
+                not stats.time_window_filter.get("passed") and structured_total == 0):
+            output_status = "time_window_filtered"
         usable = (execution_status == "completed" and search_status in ("ok", "partial")
                   and read_status in ("ok", "partial") and output_status == "ok")
         page_stats: dict[str, Any] = {}
@@ -937,7 +1008,10 @@ class Pipeline:
             "search_reason": search_reason,
             "read_status": read_status,
             "read_failures": dict(stats.read_failures),
+            "time_window_filter": stats.time_window_filter,
             "output_status": output_status,
+            "output_decisions": list(stats.output_decisions),
+            "model_requests": list(stats.model_requests),
             "usable": usable,
             "stop_reason": stats.stop_reason,
             "budget_used": context.budget.used_summary(),
@@ -990,6 +1064,8 @@ class Pipeline:
                 "search_hits": stats.search_hits,
                 "unique_source_links": stats.unique_source_links,
                 "links_read": stats.links_read,
+                "time_window_passed": stats.time_window_filter.get("passed", 0),
+                "time_window_filtered": sum(stats.time_window_filter.get("filtered_by_reason", {}).values()),
                 "links_model_analyzed": stats.links_model_analyzed,
                 "model_calls": stats.model_calls,
                 "parallel_ensemble_calls": stats.parallel_ensemble_calls,

@@ -49,6 +49,11 @@ class EvidenceLocator(BaseModel):
     passage_id: str | None = None
     section: str | None = None
     table_id: str | None = None
+    # Bounded copy of the cited passage, attached by the validator once the
+    # passage_id is confirmed to exist in the model input. Lets a reviewer read
+    # the supporting sentence from the saved record without re-fetching the
+    # page. Not full-text persistence: one selected passage per record.
+    excerpt: str | None = None
 
 
 class FactItem(BaseModel):

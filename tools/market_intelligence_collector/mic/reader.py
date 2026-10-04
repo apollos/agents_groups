@@ -23,6 +23,7 @@ from bs4 import BeautifulSoup
 from mic.config import MICConfig
 from mic.modeling.vision import VisionExtractor, render_pdf_pages
 from mic.profile import TargetProfile
+from mic.publication_time import extract_publication
 from mic.schemas import Passage
 from mic.search import SearchProvider
 from mic.utils import content_hash, normalize_ws, simhash
@@ -76,6 +77,7 @@ class ReadResult:
     transport: str | None = None
     final_url: str | None = None
     fetch_diagnostics: dict = field(default_factory=dict)
+    publication_time: dict = field(default_factory=dict)
 
 
 # Parse failures after which a browser attempt may still rescue the page.
@@ -316,6 +318,8 @@ class LinkReader:
         url = page_url
         image_texts: list[str] = []
         body_scope: dict = {}
+        publication = {"status": "unknown", "published_at": None,
+                       "reason": "pdf_publication_not_verified"}
         if isinstance(raw, bytes):
             document_type = "pdf"
             title, publish_time, body = self._extract_pdf(raw)
@@ -338,11 +342,14 @@ class LinkReader:
             strict_scope = (self.config.output_schema or {}).get("limits", {}).get("strict_evidence_review") is True
             if strict_scope:
                 from mic.article_scope import extract_article
-                article = extract_article(raw, self)
+                article = extract_article(raw, self, page_url=page_url)
                 title, publish_time, body = article.title, article.publish_time, article.body
                 tables, image_urls, body_scope = article.tables, article.image_urls, article.report
+                publication = body_scope.get("publication_time", {})
             else:
                 title, publish_time, body, tables, image_urls = self._extract(raw)
+                publication = extract_publication(BeautifulSoup(raw, "lxml"), page_url)
+                publish_time = publication.get("published_at")
             challenge_text = body_scope.pop("challenge_excerpt", "")
             if self._is_anti_bot_page(title, body or challenge_text, raw_html=raw):
                 return ReadResult(
@@ -378,6 +385,7 @@ class LinkReader:
             content_type=ctype, content_length=len(body), title=title,
             publish_time=publish_time, content_hash=chash, simhash=shash,
             document_type=document_type, passages=passages, body_scope=body_scope,
+            publication_time=publication,
         )
 
     # --- fetch -------------------------------------------------------------
@@ -435,6 +443,7 @@ class LinkReader:
 
     def _extract(self, html: str) -> tuple[str, str | None, str, list[str], list[str]]:
         soup = BeautifulSoup(html, "lxml")
+        publish_time = self._guess_publish_time(soup)
         for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
             tag.decompose()
         title = ""
@@ -443,7 +452,6 @@ class LinkReader:
         elif soup.h1:
             title = normalize_ws(soup.h1.get_text())
 
-        publish_time = self._guess_publish_time(soup)
         image_urls = self._collect_image_urls(soup)
 
         # Tables are extracted as row-joined text blocks (spec 10.1: tables are
@@ -539,20 +547,13 @@ class LinkReader:
                 if len(line) >= 8:
                     lines.append(line)
         body = "\n".join(lines)
-        m = _DATE_RE.search(body[:2000])
-        publish_time = m.group(0) if m else None
+        # A date in PDF prose may be an event/reporting period, not publication.
+        publish_time = None
         return title, publish_time, body
 
     @staticmethod
     def _guess_publish_time(soup: BeautifulSoup) -> str | None:
-        for meta_name in ("article:published_time", "publishdate", "pubdate", "date"):
-            tag = soup.find("meta", attrs={"property": meta_name}) or \
-                  soup.find("meta", attrs={"name": meta_name})
-            if tag and tag.get("content"):
-                return tag["content"]
-        text = soup.get_text()[:2000]
-        m = _DATE_RE.search(text)
-        return m.group(0) if m else None
+        return extract_publication(soup).get("published_at")
 
     # --- passage selection (spec 10.2) ------------------------------------
 

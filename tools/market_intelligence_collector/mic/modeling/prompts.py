@@ -30,12 +30,29 @@ SYSTEM_PROMPT = """你是一名服务于股票/行业研究分析师的信息抽
 8. target_profile.theme_ids 表示该目标除主行业外的跨主题研究归因（例如出海制造、品牌全球化、
    港股通资金偏好）。判断事件相关性与 tracking_variables 时应同时参考 theme_ids，
    但不能因为主题存在而编造证据。
+9. overall_score（0-100）衡量“本来源可提取的、与目标直接相关的结构化事实的材料价值”。
+   它不是来源信誉分：来源信誉单独填 source_quality.source_credibility_score，
+   是否一手单独填 source_quality.is_original_source，佐证状态单独填
+   events[].source_corroboration_status，不要把这些因素再折算进 overall_score。标尺：
+   - 85-100：一手来源（公司公告、交易所/监管披露、招标方公示原文），关键要素
+     （主体、金额或数量、日期、交易对手或产品）完整，可直接引用。
+   - 70-84：关键要素完整、可核验的具体事实（如转载公开公示/公告的中标、订单、价格、
+     产能变动、客户/供应商变化），证据段落直接支持，与目标直接相关；来源可以是媒体或行业站转载。
+   - 50-69：与目标相关但关键要素缺失（无金额/数量、无日期、主体或交易对手不明确），
+     或内容主要是分析观点、预期、传闻、尚未落地的意向。
+   - 0-49：与目标弱相关或无关、无具体事实、营销软文、重复旧闻、信息已过时。
+   系统以 overall_score >= 70 作为结构化入库门槛；decision 与评分应一致：
+   save_structured 对应 >= 70，link_only 对应 50-69，skip 对应 < 50。
 """
+
+# Admission threshold stated in the rubric above. Must stay equal to
+# merge_policy.rules.save_structured.min_overall_score (guarded by tests).
+OVERALL_SCORE_ADMISSION_THRESHOLD = 70
 
 SCHEMA_HINT = {
     "schema_version": SCHEMA_VERSION,
     "decision": "save_structured | link_only | skip",
-    "overall_score": "0-100",
+    "overall_score": "0-100，按系统提示第 9 条标尺：结构化事实的材料价值，不是来源信誉分",
     "confidence": "0.0-1.0",
     "source_quality": {
         "source_type": "official|exchange|regulator|company|media|industry|forum|social|unknown",

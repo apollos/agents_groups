@@ -80,6 +80,7 @@ class ModelCallPlanner:
         self.extraction_cfg = gov.get("extraction", {})
         self.max_input_chars = self.budgets_cfg.get("max_input_chars_per_model_call", 8000)
         self.output_limits = (config.output_schema or {}).get("limits", {})
+        self.triage_results: list[ModelCallResult] = []
 
     # --- decision ----------------------------------------------------------
 
@@ -269,6 +270,9 @@ class ModelCallPlanner:
             res = adapter.complete(messages)
             self.budget.record(1)
             self.budget.batch_triage_calls_used += 1
+            # Triage requests have no model_run row; keep them reportable so
+            # every gateway send stays traceable (A4).
+            self.triage_results.append(res)
             if res.status == "success" and res.parsed:
                 out = {}
                 for r in res.parsed.get("results", []):

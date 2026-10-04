@@ -51,6 +51,7 @@ class MergeResult:
     merge_method: str
     field_conflicts: list[dict] = field(default_factory=list)
     model_outputs: list[dict] = field(default_factory=list)
+    decision_diagnostics: dict[str, Any] = field(default_factory=dict)
 
 
 class MultiModelMerger:
@@ -83,12 +84,16 @@ class MultiModelMerger:
 
         if len(contributions) == 1:
             c = contributions[0]
-            c.bundle.source_link_id = source_link_id
-            c.bundle.relations = self._sanitize_relations(c.bundle.relations)
-            self._apply_decision_rules(c.bundle)
+            # Keep the validated model contribution intact for audit/arbitration.
+            # The final admission decision belongs to the merged copy.
+            merged = c.bundle.model_copy(deep=True)
+            merged.source_link_id = source_link_id
+            merged.relations = self._sanitize_relations(merged.relations)
+            decision_diagnostics = self._apply_decision_rules(merged)
             return MergeResult(
-                c.bundle, "low", "single_model",
+                merged, "low", "single_model",
                 model_outputs=[self._trace(c)],
+                decision_diagnostics=decision_diagnostics,
             )
 
         decision, decision_score = self._merge_decision(contributions)
@@ -132,14 +137,15 @@ class MultiModelMerger:
             analyst_questions=self._dedup_questions(questions)[:8],
             coverage_gaps=gaps[:8],
         )
-        self._apply_decision_rules(merged)
+        decision_diagnostics = self._apply_decision_rules(merged)
         return MergeResult(
             merged, disagreement, "weighted_merge",
             field_conflicts=conflicts,
             model_outputs=[self._trace(c) for c in contributions],
+            decision_diagnostics=decision_diagnostics,
         )
 
-    def _apply_decision_rules(self, bundle: BundleExtraction) -> None:
+    def _apply_decision_rules(self, bundle: BundleExtraction) -> dict[str, Any]:
         """Apply configured decision thresholds after score aggregation.
 
         The merge policy has two gates for ``save_structured``: a weighted
@@ -151,11 +157,27 @@ class MultiModelMerger:
         """
         save_rule = self.rules.get("save_structured", {})
         min_overall = save_rule.get("min_overall_score")
+        before = self._structured_counts(bundle)
+        decision_before = bundle.decision
+        reason = {"save_structured": "accepted", "link_only": "link_only_decision",
+                  "skip": "skip_decision"}.get(bundle.decision, "unknown_decision")
         if (bundle.decision == "save_structured" and min_overall is not None
                 and bundle.overall_score < float(min_overall)):
             bundle.decision = "link_only"
+            reason = "below_min_overall_score"
         if bundle.decision == "link_only":
             self._clear_structured_objects(bundle)
+        return {"stage": "merge_admission", "decision_before": decision_before,
+                "decision_after": bundle.decision, "reason": reason,
+                "overall_score": bundle.overall_score, "min_overall_score": min_overall,
+                "validated_counts_before_admission": before,
+                "retained_counts_after_admission": self._structured_counts(bundle)}
+
+    @staticmethod
+    def _structured_counts(bundle: BundleExtraction) -> dict[str, int]:
+        return {name: len(getattr(bundle, name)) for name in (
+            "facts", "metrics", "events", "relations", "risks", "catalysts",
+            "customer_supplier_signals", "price_cost_margin_signals", "policy_signals")}
 
     @staticmethod
     def _clear_structured_objects(bundle: BundleExtraction) -> None:

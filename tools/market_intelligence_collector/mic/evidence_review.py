@@ -21,8 +21,17 @@ from mic.schemas import CoverageGap
 
 NUMBER = r"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
 PRICE_UNITS = ("元/Wh", "元/kWh", "元/MWh", "元/吨", "元/公斤", "元/千克", "元/件")
+PRICE_BASIS_PENDING = "来源报价观察；供货范围与报价口径待核查，暂不用于成本或利润比较。"
 DATE = re.compile(r"(?<!\d)(\d{4})[年/-](\d{1,2})[月/-](\d{1,2})日?(?!\d)")
 INFERENCE = re.compile(r"成本|毛利|盈利|竞争格局|经济性|替代路径|cost|margin|profit", re.I)
+# Narrow, conservative guard for relative financial importance. A single order
+# amount does not establish its share of revenue/profit. Explicit source claims
+# remain source claims; this is not a general semantic entailment checker.
+MATERIALITY = re.compile(
+    r"(?:收入|营收|利润|业绩)[^。；;]{0,24}(?:贡献|影响|占比)[^。；;]{0,12}"
+    r"(?:有限|很小|较小|不大|较低|重大|显著|可忽略)"
+    r"|(?:贡献|影响|占比)[^。；;]{0,12}(?:整体收入|公司收入|总营收)[^。；;]{0,12}"
+    r"(?:有限|很小|较小|不大|较低|重大|显著|可忽略)", re.I)
 NEGATIVE_OR_HYPOTHETICAL = re.compile(r"并未|并非|没有|未见|尚未|不曾|未发生|未下降|未上升|未上涨|未下跌|否认|传闻|可能|或许|假如|如果|疑似|疑为|预计")
 
 
@@ -234,10 +243,27 @@ class EvidenceReview:
 
     def review_interpretations(self):
         for index, metric in enumerate(self.bundle.metrics):
-            if metric.unit in PRICE_UNITS and INFERENCE.search(metric.interpretation) and not INFERENCE.search(self.text(metric)):
+            if (metric.unit in PRICE_UNITS
+                    and ((INFERENCE.search(metric.interpretation)
+                          and metric.interpretation != PRICE_BASIS_PENDING)
+                         or set(metric.impact_channels) & {"cost", "margin"})
+                    and not INFERENCE.search(self.text(metric))):
                 self.record(f"metrics[{index}].interpretation", "报价不能单独证明成本、利润或替代经济性",
                             {"interpretation": metric.interpretation, "impact_channels": metric.impact_channels}, "clear_interpretation")
+                metric.scope["economic_interpretation_review"] = {
+                    "status": "pending_review", "interpretation": metric.interpretation,
+                    "impact_channels": list(metric.impact_channels)}
                 metric.interpretation = "来源报价观察；经济含义待核查。"
+                metric.impact_channels = []
+            claims = [part for part in re.split(r"[。；;]", metric.interpretation)
+                      if MATERIALITY.search(part) and part.strip() not in self.text(metric)]
+            if claims:
+                original = {"interpretation": metric.interpretation,
+                            "impact_channels": list(metric.impact_channels)}
+                self.record(f"metrics[{index}].interpretation", "收入或利润贡献缺少基数及可核实依据",
+                            original, "hold_materiality")
+                metric.scope["materiality_review"] = {"status": "pending_review", **original}
+                metric.interpretation = "来源订单金额观察；收入贡献及确认节奏待核查。"
                 metric.impact_channels = []
         risk_cues = {"technology": r"成本|降本|技术风险|失效|故障|缺陷|cost|failure",
                      "competition": r"竞争|毛利|盈利|利润|competition|margin",
@@ -256,12 +282,24 @@ class EvidenceReview:
         if INFERENCE.search(brief.why_it_matters) and not INFERENCE.search(combined):
             self.record("brief.why_it_matters", "分析含义需要独立证据", brief.why_it_matters, "replace_analysis")
             brief.why_it_matters = "当前材料提供事件与数值线索；经济影响待核查。"
-        absence = re.compile(r"[^；;。]*(?:均未|尚未|未就)[^；;。]*(?:官方|公司层面)[^；;。]*确认[^；;。]*")
+        absence = re.compile(
+            r"[^；;。]*(?:均未|尚未|未就)[^；;。]*(?:官方|公司层面)[^；;。]*确认[^；;。]*"
+            r"|(?:无|没有|缺少)官方(?:中标|招标)?(?:文件|公告)")
         replacement = "当前提供材料未包含相关公司确认，是否另有披露尚未核查"
         old = brief.uncertainty
         if absence.search(old):
             self.record("brief.uncertainty", "将外部不存在的断言收窄为材料范围", old, "scope_statement")
             brief.uncertainty = absence.sub(replacement, old)
+        for field in ("uncertainty", "why_it_matters"):
+            value = getattr(brief, field)
+            parts = re.split(r"(?<=[。；;])", value)
+            unsupported = [part for part in parts if MATERIALITY.search(part)
+                           and part.strip().rstrip("。；;") not in combined]
+            if unsupported:
+                self.record(f"brief.{field}", "收入或利润贡献缺少基数及可核实依据",
+                            value, "hold_materiality")
+                kept = "".join(part for part in parts if part not in unsupported).rstrip("；;。 ")
+                setattr(brief, field, (kept + "；" if kept else "") + "订单对公司收入的贡献尚未核实。")
         for gap in list(self.bundle.coverage_gaps):
             if gap.gap_type == "missing_customer_confirmation" and absence.search(gap.description):
                 old = gap.description
@@ -292,9 +330,28 @@ class EvidenceReview:
                 self.bundle.coverage_gaps.append(CoverageGap(gap_type="source_price_basis_mismatch",
                                                             description=description, priority="high"))
                 self.descriptions.add(description)
-            for metric in self.bundle.metrics:
+            for index, metric in enumerate(self.bundle.metrics):
                 if metric.evidence_locator.passage_id == pid and metric.unit in PRICE_UNITS:
                     metric.scope["source_price_basis_review"] = detail
+                    metric.scope["source_price_basis_status"] = "pending_review"
+                    metric.scope["usable_as_price_benchmark"] = False
+                    neutral = PRICE_BASIS_PENDING
+                    if metric.interpretation != neutral or metric.impact_channels:
+                        original = {"interpretation": metric.interpretation,
+                                    "impact_channels": list(metric.impact_channels)}
+                        metric.scope.setdefault("source_price_analysis_review", original)
+                        self.record(f"metrics[{index}].interpretation", "报价口径存疑，不能用作经济比较基准",
+                                    original, "hold_price_benchmark")
+                        metric.interpretation = neutral
+                        metric.impact_channels = []
+            # Questions may remain, but their premise must not silently assert
+            # comparability between quotations with unresolved supply scope.
+            for index, question in enumerate(self.bundle.analyst_questions):
+                if (re.search(r"单价|报价|元/|price", question.reason, re.I)
+                        and re.search(r"高于|低于|相比|对比|基准|倍|higher|lower|benchmark", question.reason, re.I)):
+                    self.record(f"analyst_questions[{index}].reason", "报价比较前提的供货范围与口径待核实",
+                                question.reason, "hold_price_comparison")
+                    question.reason = "来源报价的供货范围与口径尚未核实，需先核对再讨论盈利性。"
             for group in ("facts", "events"):
                 for item in getattr(self.bundle, group):
                     if item.evidence_locator.passage_id == pid:

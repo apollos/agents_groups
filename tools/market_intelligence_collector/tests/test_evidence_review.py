@@ -177,6 +177,34 @@ class QualityTests(unittest.TestCase):
         self.assertEqual(first.bundle.model_dump(),second.bundle.model_dump())
         self.assertFalse(second.quality_reviews)
 
+    def test_cited_passage_excerpt_is_attached_from_input_not_from_model(self):
+        raw = {"facts": [{"fact_type": "order", "fact_statement": "来源称中标",
+                          "evidence_locator": {"passage_id": "p1", "excerpt": "模型编造的原文"}},
+                         {"fact_type": "order", "fact_statement": "无定位",
+                          "evidence_locator": {}}]}
+        report = run(raw, "宁德时代中标价为4141.622万元，容量40MWh。")
+        fact, unlocated = report.bundle.facts
+        self.assertEqual(fact.evidence_locator.excerpt, "宁德时代中标价为4141.622万元，容量40MWh。")
+        self.assertIsNone(unlocated.evidence_locator.excerpt)
+        # unknown passage id: cleared by the evidence check, so no excerpt either
+        unknown = run({"facts": [{"fact_type": "order", "fact_statement": "x",
+                                  "evidence_locator": {"passage_id": "p9", "excerpt": "编造"}}]},
+                      "正文。", strict=False).bundle.facts[0]
+        self.assertIsNone(unknown.evidence_locator.passage_id)
+        self.assertIsNone(unknown.evidence_locator.excerpt)
+        # persisted shape carries the excerpt without a schema migration
+        self.assertIn("excerpt", fact.evidence_locator.model_dump())
+        # a very long passage is bounded
+        long_report = run(raw, "甲" * 2000)
+        self.assertEqual(len(long_report.bundle.facts[0].evidence_locator.excerpt), BundleValidator.EXCERPT_CHARS)
+
+    def test_excerpt_attachment_is_not_whole_page_persistence(self):
+        raw = price()
+        report = run(raw, "单价1.035元/Wh。", extra=[Passage(passage_id="p2", section="正文", text="其他段落不应被复制。")])
+        self.assertEqual(report.bundle.facts[0].evidence_locator.excerpt, "单价1.035元/Wh。")
+        dumped = report.bundle.model_dump()
+        self.assertNotIn("其他段落不应被复制", str(dumped))
+
 
 if __name__ == '__main__':
     unittest.main()

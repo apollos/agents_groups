@@ -172,6 +172,9 @@ class ModelRun(Base):
     error_type: Mapped[str | None] = mapped_column(String)
     error_message: Mapped[str | None] = mapped_column(Text)
     provider_request_id: Mapped[str | None] = mapped_column(String)
+    # requested_max_tokens / finish_reason / served_model / is_mock for A4-style
+    # traceability of each real request. NULL on rows from earlier versions.
+    request_diagnostics: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 

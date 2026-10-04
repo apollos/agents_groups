@@ -23,7 +23,17 @@ def _to_dt(value: Any) -> datetime | None:
     if value in (None, "", "null"):
         return None
     if isinstance(value, datetime):
-        return value
+        parsed = value
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(value).strip().replace("Z", "+00:00"))
+        except ValueError:
+            parsed = None
+    if parsed is not None:
+        # The DateTime columns store UTC wall time (SQLite drops tzinfo). Convert
+        # before persistence, otherwise a +08:00 value is lost or shifted.
+        return (parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None
+                else parsed.astimezone(timezone.utc))
     for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%Y-%m", "%Y"):
         try:
             return datetime.strptime(str(value), fmt).replace(tzinfo=timezone.utc)
@@ -374,7 +384,8 @@ class Repository:
                 estimated_cost=run.get("estimated_cost"), latency_ms=run.get("latency_ms"),
                 status=run.get("status"), error_type=run.get("error_type"),
                 error_message=run.get("error_message"),
-                provider_request_id=run.get("provider_request_id"), created_at=now(),
+                provider_request_id=run.get("provider_request_id"),
+                request_diagnostics=run.get("request_diagnostics"), created_at=now(),
             ))
         return rid
 
@@ -1075,6 +1086,17 @@ class Repository:
                 if link else [],
                 "triage_decision": link.triage_decision if link else None,
                 "models_used": [r.model_config_id for r in runs],
+                # One entry per real request: what was asked for and what the
+                # backend reported (A4: request cap, finish_reason, served model).
+                "model_requests": [{
+                    "model_run_id": r.id, "model_config_id": r.model_config_id,
+                    "requested_model": r.model_name, "status": r.status,
+                    "error_type": r.error_type, "output_tokens": r.output_tokens,
+                    "provider_request_id": r.provider_request_id,
+                    **(r.request_diagnostics or {"requested_max_tokens": None,
+                                                 "finish_reason": None, "served_model": None,
+                                                 "is_mock": None, "output_truncated": None}),
+                } for r in runs],
                 "merged_decision": merged.decision if merged else None,
                 "uncertainty": brief.uncertainty if brief else None,
                 "facts": [f.fact_statement for f in facts],

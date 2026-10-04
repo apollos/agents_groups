@@ -9,6 +9,13 @@ def _env(tmp_path, monkeypatch):
     db_path = tmp_path / "mic_test.db"
     monkeypatch.setenv("MIC_DATABASE_URL", f"sqlite:///{db_path}")
     monkeypatch.setenv("MIC_ALLOW_MOCK", "true")
+    # The repo .env of a deployed machine may point MIC_CONFIG_DIR at the live
+    # deployment config (browser enabled, 64K output, real providers). Offline
+    # tests must always load the repo's own config/ directory; a blank value
+    # makes load_config() fall back to it. Tests that need a deployment dir set
+    # it explicitly. Likewise never inherit the live browser profile path.
+    monkeypatch.setenv("MIC_CONFIG_DIR", "")
+    monkeypatch.setenv("MIC_BROWSER_PROFILE_DIR", "")
     # Keep the suite hermetic regardless of what the developer has in .env:
     # blank real search keys and point SearXNG at a dead port so the factory
     # always lands on the mock provider (setenv beats load_dotenv, which does

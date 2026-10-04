@@ -182,7 +182,7 @@ def test_reader_parses_pdf_bytes(config):
     reader = LinkReader(config, search_provider=None)
     title, publish_time, body = reader._extract_pdf(_make_pdf(_PDF_TEXT))
     assert "560 million yuan" in body
-    assert publish_time == "2025-01-15"
+    assert publish_time is None  # PDF body event date is not verified publication
 
 
 def test_read_routes_pdf_and_records_document_type(config, monkeypatch):

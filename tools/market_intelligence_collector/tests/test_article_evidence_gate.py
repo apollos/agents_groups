@@ -93,7 +93,7 @@ class ArticleScopeTests(unittest.TestCase):
                '<article><p>2026年9月15日甲公司中标项目。</p><img src="right.jpg"/>' \
                '<table><tr><td>金额</td><td>100万元</td></tr></table></article>'
         extracted = extract_article(html, reader(html))
-        self.assertEqual(extracted.publish_time, '2026年9月15')
+        self.assertIsNone(extracted.publish_time)  # a body event date is not publication
         self.assertEqual(extracted.image_urls, ['right.jpg'])
         self.assertEqual(extracted.tables, ['金额 | 100万元'])
 

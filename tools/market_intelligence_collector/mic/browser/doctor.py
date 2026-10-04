@@ -127,7 +127,11 @@ def run_doctor(config, *, launch: bool = False, runs_dir: Path | None = None,
                                                    "exists": profile_dir.exists(),
                                                    "locked": lock.get("locked", False),
                                                    "holder": lock.get("holder")}))
-        if lock.get("locked"):
+        if lock.get("error"):
+            checks.append(_check("profile_lock", False, lock.get("error"),
+                                 "lock_unreadable: this process cannot open the profile lock file; "
+                                 "check ownership/permissions of the profiles directory"))
+        elif lock.get("locked"):
             checks.append(_check("profile_lock", False, lock.get("holder"),
                                  "profile_busy: another MIC run holds the profile; wait for it or "
                                  "verify the holder pid before acting", severity="warning"))

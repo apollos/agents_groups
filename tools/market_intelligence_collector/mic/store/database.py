@@ -35,6 +35,9 @@ class Database:
             "analysis_brief": {"uncertainty": "TEXT"},
             # Browser-route fetch/scope diagnostics; legacy rows stay NULL.
             "link_read_attempt": {"diagnostics": "JSON"},
+            # Per-request traceability (requested max_tokens, finish_reason, served
+            # model, response id); legacy rows stay NULL = unknown.
+            "model_run": {"request_diagnostics": "JSON"},
         }
         with self.engine.begin() as con:
             inspector = inspect(con)

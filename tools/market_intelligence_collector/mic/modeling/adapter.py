@@ -45,6 +45,19 @@ class ModelCallResult:
     error_type: str | None = None
     error_message: str | None = None
     is_mock: bool = False
+    # Request traceability (design A4): the output cap actually sent, the
+    # backend's finish_reason, the model name the backend reports it served,
+    # and the response id. None when no request was sent.
+    requested_max_tokens: int | None = None
+    finish_reason: str | None = None
+    served_model: str | None = None
+    provider_request_id: str | None = None
+
+    def request_diagnostics(self) -> dict[str, Any]:
+        return {"requested_max_tokens": self.requested_max_tokens,
+                "finish_reason": self.finish_reason, "served_model": self.served_model,
+                "is_mock": self.is_mock,
+                "output_truncated": self.finish_reason == "length"}
 
 
 @dataclass
@@ -168,9 +181,14 @@ class ModelAdapter:
                 status="request_failed", input_chars=input_chars,
                 latency_ms=int((time.time() - start) * 1000),
                 error_type=type(exc).__name__, error_message=str(exc)[:500],
+                requested_max_tokens=max_tokens,
             )
         latency_ms = int((time.time() - start) * 1000)
-        text = resp.choices[0].message.content or ""
+        choice = resp.choices[0]
+        text = choice.message.content or ""
+        finish_reason = getattr(choice, "finish_reason", None)
+        served_model = getattr(resp, "model", None)
+        response_id = getattr(resp, "id", None)
         usage = getattr(resp, "usage", None)
         in_tok = getattr(usage, "prompt_tokens", 0) or 0
         out_tok = getattr(usage, "completion_tokens", 0) or 0
@@ -191,9 +209,20 @@ class ModelAdapter:
             provider_type=self.provider_type, model_name=self.model, status="success",
             raw_text=text, input_chars=input_chars, input_tokens=in_tok,
             output_tokens=out_tok, reasoning_tokens=reasoning, cached_tokens=cached,
-            latency_ms=latency_ms,
+            latency_ms=latency_ms, requested_max_tokens=max_tokens,
+            finish_reason=finish_reason if isinstance(finish_reason, str) else None,
+            served_model=served_model if isinstance(served_model, str) else None,
+            provider_request_id=response_id if isinstance(response_id, str) else None,
         )
         result.estimated_cost = self._estimate_cost(in_tok, out_tok)
+        if result.finish_reason == "length":
+            # The backend stopped at the output cap: whatever came back is a
+            # fragment and must never be treated as a complete extraction.
+            result.status = "output_truncated"
+            result.error_type = "output_truncated"
+            result.error_message = (f"finish_reason=length at max_tokens={max_tokens}; "
+                                    "fragment not parsed as a complete bundle")
+            return result
         if want_json:
             result.parsed = self._parse_json(text)
             if result.parsed is None:

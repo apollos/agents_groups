@@ -153,9 +153,20 @@ def content_form_ok(url: str | None, title: str) -> tuple[bool, str | None]:
         full = path + ("?" + urlparse(url).query if urlparse(url).query else "")
         if path in ("", "/"):
             return False, "homepage"
-        if LISTING_PATH_RE.search(full) or SITE_SEARCH_RE.search(full):
+        # Observed company procurement directory, not an individual announcement.
+        # Keep this host/path specific: /enterprise/ can be an article route elsewhere.
+        if host_matches(url, "bidcenter.com.cn") and re.fullmatch(r"/enterprise(?:/[^/]+(?:/\d+)?)?/?", path, re.I):
+            return False, "enterprise_directory"
+        # Stock-level tables/directories, not individual announcement documents.
+        # /notices/detail/ and news articles on this domain remain eligible.
+        if host_matches(url, "data.eastmoney.com") and re.fullmatch(
+                r"/(?:zdht/detail|notices/stock)/\d{5,6}\.html", path, re.I):
+            return False, "stock_directory"
+        # Match paths separately: a query string must not hide /index.html$.
+        if LISTING_PATH_RE.search(path) or SITE_SEARCH_RE.search(full):
             return False, "listing_path"
-    if title and LISTING_TITLE_RE.search(title) and not re.search(r"\d{4}", title):
+    # A six-digit stock code (300750/688005) is not a year.
+    if title and LISTING_TITLE_RE.search(title) and not re.search(r"(?<!\d)(?:19|20)\d{2}(?!\d)", title):
         return False, "listing_title"
     if title and len(title.strip()) < 6:
         return False, "short_title"

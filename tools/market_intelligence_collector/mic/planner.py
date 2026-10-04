@@ -18,6 +18,16 @@ from mic.profile import TargetProfile
 
 _PLACEHOLDER_RE = re.compile(r"\{(\w+)\}")
 
+# Source packs are another way to ask the same research question. In particular,
+# a tender source-pack query must not use a second coverage slot after orders_tender.
+_COVERAGE_GROUPS = {
+    "source_pack:tender": "orders_tender",
+    "source_pack:china_exchange": "official_ir",
+    "source_pack:hk_exchange": "official_ir",
+    "source_pack:us_filing": "official_ir",
+    "source_pack:policy": "policy",
+}
+
 
 @dataclass
 class PlannedQuery:
@@ -52,7 +62,8 @@ class QueryPlanner:
     # --- public ------------------------------------------------------------
 
     def plan(self, profile: TargetProfile, task_profile: dict[str, Any],
-             family_feedback: dict[str, float] | None = None) -> list[PlannedQuery]:
+             family_feedback: dict[str, float] | None = None, *,
+             coverage_first: bool = False) -> list[PlannedQuery]:
         focus = task_profile.get("focus", [])
         budget = task_profile.get("budget_profile", {})
         max_queries = budget.get("max_queries", 80)
@@ -72,9 +83,23 @@ class QueryPlanner:
                     q.score *= weight
                     q.why.append(f"历史反馈权重 x{weight}")
 
-        # Filter low-value, sort by score, cap by budget.
+        # Keep the score floor and feedback. Browser runs reserve the first slots
+        # for distinct research groups before adding same-group variants; prefixes
+        # remain diverse if the search-hit budget stops execution early.
         eligible = [q for q in scored if q.score >= self.min_score]
         eligible.sort(key=lambda q: q.score, reverse=True)
+        if coverage_first:
+            heads, variants = [], []
+            seen_groups: set[str] = set()
+            for q in eligible:
+                group = _COVERAGE_GROUPS.get(q.query_family, q.query_family)
+                if group in seen_groups:
+                    variants.append(q)
+                else:
+                    seen_groups.add(group)
+                    q.why.append(f"覆盖优先：{group} 类最高分查询")
+                    heads.append(q)
+            return (heads + variants)[:max_queries]
         return eligible[:max_queries]
 
     # --- expansion ---------------------------------------------------------

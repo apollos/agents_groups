@@ -21,7 +21,7 @@ PARAGRAPHS = [
 ]
 BODY = "".join(f"<p>{p}</p>" for p in PARAGRAPHS)
 RELATED = '<div class="related"><h3>相关阅读</h3><p>海辰储能4MWh钠电池系统，开启储能新阶段。</p></div>'
-GOOD_HTML = ('<html><head><title>宁德时代中标新闻</title></head><body><div class="news-content">'
+GOOD_HTML = ('<html><head><title>宁德时代中标新闻</title><meta property="article:published_time" content="2026-09-15"></head><body><div class="news-content">'
              '<div id="article_cont"><div class="cc-article">' + BODY + '</div></div>' + RELATED +
              '</div></body></html>')
 UNSCOPED_HTML = '<html><head><title>宁德时代中标新闻</title></head><body><div id="article_cont">' + BODY + RELATED + '</div></body></html>'

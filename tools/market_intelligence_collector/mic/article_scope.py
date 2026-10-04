@@ -66,15 +66,12 @@ def _is_related_boundary(text):
                for label in BOUNDARY_LABELS)
 
 
-def extract_article(html, reader):
+def extract_article(html, reader, page_url=""):
     soup = BeautifulSoup(html, 'lxml')
     page_title = normalize_ws(soup.title.get_text(' ', strip=True)) if soup.title else ''
-    published = None
-    for name in ('article:published_time', 'publishdate', 'pubdate', 'date'):
-        tag = soup.find('meta', attrs={'property': name}) or soup.find('meta', attrs={'name': name})
-        if tag and tag.get('content'):
-            published = tag['content']
-            break
+    from mic.publication_time import extract_publication
+    publication = extract_publication(soup, page_url)
+    published = publication.get('published_at')
     removed = 0
     for node in list(soup.find_all(True)):
         if node.attrs is None:
@@ -89,9 +86,14 @@ def extract_article(html, reader):
     title = page_title or (normalize_ws(soup.h1.get_text(' ', strip=True)) if soup.h1 else '')
     result = ArticleExtraction(title=title, publish_time=published,
                                report={'status': 'unresolved', 'selector': None,
-                                       'removed_containers': removed})
-    root = None
-    for selector in ROOT_SELECTORS:
+                                       'removed_containers': removed, 'publication_time': publication})
+    from mic.publication_time import sina_bulletin_fields
+    bulletin = sina_bulletin_fields(soup, page_url)
+    root = bulletin["body"] if bulletin else None
+    if bulletin:
+        result.title = bulletin["title"]
+        result.report.update(selector="sina:allbulletin#content", candidate_count=1)
+    for selector in (() if bulletin else ROOT_SELECTORS):
         candidates = soup.select(selector)
         if candidates:
             root = _chain_root(candidates)
@@ -122,7 +124,7 @@ def extract_article(html, reader):
         result.title = normalize_ws(heading.get_text(' ', strip=True)) or title
     # A page-level article header may be outside the body container. Never use
     # a recommendation date from elsewhere on the page as publication time.
-    result.publish_time = published or reader._guess_publish_time(root)
+    result.publish_time = published
     text = normalize_ws(root.get_text(' ', strip=True))
     links = root.find_all('a')
     linked_chars = sum(len(normalize_ws(n.get_text(' ', strip=True))) for n in links)

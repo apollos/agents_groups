@@ -65,9 +65,29 @@ class BundleValidator:
         if strict:
             warnings[:] = [w.replace("; unchanged", "; held for review") for w in warnings]
         self._check_evidence_support(bundle, passage_text, warnings)
+        self._attach_excerpts(bundle, passage_text)
         return ValidationReport(True, errors=errors, warnings=warnings,
                                 bundle=bundle, relation_reviews=relation_reviews,
                                 quality_reviews=quality_reviews)
+
+    EXCERPT_CHARS = 600
+
+    def _attach_excerpts(self, bundle: BundleExtraction, passage_text: dict[str, str]) -> None:
+        """Copy the cited passage into each locator so saved records are reviewable.
+
+        Only passages that exist in the model input are copied (``_check_evidence``
+        already cleared unknown ids). A model-supplied ``excerpt`` is never
+        trusted: it is replaced by the actual input text or cleared.
+        """
+        for attr in ("facts", "metrics", "events", "relations", "risks", "catalysts",
+                     "customer_supplier_signals", "price_cost_margin_signals",
+                     "policy_signals"):
+            for item in getattr(bundle, attr):
+                loc = getattr(item, "evidence_locator", None)
+                if loc is None:
+                    continue
+                text = passage_text.get(loc.passage_id) if loc.passage_id else None
+                loc.excerpt = text[: self.EXCERPT_CHARS] if text else None
 
     def _enforce_limits(self, bundle: BundleExtraction, warnings: list[str]) -> None:
         caps = {

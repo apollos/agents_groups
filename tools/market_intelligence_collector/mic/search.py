@@ -22,6 +22,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 
 from mic.schemas import SearchHit
+from mic.publication_time import utcnow
 from mic.utils import domain_of
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -100,6 +101,7 @@ class MockSearchProvider(SearchProvider):
     def __init__(self, hits_per_query: int = 6):
         self.hits_per_query = hits_per_query
         self._bodies: dict[str, str] = {}
+        self._published_at = utcnow().isoformat()
 
     def search(self, query: str, query_family: str | None = None,
                limit: int = 10) -> list[SearchHit]:
@@ -121,12 +123,12 @@ class MockSearchProvider(SearchProvider):
             domain, _stype = _DOMAINS[(rank - 1) % len(_DOMAINS)]
             slug = hashlib.md5(f"{query}{rank}".encode()).hexdigest()[:10]
             url = f"https://www.{domain}/news/{slug}.html"
-            self._bodies[url] = f"<html><head><title>{title}</title></head><body>" \
+            self._bodies[url] = f'<html><head><title>{title}</title><meta property="article:published_time" content="{self._published_at}"></head><body>' \
                                 f"<article><h1>{title}</h1><p>{body}</p></article></body></html>"
             hits.append(SearchHit(
                 query=query, title=title, snippet=body[:80], url=url,
                 domain=domain, rank=rank, provider=self.name,
-                publish_time_guess="2026-06", query_family=query_family,
+                publish_time_guess=self._published_at, query_family=query_family,
             ))
         return hits
 
