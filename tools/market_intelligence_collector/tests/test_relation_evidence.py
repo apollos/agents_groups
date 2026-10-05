@@ -13,7 +13,7 @@ def candidate(kind="supplier_of", pid="p1", subject="甲公司", obj="乙公司"
 
 
 def validate(relation, text, *, pid="p1", section="正文", extra=()):
-    return BundleValidator({}).validate(
+    return BundleValidator({}, require_content_review=False).validate(
         {"relations": [relation]},
         [Passage(passage_id=pid, section=section, text=text), *extra])
 
@@ -45,7 +45,7 @@ class RelationEvidenceTests(unittest.TestCase):
                 self.assert_pending(validate(candidate(pid=pid), text), "missing_body_evidence")
 
     def test_no_passages_does_not_bypass_gate(self):
-        self.assert_pending(BundleValidator({}).validate({"relations": [candidate()]}, []),
+        self.assert_pending(BundleValidator({}, require_content_review=False).validate({"relations": [candidate()]}, []),
                             "missing_body_evidence")
 
     def test_duplicate_passage_ids_are_ambiguous(self):
@@ -117,11 +117,11 @@ class RelationEvidenceTests(unittest.TestCase):
         before = copy.deepcopy(raw)
         passages = [Passage(passage_id="title", section="标题", text="甲公司、乙公司中标"),
                     Passage(passage_id="p3", section="二标段", text="宁德时代中标价4141.622万元。")]
-        first = BundleValidator({}).validate(raw, passages)
+        first = BundleValidator({}, require_content_review=False).validate(raw, passages)
         self.assertEqual(raw, before)
         self.assertEqual(first.relation_reviews[0]["candidate"]["qualifiers"]["status"], "confirmed")
         self.assertEqual(first.bundle.events[0].metrics["amount"], 41416220)
-        second = BundleValidator({}).validate(first.bundle.model_dump(), passages)
+        second = BundleValidator({}, require_content_review=False).validate(first.bundle.model_dump(), passages)
         self.assertEqual(first.bundle.model_dump(), second.bundle.model_dump())
         self.assertEqual(len(second.bundle.coverage_gaps), 2)
         self.assertEqual(second.relation_reviews, [])

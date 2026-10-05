@@ -45,7 +45,7 @@ class StorageEvidenceTests(unittest.TestCase):
         self.bundle = fixture()
 
     def save(self):
-        self.repo.save_merged_analysis("target", "source", self.bundle, {"merge_method": "unit_fixture"})
+        self.repo.save_merged_analysis("target", "source", self.bundle, {"merge_method": "unit_fixture"}, allow_legacy_write=True)
 
     def test_new_columns_nullable(self):
         for table, field in (("event_card", "evidence_locator"), ("metric_observation", "evidence_locator"),

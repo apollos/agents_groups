@@ -98,6 +98,11 @@ def _save_one(con, persister, target, target_id, report, event, counts, protocol
     relation = resolution.get("relation")
     valid = resolution.get("protocol") == protocol and resolution.get("status") == "resolved"
     valid = valid and resolution.get("event_fingerprint") == fingerprint(event)
+    content_review_invalid = False
+    if report.get("content_review_protocol") or event.get("content_review"):
+        from mic.content_review import reviewed_event
+        content_review_invalid = not reviewed_event(event)
+        valid = valid and not content_review_invalid
     if valid and relation in {"same_event", "follow_up"}:
         predecessor = _reference(con, target_id, resolution)
         valid = predecessor is not None
@@ -107,6 +112,8 @@ def _save_one(con, persister, target, target_id, report, event, counts, protocol
         link_status = "replayed"
     elif not valid:
         reason = resolution.get("reason") if resolution.get("status") == "pending" else "candidate_reference_unverified"
+        if content_review_invalid:
+            reason = "content_review_missing_or_changed"
         con.execute("INSERT INTO pending_event_resolutions(content_key,target_id,source_run_id,reason,payload_json) "
                     "VALUES(?,?,?,?,?) ON CONFLICT(content_key) DO UPDATE SET "
                     "reason=excluded.reason,payload_json=excluded.payload_json,source_run_id=excluded.source_run_id",

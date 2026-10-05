@@ -35,7 +35,12 @@ class SourceQuality(BaseModel):
     risk_flags: list[str] = Field(default_factory=list)
 
 
-class Brief(BaseModel):
+class ReviewedContent(BaseModel):
+    # Computed by the shared reviewer; model-supplied approval is never trusted.
+    content_review: dict[str, Any] = Field(default_factory=dict)
+
+
+class Brief(ReviewedContent):
     one_sentence: str = ""
     what_happened: str = ""
     why_it_matters: str = ""
@@ -56,7 +61,7 @@ class EvidenceLocator(BaseModel):
     excerpt: str | None = None
 
 
-class FactItem(BaseModel):
+class FactItem(ReviewedContent):
     fact_id: str | None = None
     fact_type: str = "unknown"
     fact_statement: str = ""
@@ -68,7 +73,7 @@ class FactItem(BaseModel):
     confidence: float = 0.0
 
 
-class MetricObservation(BaseModel):
+class MetricObservation(ReviewedContent):
     metric_id: str | None = None
     metric_name: str = ""
     metric_value: float | None = None
@@ -99,7 +104,7 @@ class TrackingVariableEvidence(BaseModel):
     confidence: float = 0.0
 
 
-class EventCard(BaseModel):
+class EventCard(ReviewedContent):
     event_id: str | None = None
     event_type: str = "unknown"
     event_date: str | None = None
@@ -149,7 +154,7 @@ class EntityRef(BaseModel):
         return any(mk in name for mk in vague_markers)
 
 
-class RelationRecord(BaseModel):
+class RelationRecord(ReviewedContent):
     relation_id: str | None = None
     subject_entity: EntityRef = Field(default_factory=EntityRef)
     relation_type: str = "unknown"
@@ -159,7 +164,7 @@ class RelationRecord(BaseModel):
     confidence: float = 0.0
 
 
-class RiskFlag(BaseModel):
+class RiskFlag(ReviewedContent):
     risk_id: str | None = None
     risk_type: str = "unknown"
     risk_summary: str = ""
@@ -170,7 +175,7 @@ class RiskFlag(BaseModel):
     confidence: float = 0.0
 
 
-class CatalystItem(BaseModel):
+class CatalystItem(ReviewedContent):
     catalyst_id: str | None = None
     catalyst_type: str = "unknown"
     expected_date: str | None = None
@@ -179,7 +184,7 @@ class CatalystItem(BaseModel):
     confidence: float = 0.0
 
 
-class AnalystQuestion(BaseModel):
+class AnalystQuestion(ReviewedContent):
     question_id: str | None = None
     related_event_id: str | None = None
     question: str = ""
@@ -200,7 +205,7 @@ class CoverageGap(BaseModel):
 # --- Domain signals (spec 13.7 - 13.9) -------------------------------------
 
 
-class CustomerSupplierSignal(BaseModel):
+class CustomerSupplierSignal(ReviewedContent):
     signal_id: str | None = None
     signal_type: str = "unknown"  # new_customer | customer_loss | customer_order | ...
     customer_or_supplier: str = ""
@@ -211,7 +216,7 @@ class CustomerSupplierSignal(BaseModel):
     confidence: float = 0.0
 
 
-class PriceCostMarginSignal(BaseModel):
+class PriceCostMarginSignal(ReviewedContent):
     signal_id: str | None = None
     signal_type: str = "unknown"  # product_price_up | raw_material_cost_up | ...
     product_or_material: str = ""
@@ -223,7 +228,7 @@ class PriceCostMarginSignal(BaseModel):
     confidence: float = 0.0
 
 
-class PolicyRegulatorySignal(BaseModel):
+class PolicyRegulatorySignal(ReviewedContent):
     signal_id: str | None = None
     policy_type: str = "unknown"  # subsidy | restriction | approval | tariff | ...
     issuer: str = ""
@@ -240,6 +245,7 @@ class PolicyRegulatorySignal(BaseModel):
 
 
 class BundleExtraction(BaseModel):
+    content_review: dict[str, Any] = Field(default_factory=dict)
     schema_version: str = "bundle_extraction_v0.3"
     source_link_id: str | None = None
     decision: str = "skip"

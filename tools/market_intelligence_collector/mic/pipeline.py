@@ -73,6 +73,7 @@ class RunStats:
     read_failures: dict[str, int] = field(default_factory=dict)
     time_window_filter: dict[str, Any] = field(default_factory=dict)
     output_decisions: list[dict[str, Any]] = field(default_factory=list)
+    content_reviews: list[dict[str, Any]] = field(default_factory=list)
     # One entry per model request actually attempted (A4 traceability).
     model_requests: list[dict[str, Any]] = field(default_factory=list)
     stop_reason: str | None = None
@@ -116,7 +117,8 @@ class Pipeline:
         self.reader = LinkReader(self.config, search_provider=self.search,
                                  vision=self.vision)
         self.merger = MultiModelMerger(self.config)
-        self.validator = BundleValidator((self.config.output_schema or {}).get("limits", {}))
+        self.validator = BundleValidator((self.config.output_schema or {}).get("limits", {}),
+                                         require_content_review=True)
         self.policy_version = self.config.model_policies.get("version", "model_policy_v0.3")
         self.query_plan_version = self.config.query_families.get("version", "query_plan_v0.3")
         # Per-query SERP request cap; providers additionally apply their own
@@ -501,7 +503,7 @@ class Pipeline:
                 prior = None
                 if reuse_enabled and window.days is None:
                     prior = self.repo.find_analyzed_link_by_canonical(
-                        canonical, profile.target_id, exclude_run_id=run_id)
+                        canonical, profile.target_id, exclude_run_id=run_id, reviewed_only=True)
                 if prior is not None:
                     stats.cached_or_reused_results += 1
                     self.repo.update_link_triage(
@@ -512,7 +514,7 @@ class Pipeline:
                     self.repo.update_link_read(
                         link_id, "link_record_only", prior.content_hash, prior.simhash)
                     self._tally_cloned(stats, self.repo.clone_latest_analysis(
-                        prior.id, link_id, profile.target_id), hit)
+                        prior.id, link_id, profile.target_id, reviewed_only=True), hit)
                     continue
                 triaged.append((link_id, hit, tri))
 
@@ -616,7 +618,7 @@ class Pipeline:
             prior_body = None
             if reuse_enabled:
                 prior_body = self.repo.find_analyzed_link_by_content_hash(
-                    read.content_hash, profile.target_id, exclude_link_id=link_id)
+                    read.content_hash, profile.target_id, exclude_link_id=link_id, reviewed_only=True)
             if prior_body is not None:
                 stats.cached_or_reused_results += 1
                 self.repo.update_link_triage(
@@ -629,7 +631,7 @@ class Pipeline:
                     document_type=read.document_type,
                     access_profile_id=self.reader.access_profile_id)
                 self._tally_cloned(stats, self.repo.clone_latest_analysis(
-                    prior_body.id, link_id, profile.target_id), hit)
+                    prior_body.id, link_id, profile.target_id, reviewed_only=True), hit)
                 continue
             seen_content_hash.add(read.content_hash)
             self.repo.update_link_read(
@@ -876,6 +878,9 @@ class Pipeline:
 
     def _tally(self, stats: RunStats, bundle,
                source_metadata: dict | None = None) -> None:
+        if bundle.content_review:
+            stats.content_reviews.append({"source_link_id": bundle.source_link_id,
+                                          **bundle.content_review})
         s = stats.structured
         s["briefs"] += 1
         s["facts"] += len(bundle.facts)
@@ -926,6 +931,8 @@ class Pipeline:
         "full event persistence" contract breaks whenever a link is reused.
         """
         self._tally_counts(stats, cloned)
+        if cloned.get("content_review"):
+            stats.content_reviews.append({"cache_reused": True, **cloned["content_review"]})
         source = {
             "url": hit.url,
             "domain": hit.domain,
@@ -1096,6 +1103,8 @@ class Pipeline:
             # inventory drift, tender shortlist) matter for variable coverage even when they
             # don't make the top-5 display cut.
             "all_events": stats.top_events,
+            "content_review_protocol": "content_review_v1",
+            "content_reviews": stats.content_reviews,
             "top_relations": stats.top_relations[:5],
             "call_efficiency": {
                 "deduplicated_links": stats.deduplicated_links,

@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from mic.modeling.adapter import ModelAdapter, ModelCallResult
+from mic.modeling.mock_review import attach_mock_review
 from mic.pipeline import Pipeline
 from mic.planner import PlannedQuery
 from mic.reader import ReadResult
@@ -74,6 +75,7 @@ def test_existing_model_calls_carry_context_then_persist_decisions(config, monke
                                                          "quote": c["passages"][0]["text"]}]}
                                 for c in context["candidates"]]}
         parsed = {"decision": "save_structured", "overall_score": 78, "confidence": .9, "events": events}
+        parsed = attach_mock_review(parsed, payload["selected_passages"])
         return ModelCallResult(model_config_id=adapter.model_config_id, provider=adapter.provider,
                                provider_type=adapter.provider_type, model_name=adapter.model,
                                status="success", parsed=parsed, raw_text=json.dumps(parsed), is_mock=True)

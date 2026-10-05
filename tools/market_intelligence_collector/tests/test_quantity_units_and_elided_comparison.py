@@ -25,7 +25,7 @@ PASSAGES = [Passage(passage_id="p0", section="正文", text=P0),
 
 
 def validate(raw, passages=PASSAGES, strict=True):
-    return BundleValidator({"strict_evidence_review": strict}).validate(raw, passages)
+    return BundleValidator({"strict_evidence_review": strict}, require_content_review=False).validate(raw, passages)
 
 
 def metric(name, value, unit, pid, interpretation="来源数值。"):

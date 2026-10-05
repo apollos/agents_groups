@@ -8,7 +8,7 @@ from mic.validate import BundleValidator
 
 def run(raw, text="", extra=(), strict=True):
     passages = [Passage(passage_id="p1", section="正文", text=text), *extra]
-    return BundleValidator({"strict_evidence_review": strict}).validate(raw, passages)
+    return BundleValidator({"strict_evidence_review": strict}, require_content_review=False).validate(raw, passages)
 
 
 def price(value=1.035, unit="元/Wh", **fields):

@@ -13,7 +13,7 @@ def check_amount(value, text=CATL, **fields):
     raw = {"events": [{"entities": {"subject": "宁德时代"},
                        "metrics": {"amount": value, "currency": "CNY", **fields},
                        "evidence_locator": {"passage_id": "p1"}}]}
-    result = BundleValidator({}).validate(raw, [Passage(passage_id="p1", section="正文", text=text)])
+    result = BundleValidator({}, require_content_review=False).validate(raw, [Passage(passage_id="p1", section="正文", text=text)])
     assert result.schema_valid
     return result.bundle.events[0].metrics, result.warnings
 
@@ -83,7 +83,7 @@ class MoneyTests(unittest.TestCase):
     def test_invalid_passage_cannot_normalize(self):
         raw = {"events": [{"metrics": {"amount": 4141.622, "currency": "CNY"},
                            "evidence_locator": {"passage_id": "not-in-input"}}]}
-        result = BundleValidator({}).validate(raw, [Passage(passage_id="p1", section="正文", text=CATL)])
+        result = BundleValidator({}, require_content_review=False).validate(raw, [Passage(passage_id="p1", section="正文", text=CATL)])
         self.assertEqual(result.bundle.events[0].metrics["amount"], 4141.622)
         self.assertTrue(any("missing_cited_passage" in x for x in result.warnings))
 
@@ -92,8 +92,8 @@ class MoneyTests(unittest.TestCase):
                           "evidence_locator": {"passage_id": "p1"}}]}
         original = copy.deepcopy(raw)
         passages = [Passage(passage_id="p1", section="正文", text=CATL)]
-        first = BundleValidator({}).validate(raw, passages)
-        second = BundleValidator({}).validate(first.bundle.model_dump(), passages)
+        first = BundleValidator({}, require_content_review=False).validate(raw, passages)
+        second = BundleValidator({}, require_content_review=False).validate(first.bundle.model_dump(), passages)
         self.assertEqual(raw, original)
         self.assertEqual(first.bundle.facts[0].metrics, second.bundle.facts[0].metrics)
         self.assertEqual(second.bundle.facts[0].metrics["unit"], "吨")
@@ -106,7 +106,7 @@ class MoneyTests(unittest.TestCase):
                               "object_entity": {"name": "甲公司"},
                               "qualifiers": {"amount": 4141.622, "currency": "CNY"},
                               "evidence_locator": {"passage_id": "p1"}}]}
-        result = BundleValidator({}).validate(raw, [Passage(
+        result = BundleValidator({}, require_content_review=False).validate(raw, [Passage(
             passage_id="p1", section="正文",
             text="宁德时代是甲公司的供应商，供货金额4141.622万元。")])
         self.assertEqual(result.bundle.relations[0].qualifiers["amount"], 41416220)

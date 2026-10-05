@@ -24,7 +24,7 @@ def read(html, strict=True):
 
 
 def validate(raw, text='报价1.035元/Wh。', extra=(), strict=True):
-    return BundleValidator({'strict_evidence_review': strict}).validate(raw, [
+    return BundleValidator({'strict_evidence_review': strict}, require_content_review=False).validate(raw, [
         Passage(passage_id='p1', section='正文', text=text), *extra])
 
 

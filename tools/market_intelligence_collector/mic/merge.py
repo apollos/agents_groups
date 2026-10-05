@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from mic.config import MICConfig
+from mic.content_review import enforce_integrity
+from mic.content_review_policy import PROTOCOL as REVIEW_PROTOCOL
 from mic.schemas import (
     BundleExtraction,
     CatalystItem,
@@ -89,6 +91,7 @@ class MultiModelMerger:
             merged = c.bundle.model_copy(deep=True)
             merged.source_link_id = source_link_id
             merged.relations = self._sanitize_relations(merged.relations)
+            enforce_integrity(merged)
             decision_diagnostics = self._apply_decision_rules(merged)
             return MergeResult(
                 merged, "low", "single_model",
@@ -137,6 +140,13 @@ class MultiModelMerger:
             analyst_questions=self._dedup_questions(questions)[:8],
             coverage_gaps=gaps[:8],
         )
+        reviews = [c.bundle.content_review for c in contributions
+                   if c.bundle.content_review.get("protocol") == REVIEW_PROTOCOL]
+        if reviews:
+            merged.content_review = {"protocol": REVIEW_PROTOCOL, "status": "applied",
+                                     "contributions": reviews,
+                                     "held": [h for r in reviews for h in r.get("held", [])]}
+            enforce_integrity(merged)
         decision_diagnostics = self._apply_decision_rules(merged)
         return MergeResult(
             merged, disagreement, "weighted_merge",

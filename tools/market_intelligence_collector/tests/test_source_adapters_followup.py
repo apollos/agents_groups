@@ -125,7 +125,7 @@ def test_absence_claim_is_limited_to_available_material_without_score_changes():
     raw = {"decision": "save_structured", "overall_score": 66,
            "brief": {"uncertainty": "单一媒体来源，无官方中标文件；订单规模小，对宁德时代收入影响有限。"}}
     original = deepcopy(raw)
-    validator = BundleValidator({"strict_evidence_review": True})
+    validator = BundleValidator({"strict_evidence_review": True}, require_content_review=False)
     passages = [Passage(passage_id="p0", section="正文", text="宁德时代中标设备采购项目，金额100万元。")]
     result = validator.validate(raw, passages)
     assert result.schema_valid and result.bundle.overall_score == 66

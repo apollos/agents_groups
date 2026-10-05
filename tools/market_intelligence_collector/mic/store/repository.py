@@ -172,6 +172,7 @@ class Repository:
     def find_analyzed_link_by_canonical(
         self, canonical_url: str, target_id: str,
         exclude_run_id: str | None = None,
+        *, reviewed_only: bool = False,
     ) -> m.SourceLink | None:
         """Latest already-analyzed link for this canonical URL (cross-run reuse).
 
@@ -191,11 +192,14 @@ class Repository:
             )
             if exclude_run_id:
                 stmt = stmt.where(m.SourceLink.search_run_id != exclude_run_id)
+            if reviewed_only:
+                stmt = self._reviewed_analysis(stmt)
             return s.scalars(stmt.order_by(m.MergedAnalysis.created_at.desc())).first()
 
     def find_analyzed_link_by_content_hash(
         self, content_hash: str, target_id: str,
         exclude_link_id: str | None = None,
+        *, reviewed_only: bool = False,
     ) -> m.SourceLink | None:
         """Latest already-analyzed link with the same body content hash."""
         if not content_hash:
@@ -210,7 +214,15 @@ class Repository:
             )
             if exclude_link_id:
                 stmt = stmt.where(m.SourceLink.id != exclude_link_id)
+            if reviewed_only:
+                stmt = self._reviewed_analysis(stmt)
             return s.scalars(stmt.order_by(m.MergedAnalysis.created_at.desc())).first()
+
+    @staticmethod
+    def _reviewed_analysis(stmt):
+        from mic.content_review_policy import PROTOCOL
+        return stmt.where(m.MergedAnalysis.content_review["protocol"].as_string() == PROTOCOL).where(
+            m.MergedAnalysis.content_review["status"].as_string() == "applied")
 
     def update_link_triage(self, link_id: str, score: float, decision: str,
                            reason: str | None = None,
@@ -407,13 +419,18 @@ class Repository:
 
     def save_merged_analysis(self, target_id: str, source_link_id: str,
                             bundle: schemas.BundleExtraction, merge_meta: dict,
-                            search_run_id: str | None = None) -> str:
+                            search_run_id: str | None = None, *, allow_legacy_write: bool = False) -> str:
+        from mic.content_review import enforce_integrity
+        from mic.content_review_policy import PROTOCOL
+        if not allow_legacy_write and bundle.content_review.get("protocol") != PROTOCOL:
+            raise ValueError("content_review_required: validate with the shared semantic policy before writing")
+        enforce_integrity(bundle)
         merged_id = new_id("merged")
         with self.db.session() as s:
             s.add(m.MergedAnalysis(
                 id=merged_id, source_link_id=source_link_id, target_id=target_id,
                 decision=bundle.decision, overall_score=bundle.overall_score,
-                confidence=bundle.confidence,
+                content_review=bundle.content_review, confidence=bundle.confidence,
                 disagreement_level=merge_meta.get("disagreement_level"),
                 merge_method=merge_meta.get("merge_method"),
                 model_outputs=merge_meta.get("model_outputs"),
@@ -428,7 +445,7 @@ class Repository:
                 why_it_matters=b.why_it_matters, uncertainty=b.uncertainty,
                 affected_business_lines=b.affected_business_lines,
                 impact_channels=b.impact_channels, time_horizon=b.time_horizon,
-                confidence=bundle.confidence, created_at=now(),
+                content_review=b.content_review, confidence=bundle.confidence, created_at=now(),
             ))
 
             for fact in bundle.facts:
@@ -439,7 +456,7 @@ class Repository:
                     entities=fact.entities, metrics=fact.metrics, period=fact.period,
                     direction=fact.direction,
                     evidence_locator=fact.evidence_locator.model_dump(),
-                    confidence=fact.confidence, created_at=now(),
+                    content_review=fact.content_review, confidence=fact.confidence, created_at=now(),
                 ))
 
             for metric in bundle.metrics:
@@ -450,7 +467,7 @@ class Repository:
                     unit=metric.unit, period=metric.period, scope=metric.scope,
                     comparison=metric.comparison, interpretation=metric.interpretation,
                     evidence_locator=metric.evidence_locator.model_dump(),
-                    impact_channels=metric.impact_channels, confidence=metric.confidence,
+                    impact_channels=metric.impact_channels, content_review=metric.content_review, confidence=metric.confidence,
                     created_at=now(),
                 ))
 
@@ -466,7 +483,7 @@ class Repository:
                     source_context=event.source_context,
                     tracking_variables=[tv.model_dump() for tv in event.tracking_variables],
                     source_corroboration_status=event.source_corroboration_status,
-                    confidence=event.confidence, created_at=now(),
+                    content_review=event.content_review, confidence=event.confidence, created_at=now(),
                 ))
 
             for rel in bundle.relations:
@@ -478,7 +495,7 @@ class Repository:
                     object_entity=rel.object_entity.model_dump(),
                     qualifiers=rel.qualifiers,
                     evidence_locator=rel.evidence_locator.model_dump(),
-                    confidence=rel.confidence, created_at=now(),
+                    content_review=rel.content_review, confidence=rel.confidence, created_at=now(),
                 ))
 
             for risk in bundle.risks:
@@ -487,7 +504,7 @@ class Repository:
                     source_link_id=source_link_id, target_id=target_id,
                     risk_type=risk.risk_type, risk_summary=risk.risk_summary,
                     severity=risk.severity, time_horizon=risk.time_horizon,
-                    impact_channels=risk.impact_channels, confidence=risk.confidence,
+                    impact_channels=risk.impact_channels, content_review=risk.content_review, confidence=risk.confidence,
                     created_at=now(),
                 ))
 
@@ -497,7 +514,7 @@ class Repository:
                     source_link_id=source_link_id, target_id=target_id,
                     catalyst_type=cat.catalyst_type,
                     expected_date=_to_dt(cat.expected_date), description=cat.description,
-                    potential_impact=cat.potential_impact, confidence=cat.confidence,
+                    potential_impact=cat.potential_impact, content_review=cat.content_review, confidence=cat.confidence,
                     created_at=now(),
                 ))
 
@@ -508,7 +525,7 @@ class Repository:
                     signal_type=cs.signal_type,
                     customer_or_supplier=cs.customer_or_supplier, product=cs.product,
                     business_meaning=cs.business_meaning,
-                    impact_channels=cs.impact_channels, confidence=cs.confidence,
+                    impact_channels=cs.impact_channels, content_review=cs.content_review, confidence=cs.confidence,
                     created_at=now(),
                 ))
 
@@ -519,7 +536,7 @@ class Repository:
                     signal_type=pcm.signal_type,
                     product_or_material=pcm.product_or_material, value=pcm.value,
                     unit=pcm.unit, period=pcm.period, direction=pcm.direction,
-                    confidence=pcm.confidence, created_at=now(),
+                    content_review=pcm.content_review, confidence=pcm.confidence, created_at=now(),
                 ))
 
             for pol in bundle.policy_signals:
@@ -531,14 +548,14 @@ class Repository:
                     affected_entities=pol.affected_entities,
                     affected_products=pol.affected_products,
                     impact_channels=pol.impact_channels, summary=pol.summary,
-                    confidence=pol.confidence, created_at=now(),
+                    content_review=pol.content_review, confidence=pol.confidence, created_at=now(),
                 ))
 
             for q in bundle.analyst_questions:
                 s.add(m.AnalystQuestionRow(
                     id=new_id("q"), source_link_id=source_link_id, target_id=target_id,
                     related_event_id=q.related_event_id, question=q.question,
-                    reason=q.reason, priority=q.priority,
+                    reason=q.reason, priority=q.priority, content_review=q.content_review,
                     suggested_queries=q.suggested_queries, status=q.status,
                     created_at=now(),
                 ))
@@ -570,6 +587,7 @@ class Repository:
 
     def clone_latest_analysis(
         self, previous_source_link_id: str, new_source_link_id: str, target_id: str,
+        *, reviewed_only: bool = False,
     ) -> dict[str, Any]:
         """Clone the latest merged structured objects from one link to another.
 
@@ -587,25 +605,35 @@ class Repository:
             "analyst_questions": 0, "cloned_events": [],
         }
         with self.db.session() as s:
-            merged = s.scalars(
-                select(m.MergedAnalysis)
-                .where(m.MergedAnalysis.source_link_id == previous_source_link_id)
-                .order_by(m.MergedAnalysis.created_at.desc())
-            ).first()
+            query = (select(m.MergedAnalysis)
+                .where(m.MergedAnalysis.source_link_id == previous_source_link_id))
+            if reviewed_only:
+                query = self._reviewed_analysis(query.where(m.MergedAnalysis.target_id == target_id))
+            merged = s.scalars(query.order_by(m.MergedAnalysis.created_at.desc())).first()
             if merged is None:
                 return counts
+            if merged.content_review:
+                counts["content_review"] = deepcopy(merged.content_review)
+            def source_rows(model):
+                query = select(model).where(model.source_link_id == previous_source_link_id)
+                if reviewed_only:
+                    from mic.content_review_policy import PROTOCOL
+                    query = query.where(model.content_review["protocol"].as_string() == PROTOCOL)
+                    if hasattr(model, "merged_analysis_id"):
+                        query = query.where(model.merged_analysis_id == merged.id)
+                return query
+
             new_merged_id = new_id("merged")
             s.add(m.MergedAnalysis(
                 id=new_merged_id, source_link_id=new_source_link_id, target_id=target_id,
                 decision=merged.decision, overall_score=merged.overall_score,
-                confidence=merged.confidence, disagreement_level=merged.disagreement_level,
+                content_review=merged.content_review, confidence=merged.confidence, disagreement_level=merged.disagreement_level,
                 merge_method=f"cache_reuse:{merged.merge_method or 'unknown'}",
                 model_outputs=merged.model_outputs, field_conflicts=merged.field_conflicts,
                 created_at=now(),
             ))
 
-            brief = s.scalars(select(m.AnalysisBrief).where(
-                m.AnalysisBrief.source_link_id == previous_source_link_id)).first()
+            brief = s.scalars(source_rows(m.AnalysisBrief)).first()
             if brief:
                 s.add(m.AnalysisBrief(
                     id=new_id("brief"), merged_analysis_id=new_merged_id,
@@ -614,24 +642,22 @@ class Repository:
                     why_it_matters=brief.why_it_matters, uncertainty=brief.uncertainty,
                     affected_business_lines=brief.affected_business_lines,
                     impact_channels=brief.impact_channels, time_horizon=brief.time_horizon,
-                    confidence=brief.confidence, created_at=now(),
+                    content_review=brief.content_review, confidence=brief.confidence, created_at=now(),
                 ))
                 counts["briefs"] += 1
 
-            for fact in s.scalars(select(m.FactItemRow).where(
-                    m.FactItemRow.source_link_id == previous_source_link_id)).all():
+            for fact in s.scalars(source_rows(m.FactItemRow)).all():
                 s.add(m.FactItemRow(
                     id=new_id("fact"), merged_analysis_id=new_merged_id,
                     source_link_id=new_source_link_id, target_id=target_id,
                     fact_type=fact.fact_type, fact_statement=fact.fact_statement,
                     entities=fact.entities, metrics=fact.metrics, period=fact.period,
                     direction=fact.direction, evidence_locator=fact.evidence_locator,
-                    confidence=fact.confidence, created_at=now(),
+                    content_review=fact.content_review, confidence=fact.confidence, created_at=now(),
                 ))
                 counts["facts"] += 1
 
-            for metric in s.scalars(select(m.MetricObservationRow).where(
-                    m.MetricObservationRow.source_link_id == previous_source_link_id)).all():
+            for metric in s.scalars(source_rows(m.MetricObservationRow)).all():
                 s.add(m.MetricObservationRow(
                     id=new_id("metric"), merged_analysis_id=new_merged_id,
                     source_link_id=new_source_link_id, target_id=target_id,
@@ -640,12 +666,11 @@ class Repository:
                     comparison=metric.comparison, interpretation=metric.interpretation,
                     evidence_locator=metric.evidence_locator,
                     impact_channels=metric.impact_channels,
-                    confidence=metric.confidence, created_at=now(),
+                    content_review=metric.content_review, confidence=metric.confidence, created_at=now(),
                 ))
                 counts["metrics"] += 1
 
-            for event in s.scalars(select(m.EventCardRow).where(
-                    m.EventCardRow.source_link_id == previous_source_link_id)).all():
+            for event in s.scalars(source_rows(m.EventCardRow)).all():
                 s.add(m.EventCardRow(
                     id=new_id("evt"), merged_analysis_id=new_merged_id,
                     source_link_id=new_source_link_id, target_id=target_id,
@@ -657,10 +682,11 @@ class Repository:
                     source_context=event.source_context,
                     tracking_variables=event.tracking_variables,
                     source_corroboration_status=event.source_corroboration_status,
-                    confidence=event.confidence, created_at=now(),
+                    content_review=event.content_review, confidence=event.confidence, created_at=now(),
                 ))
                 counts["events"] += 1
                 counts["cloned_events"].append({
+                    "content_review": deepcopy(event.content_review),
                     "summary": event.summary,
                     "event_type": event.event_type,
                     "event_date": event.event_date.isoformat() if event.event_date else None,
@@ -680,68 +706,62 @@ class Repository:
                     "tracking_variables": event.tracking_variables or [],
                 })
 
-            for rel in s.scalars(select(m.RelationRecordRow).where(
-                    m.RelationRecordRow.source_link_id == previous_source_link_id)).all():
+            for rel in s.scalars(source_rows(m.RelationRecordRow)).all():
                 s.add(m.RelationRecordRow(
                     id=new_id("rel"), merged_analysis_id=new_merged_id,
                     source_link_id=new_source_link_id, target_id=target_id,
                     subject_entity=rel.subject_entity, relation_type=rel.relation_type,
                     object_entity=rel.object_entity, qualifiers=rel.qualifiers,
-                    evidence_locator=rel.evidence_locator, confidence=rel.confidence,
+                    evidence_locator=rel.evidence_locator, content_review=rel.content_review, confidence=rel.confidence,
                     created_at=now(),
                 ))
                 counts["relations"] += 1
 
-            for risk in s.scalars(select(m.RiskFlagRow).where(
-                    m.RiskFlagRow.source_link_id == previous_source_link_id)).all():
+            for risk in s.scalars(source_rows(m.RiskFlagRow)).all():
                 s.add(m.RiskFlagRow(
                     id=new_id("risk"), merged_analysis_id=new_merged_id,
                     source_link_id=new_source_link_id, target_id=target_id,
                     risk_type=risk.risk_type, risk_summary=risk.risk_summary,
                     severity=risk.severity, time_horizon=risk.time_horizon,
-                    impact_channels=risk.impact_channels, confidence=risk.confidence,
+                    impact_channels=risk.impact_channels, content_review=risk.content_review, confidence=risk.confidence,
                     created_at=now(),
                 ))
                 counts["risks"] += 1
 
-            for cat in s.scalars(select(m.CatalystItemRow).where(
-                    m.CatalystItemRow.source_link_id == previous_source_link_id)).all():
+            for cat in s.scalars(source_rows(m.CatalystItemRow)).all():
                 s.add(m.CatalystItemRow(
                     id=new_id("cat"), merged_analysis_id=new_merged_id,
                     source_link_id=new_source_link_id, target_id=target_id,
                     catalyst_type=cat.catalyst_type, expected_date=cat.expected_date,
                     description=cat.description, potential_impact=cat.potential_impact,
-                    confidence=cat.confidence, created_at=now(),
+                    content_review=cat.content_review, confidence=cat.confidence, created_at=now(),
                 ))
                 counts["catalysts"] += 1
 
-            for cs in s.scalars(select(m.CustomerSupplierSignalRow).where(
-                    m.CustomerSupplierSignalRow.source_link_id == previous_source_link_id)).all():
+            for cs in s.scalars(source_rows(m.CustomerSupplierSignalRow)).all():
                 s.add(m.CustomerSupplierSignalRow(
                     id=new_id("cs"), merged_analysis_id=new_merged_id,
                     source_link_id=new_source_link_id, target_id=target_id,
                     signal_type=cs.signal_type,
                     customer_or_supplier=cs.customer_or_supplier, product=cs.product,
                     business_meaning=cs.business_meaning,
-                    impact_channels=cs.impact_channels, confidence=cs.confidence,
+                    impact_channels=cs.impact_channels, content_review=cs.content_review, confidence=cs.confidence,
                     created_at=now(),
                 ))
                 counts["customer_supplier_signals"] += 1
 
-            for pcm in s.scalars(select(m.PriceCostMarginSignalRow).where(
-                    m.PriceCostMarginSignalRow.source_link_id == previous_source_link_id)).all():
+            for pcm in s.scalars(source_rows(m.PriceCostMarginSignalRow)).all():
                 s.add(m.PriceCostMarginSignalRow(
                     id=new_id("pcm"), merged_analysis_id=new_merged_id,
                     source_link_id=new_source_link_id, target_id=target_id,
                     signal_type=pcm.signal_type,
                     product_or_material=pcm.product_or_material, value=pcm.value,
                     unit=pcm.unit, period=pcm.period, direction=pcm.direction,
-                    confidence=pcm.confidence, created_at=now(),
+                    content_review=pcm.content_review, confidence=pcm.confidence, created_at=now(),
                 ))
                 counts["price_cost_margin_signals"] += 1
 
-            for pol in s.scalars(select(m.PolicyRegulatorySignalRow).where(
-                    m.PolicyRegulatorySignalRow.source_link_id == previous_source_link_id)).all():
+            for pol in s.scalars(source_rows(m.PolicyRegulatorySignalRow)).all():
                 s.add(m.PolicyRegulatorySignalRow(
                     id=new_id("pol"), merged_analysis_id=new_merged_id,
                     source_link_id=new_source_link_id, target_id=target_id,
@@ -750,16 +770,15 @@ class Repository:
                     affected_entities=pol.affected_entities,
                     affected_products=pol.affected_products,
                     impact_channels=pol.impact_channels, summary=pol.summary,
-                    confidence=pol.confidence, created_at=now(),
+                    content_review=pol.content_review, confidence=pol.confidence, created_at=now(),
                 ))
                 counts["policy_signals"] += 1
 
-            for q in s.scalars(select(m.AnalystQuestionRow).where(
-                    m.AnalystQuestionRow.source_link_id == previous_source_link_id)).all():
+            for q in s.scalars(source_rows(m.AnalystQuestionRow)).all():
                 s.add(m.AnalystQuestionRow(
                     id=new_id("q"), source_link_id=new_source_link_id, target_id=target_id,
                     related_event_id=q.related_event_id, question=q.question,
-                    reason=q.reason, priority=q.priority,
+                    reason=q.reason, priority=q.priority, content_review=q.content_review,
                     suggested_queries=q.suggested_queries, status=q.status,
                     created_at=now(),
                 ))
@@ -863,6 +882,7 @@ class Repository:
                 "scope": r.scope, "comparison": r.comparison,
                 "evidence_locator": r.evidence_locator,
                 "interpretation": r.interpretation, "impact_channels": r.impact_channels,
+                "content_review": r.content_review or {},
                 "confidence": r.confidence, "source_link_id": r.source_link_id,
             } for r in rows]
 
@@ -897,6 +917,7 @@ class Repository:
                     "relation_id": r.id, "subject_entity": r.subject_entity,
                     "relation_type": r.relation_type, "object_entity": r.object_entity,
                     "qualifiers": r.qualifiers, "confidence": r.confidence,
+                    "content_review": r.content_review or {},
                     "source_link_id": r.source_link_id,
                     "source_link_ids": [r.source_link_id],
                 }
@@ -918,6 +939,7 @@ class Repository:
                 "fact_statement": r.fact_statement, "entities": r.entities,
                 "metrics": r.metrics, "period": r.period, "direction": r.direction,
                 "evidence_locator": r.evidence_locator,
+                "content_review": r.content_review or {},
                 "confidence": r.confidence, "source_link_id": r.source_link_id,
             } for r in rows]
             if query:
@@ -944,6 +966,7 @@ class Repository:
                 "risk_id": r.id, "risk_type": r.risk_type,
                 "risk_summary": r.risk_summary, "severity": r.severity,
                 "time_horizon": r.time_horizon, "impact_channels": r.impact_channels,
+                "content_review": r.content_review or {},
                 "confidence": r.confidence, "source_link_id": r.source_link_id,
             } for r in rows]
 
@@ -962,6 +985,7 @@ class Repository:
                 "catalyst_id": r.id, "catalyst_type": r.catalyst_type,
                 "expected_date": r.expected_date.isoformat() if r.expected_date else None,
                 "description": r.description, "potential_impact": r.potential_impact,
+                "content_review": r.content_review or {},
                 "confidence": r.confidence, "source_link_id": r.source_link_id,
             } for r in rows]
 
@@ -977,6 +1001,7 @@ class Repository:
             rows = s.scalars(stmt.order_by(m.AnalystQuestionRow.created_at.desc())).all()
             return [{
                 "question_id": r.id, "question": r.question, "reason": r.reason,
+                "content_review": r.content_review or {},
                 "priority": r.priority, "status": r.status,
                 "suggested_queries": r.suggested_queries,
                 "related_event_id": r.related_event_id,
@@ -1106,6 +1131,7 @@ class Repository:
                                                  "is_mock": None, "output_truncated": None}),
                 } for r in runs],
                 "merged_decision": merged.decision if merged else None,
+                "content_review": (merged.content_review or {"status": "legacy_unreviewed"}) if merged else None,
                 "uncertainty": brief.uncertainty if brief else None,
                 "facts": [f.fact_statement for f in facts],
                 "metrics": [{"name": x.metric_name, "value": x.metric_value} for x in metrics],
@@ -1128,5 +1154,6 @@ class Repository:
             "event_resolution": r.event_resolution or {}, "source_context": r.source_context or [],
             "tracking_variables": r.tracking_variables or [],
             "source_corroboration_status": r.source_corroboration_status,
-            "confidence": r.confidence, "source_link_id": r.source_link_id,
+            "content_review": r.content_review or {},
+                "confidence": r.confidence, "source_link_id": r.source_link_id,
         }

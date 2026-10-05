@@ -24,7 +24,7 @@ PASSAGES = [Passage(passage_id="p0", section="正文", text=P0),
 
 
 def validate(raw, passages=PASSAGES):
-    return BundleValidator({"strict_evidence_review": True}).validate(raw, passages)
+    return BundleValidator({"strict_evidence_review": True}, require_content_review=False).validate(raw, passages)
 
 
 def metric(interpretation, channels=("revenue",), pid="p2", value=4141.622, unit="万元", name="宁德时代中标金额"):
@@ -152,7 +152,7 @@ def test_q2_impact_on_target_from_another_partys_award_is_held_when_target_is_kn
     own = event("宁德时代中标二标段10MW/40MWh钠离子储能系统，中标价4141.622万元（1.035元/Wh）。",
                 {"direction": "positive", "channels": ["revenue"], "horizon": "quarter", "magnitude_guess": "low"},
                 pid="p2", subject="宁德时代")
-    validator = BundleValidator({"strict_evidence_review": True}, target_names=["宁德时代", "CATL"])
+    validator = BundleValidator({"strict_evidence_review": True}, target_names=["宁德时代", "CATL"], require_content_review=False)
     b = validator.validate({"events": [rival, own]}, PASSAGES).bundle
     held, kept = b.events
     assert held.impact.channels == [] and held.impact.direction == "unclear"

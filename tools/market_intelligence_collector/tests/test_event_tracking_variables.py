@@ -74,7 +74,7 @@ def test_clone_latest_analysis_returns_cloned_event_details(config):
             EventCard(event_type="major_order", event_date="2026-07-03", summary="中标特高压项目", confidence=0.9)
         ],
     )
-    repo.save_merged_analysis("company_002371", "link_a", bundle, {})
+    repo.save_merged_analysis("company_002371", "link_a", bundle, {}, allow_legacy_write=True)
     cloned = repo.clone_latest_analysis("link_a", "link_b", "company_002371")
     assert cloned["events"] == 1
     details = cloned["cloned_events"]
@@ -104,7 +104,7 @@ def test_clone_latest_analysis_preserves_tracking_variables(config):
             )
         ],
     )
-    repo.save_merged_analysis("company_002371", "link_tv_a", bundle, {})
+    repo.save_merged_analysis("company_002371", "link_tv_a", bundle, {}, allow_legacy_write=True)
     cloned = repo.clone_latest_analysis("link_tv_a", "link_tv_b", "company_002371")
     tvs = cloned["cloned_events"][0]["tracking_variables"]
     assert tvs and tvs[0]["variable"] == "orders"

@@ -38,8 +38,12 @@ class ValidationReport:
 
 
 class BundleValidator:
-    def __init__(self, output_limits: dict, target_names: list[str] | None = None):
+    def __init__(self, output_limits: dict, target_names: list[str] | None = None,
+                 *, require_content_review: bool = True):
         self.limits = output_limits or {}
+        # Disabling this is reserved for explicit legacy/offline replay. Every
+        # current caller requires the shared semantic protocol by default.
+        self.require_content_review = require_content_review
         # Set per run by the pipeline (canonical name + aliases of the current target).
         self.target_names: list[str] = list(target_names or [])
 
@@ -50,6 +54,16 @@ class BundleValidator:
             bundle = BundleExtraction.model_validate(repair_metric_value_strings(raw, warnings))
         except ValidationError as exc:
             return ValidationReport(False, errors=[f"schema: {e['msg']}" for e in exc.errors()])
+
+        if self.require_content_review or bundle.content_review:
+            from mic.content_review import ContentReview, seal
+            bundle = bundle.model_copy(deep=True)
+            reviews = ContentReview(bundle, passages, warnings).apply()
+            self._enforce_limits(bundle, warnings, truncate_brief=False)
+            self._check_evidence(bundle, {p.passage_id for p in passages}, warnings)
+            self._attach_excerpts(bundle, {p.passage_id: p.text for p in passages})
+            seal(bundle)
+            return ValidationReport(True, warnings=warnings, bundle=bundle, quality_reviews=reviews)
 
         strict = self.limits.get("strict_evidence_review") is True
         if strict:
@@ -93,7 +107,7 @@ class BundleValidator:
                 text = passage_text.get(loc.passage_id) if loc.passage_id else None
                 loc.excerpt = text[: self.EXCERPT_CHARS] if text else None
 
-    def _enforce_limits(self, bundle: BundleExtraction, warnings: list[str]) -> None:
+    def _enforce_limits(self, bundle: BundleExtraction, warnings: list[str], *, truncate_brief=True) -> None:
         caps = {
             "facts": self.limits.get("max_facts", 10),
             "metrics": self.limits.get("max_metrics", 10),
@@ -112,6 +126,10 @@ class BundleValidator:
                 warnings.append(f"{attr} exceeded limit {cap}, truncated")
                 setattr(bundle, attr, items[:cap])
 
+        # Reviewed prose is assembled from whole claims: slicing can remove a
+        # qualification or negation and change the approved meaning.
+        if not truncate_brief:
+            return
         max_chars = self.limits.get("max_summary_chars", 500)
         for field_name in ("what_happened", "why_it_matters", "one_sentence"):
             val = getattr(bundle.brief, field_name)
@@ -212,4 +230,3 @@ class BundleValidator:
                 "project_participant_of", "product_of", "facility_of", "brand_of",
             ):
                 warnings.append(f"relation_type '{rel.relation_type}' not in enum")
-

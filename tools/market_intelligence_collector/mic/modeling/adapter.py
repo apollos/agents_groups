@@ -262,6 +262,8 @@ class ModelAdapter:
             parsed = self._mock_batch_triage(payload)
         else:
             parsed = self._mock_bundle(payload)
+            from mic.modeling.mock_review import attach_mock_review
+            parsed = attach_mock_review(parsed, payload.get("selected_passages", []))
         text = json.dumps(parsed, ensure_ascii=False)
         out_tokens = max(1, len(text) // 3)
         return ModelCallResult(

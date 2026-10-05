@@ -11,6 +11,7 @@ from typing import Any
 
 from mic.profile import TargetProfile
 from mic.schemas import Passage
+from mic.content_review_policy import RULE_TEXT, SCHEMA_HINT as REVIEW_SCHEMA_HINT
 
 SCHEMA_VERSION = "bundle_extraction_v0.3"
 
@@ -62,8 +63,10 @@ SYSTEM_PROMPT = """你是一名服务于股票/行业研究分析师的信息抽
 # Admission threshold stated in the rubric above. Must stay equal to
 # merge_policy.rules.save_structured.min_overall_score (guarded by tests).
 OVERALL_SCORE_ADMISSION_THRESHOLD = 70
+SYSTEM_PROMPT += "\n" + RULE_TEXT
 
 SCHEMA_HINT = {
+    "content_review": REVIEW_SCHEMA_HINT,
     "schema_version": SCHEMA_VERSION,
     "decision": "save_structured | link_only | skip",
     "overall_score": "0-100，按系统提示第 9 条标尺：结构化事实的材料价值，不是来源信誉分",
@@ -186,7 +189,7 @@ def build_bundle_messages(profile: TargetProfile, source_metadata: dict,
         "target_profile": _profile_block(profile),
         "source_metadata": source_metadata,
         "selected_passages": [p.model_dump() for p in passages],
-        "required_output": ["brief", "facts", "metrics", "events", "relations",
+        "required_output": ["content_review", "brief", "facts", "metrics", "events", "relations",
                             "risks", "catalysts", "customer_supplier_signals",
                             "price_cost_margin_signals", "policy_signals",
                             "analyst_questions", "coverage_gaps"],

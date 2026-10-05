@@ -60,6 +60,9 @@ def export_fresh(bundle, source):
     finalize(bundle, build_context(None, []), passages, run_id='offline-evidence-replay', link_id=bundle.source_link_id)
     pipeline._tally(stats, bundle, source_metadata=source)
     report = pipeline._summary('offline-evidence-replay', 'company_300750', {}, stats)
+    # This fixture represents a pre-content-review saved report. Current
+    # protocol admission/queue coverage lives in test_content_review.py.
+    report.pop('content_review_protocol', None)
     report['replay_context'] = {'mode':'offline_saved_bundle', 'new_model_calls':0}
     return report
 
@@ -75,7 +78,7 @@ def export_cached(bundle, source, root):
         with db.session() as session:
             session.add(models.SourceLink(id=previous,url=source['url']))
             session.add(models.SourceLink(id=target,url=source['url']))
-        repo.save_merged_analysis('company_300750',previous,bundle,{'merge_method':'single_model'},'offline-old-run')
+        repo.save_merged_analysis('company_300750',previous,bundle,{'merge_method':'single_model'},'offline-old-run', allow_legacy_write=True)
         cloned = repo.clone_latest_analysis(previous,target,'company_300750')
         hit = SearchHit(query='offline replay',url=source['url'],title=source.get('title') or '',domain=source.get('source_name') or '',
                         publish_time_guess=source.get('publish_time'),query_family=source.get('query_family'))

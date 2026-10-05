@@ -36,7 +36,25 @@ def _number(value: Decimal) -> int | float:
     return int(value) if value == value.to_integral_value() else float(value)
 
 
+def _components(fields):
+    """Parse currency+scale syntax; this does not infer currency from a number."""
+    values = dict(fields)
+    currency = str(values.get("currency") or "").strip().upper()
+    if currency not in _CURRENCIES:
+        for unit in sorted(_FACTORS, key=len, reverse=True):
+            if currency.endswith(unit) and currency[:-len(unit)].strip() in _CURRENCIES:
+                explicit = str(values.get("amount_unit") or "").strip()
+                if explicit and _UNIT_ALIASES.get(explicit, explicit) != unit:
+                    return None, "conflicting_currency_unit"
+                values.update(currency=currency[:-len(unit)].strip(), amount_unit=unit)
+                break
+    return values, None
+
+
 def _resolve(fields: dict[str, Any], text: str) -> tuple[dict[str, Any] | None, str]:
+    fields, error = _components(fields)
+    if error:
+        return None, error
     value = _decimal(fields.get("amount"))
     if value is None:
         return None, "invalid_amount"
@@ -72,6 +90,58 @@ def _resolve(fields: dict[str, Any], text: str) -> tuple[dict[str, Any] | None, 
     if len(matches) != 1:
         return None, "ambiguous_scale" if matches else "amount_not_supported_by_citation"
     return next(iter(matches.values())), "supported"
+
+
+def normalize_cny_fields(fields: dict, passages: dict[str, str], pid: str | None,
+                         specifications: list[dict]) -> tuple[dict | None, str]:
+    """Apply an evidence-backed model decomposition, or unambiguous numeric syntax.
+
+    Ownership belongs to the shared semantic claim. Neither this function nor
+    its success promotes an unsupported role, event, comparison or inference.
+    """
+    original, error = _components(fields)
+    if error:
+        return None, error
+    evidence, reason = _resolve(original, passages.get(pid, ""))
+    evidence_pid = pid
+    if specifications:
+        resolved = {}
+        for spec in specifications:
+            citation = spec.get("evidence") or {}
+            if not isinstance(citation, dict):
+                return None, "normalization_citation_unverified"
+            quote, spec_pid = citation.get("quote"), citation.get("passage_id")
+            if (not isinstance(quote, str) or not quote.strip() or not isinstance(spec_pid, str) or spec_pid == "title"
+                    or quote not in passages.get(spec_pid, "")):
+                return None, "normalization_citation_unverified"
+            proposal = {"amount": spec.get("value"), "currency": spec.get("currency"),
+                        "amount_unit": spec.get("unit")}
+            proof, status = _resolve(proposal, quote)
+            if proof is None:
+                return None, "normalization_" + status
+            # Formatting repair cannot silently replace the extracted number.
+            value = _decimal(original.get("amount"))
+            if value not in (proof["source_value"], proof["normalized"]):
+                return None, "normalization_value_conflict"
+            currency = str(original.get("currency") or "").strip().upper()
+            if currency and currency not in _CURRENCIES:
+                return None, "normalization_currency_conflict"
+            if evidence and evidence["normalized"] != proof["normalized"]:
+                return None, "normalization_scale_conflict"
+            explicit_unit = original.get("amount_unit")
+            if isinstance(explicit_unit, str) and explicit_unit in _FACTORS and value * _FACTORS[explicit_unit] != proof["normalized"]:
+                return None, "normalization_scale_conflict"
+            resolved[proof["normalized"]] = (proof, spec_pid)
+        if len(resolved) != 1:
+            return None, "normalization_scale_conflict"
+        evidence, evidence_pid = next(iter(resolved.values()))
+    if evidence is None:
+        return None, reason
+    return {**fields, "amount": _number(evidence["normalized"]), "currency": "CNY",
+            "amount_unit": "元", "amount_raw": _number(evidence["source_value"]),
+            "amount_raw_unit": evidence["source_unit"],
+            "amount_input": dict(fields),
+            "amount_evidence": {"passage_id": evidence_pid, "quote": evidence["quote"]}}, "supported"
 
 
 def cny_amount_supported(fields: dict[str, Any], text: str) -> bool:

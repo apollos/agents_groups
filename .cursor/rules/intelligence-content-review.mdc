@@ -1,0 +1,19 @@
+---
+description: Unified semantic evidence review for MIC and intelligence collector outputs
+globs: tools/market_intelligence_collector/**,agents/intelligence_collector_agent/**
+alwaysApply: false
+---
+
+# 统一内容审核规则
+
+规范唯一来源：`tools/market_intelligence_collector/mic/content_review_policy.py` 的
+`RULE_TEXT`、状态定义和字段约束。该规范同时进入模型提示词，不另写冲突版本。
+
+- 业务语义（身份、指代、同一事件、分析依据）由模型结合原文判断；不要继续添加关键词或公司/项目特例。
+- 同一判断在事实、指标、事件、摘要中的状态必须一致。共享 claim id 和依赖关系，统一由 `mic/content_review.py` 执行。
+- `source_supported` 只表示当前来源支持，不叫“已核实”。推断、待核查、无支持的内容保留在审核记录。
+- 币种/单位规范化和数值计算可以使用确定性代码；格式失败与证据不足必须分别报告。
+- 不通过降低评分、放宽日期、扩大预算或减少证据来让测试通过；默认模型输出上限保持 65536。
+- 合并、缓存、数据库、Agent 消息和导出不能丢失审核信息或重新放出被隔离的内容。
+- 更改规则时，同步修改唯一规范、执行器和回归测试。必须覆盖同一 claim 多处出现、依赖传播、角色不明、金额格式、合并/入库/导出。
+- 模型替身测试证明程序执行一致性，不证明真实模型理解正确；真实验收需查看来源与输出。

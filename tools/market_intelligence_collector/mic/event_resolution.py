@@ -19,6 +19,8 @@ def fingerprint(event: dict) -> str:
         "summary", "event_type", "event_date", "entities", "metrics", "evidence_locator",
         "source_context", "source_link_id",
     )}
+    if event.get("content_review"):
+        value["content_review"] = event["content_review"]
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True,
                                     default=str).encode()).hexdigest()
 

@@ -40,6 +40,11 @@ class Database:
             # model, response id); legacy rows stay NULL = unknown.
             "model_run": {"request_diagnostics": "JSON"},
         }
+        for table in ("merged_analysis", "analysis_brief", "fact_item", "metric_observation",
+                      "event_card", "relation_record", "risk_flag", "catalyst_item",
+                      "customer_supplier_signal", "price_cost_margin_signal",
+                      "policy_regulatory_signal", "analyst_question"):
+            additions.setdefault(table, {})["content_review"] = "JSON"
         with self.engine.begin() as con:
             inspector = inspect(con)
             tables = set(inspector.get_table_names())

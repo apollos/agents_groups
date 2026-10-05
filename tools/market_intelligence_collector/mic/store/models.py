@@ -193,7 +193,11 @@ class ModelOutput(Base):
     created_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
-class MergedAnalysis(Base):
+class ContentReviewColumns:
+    content_review: Mapped[dict | None] = mapped_column(JSON)
+
+
+class MergedAnalysis(ContentReviewColumns, Base):
     __tablename__ = "merged_analysis"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
@@ -209,7 +213,7 @@ class MergedAnalysis(Base):
     created_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
-class AnalysisBrief(Base):
+class AnalysisBrief(ContentReviewColumns, Base):
     __tablename__ = "analysis_brief"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
@@ -227,7 +231,7 @@ class AnalysisBrief(Base):
     created_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
-class FactItemRow(Base):
+class FactItemRow(ContentReviewColumns, Base):
     __tablename__ = "fact_item"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
@@ -245,7 +249,7 @@ class FactItemRow(Base):
     created_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
-class MetricObservationRow(Base):
+class MetricObservationRow(ContentReviewColumns, Base):
     __tablename__ = "metric_observation"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
@@ -265,7 +269,7 @@ class MetricObservationRow(Base):
     created_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
-class EventCardRow(Base):
+class EventCardRow(ContentReviewColumns, Base):
     __tablename__ = "event_card"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
@@ -289,7 +293,7 @@ class EventCardRow(Base):
     created_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
-class RelationRecordRow(Base):
+class RelationRecordRow(ContentReviewColumns, Base):
     __tablename__ = "relation_record"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
@@ -305,7 +309,7 @@ class RelationRecordRow(Base):
     created_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
-class RiskFlagRow(Base):
+class RiskFlagRow(ContentReviewColumns, Base):
     __tablename__ = "risk_flag"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
@@ -321,7 +325,7 @@ class RiskFlagRow(Base):
     created_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
-class CatalystItemRow(Base):
+class CatalystItemRow(ContentReviewColumns, Base):
     __tablename__ = "catalyst_item"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
@@ -336,7 +340,7 @@ class CatalystItemRow(Base):
     created_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
-class CustomerSupplierSignalRow(Base):
+class CustomerSupplierSignalRow(ContentReviewColumns, Base):
     __tablename__ = "customer_supplier_signal"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
@@ -352,7 +356,7 @@ class CustomerSupplierSignalRow(Base):
     created_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
-class PriceCostMarginSignalRow(Base):
+class PriceCostMarginSignalRow(ContentReviewColumns, Base):
     __tablename__ = "price_cost_margin_signal"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
@@ -369,7 +373,7 @@ class PriceCostMarginSignalRow(Base):
     created_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
-class PolicyRegulatorySignalRow(Base):
+class PolicyRegulatorySignalRow(ContentReviewColumns, Base):
     __tablename__ = "policy_regulatory_signal"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
@@ -387,7 +391,7 @@ class PolicyRegulatorySignalRow(Base):
     created_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
-class AnalystQuestionRow(Base):
+class AnalystQuestionRow(ContentReviewColumns, Base):
     __tablename__ = "analyst_question"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)

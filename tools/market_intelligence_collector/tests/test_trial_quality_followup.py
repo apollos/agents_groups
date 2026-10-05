@@ -16,7 +16,7 @@ TEXT = ("30MW/120MWh大容量+60MW/240MWh长寿命，"
 
 
 def validate(raw, text=TEXT):
-    return BundleValidator({"strict_evidence_review": True}).validate(
+    return BundleValidator({"strict_evidence_review": True}, require_content_review=False).validate(
         raw, [Passage(passage_id="p1", section="正文", text=text)])
 
 

@@ -635,14 +635,16 @@ def content_review(root, report):
                 attempt["body_scope_status"] = (d.get("body_scope") or {}).get("status")
                 attempt["body_scope_reason"] = (d.get("body_scope") or {}).get("reason")
             src["model_outputs"] = rows(db, "SELECT model_run_id,schema_valid,decision,overall_score,confidence,validation_errors FROM model_output WHERE source_link_id=? ORDER BY rowid", (lid,), ("validation_errors",))
-            src["merged"] = rows(db, "SELECT id,decision,overall_score,confidence,merge_method FROM merged_analysis WHERE source_link_id=? ORDER BY rowid", (lid,))
+            columns = {row[1] for row in db.execute("PRAGMA table_info(merged_analysis)")}
+            review_column = ",content_review" if "content_review" in columns else ""
+            src["merged"] = rows(db, "SELECT id,decision,overall_score,confidence,merge_method" + review_column + " FROM merged_analysis WHERE source_link_id=? ORDER BY rowid", (lid,), ("content_review",))
             src["admission"] = decisions.get(lid)
             retrieved = src["read_attempts"][-1] if src["read_attempts"] else {}
             for key in FORMAL:
                 for rec in rows(db, f"SELECT * FROM {TABLES[key]} WHERE source_link_id=? ORDER BY rowid", (lid,),
                                 ("entities", "metrics", "evidence_locator", "scope", "comparison", "impact_channels", "impact",
                                  "tracking_variables", "subject_entity", "object_entity", "evidence",
-                                 "event_resolution", "source_context")):
+                                 "event_resolution", "source_context", "content_review")):
                     formal.append({"record_type": key, "record_id": rec.get("id"), "merged_analysis_id": rec.get("merged_analysis_id"),
                                    "source_link_id": lid, "source": {"url": src["url"], "title": src["title"], "source_type": src["source_type"],
                                                                      "published_at": retrieved.get("extracted_publish_time"),
@@ -652,7 +654,9 @@ def content_review(root, report):
                 rejected.append({"source_link_id": lid, "url": src["url"], "title": src["title"], "admission": src["admission"],
                                  "model_outputs": src["model_outputs"], "merged": src["merged"]})
         gaps = rows(db, "SELECT * FROM coverage_gap WHERE search_run_id=? ORDER BY rowid", (rid,))
-        briefs = [r for s in sources for r in rows(db, "SELECT one_sentence,what_happened,why_it_matters,uncertainty,confidence FROM analysis_brief WHERE source_link_id=?", (s["id"],))]
+        brief_columns = {row[1] for row in db.execute("PRAGMA table_info(analysis_brief)")}
+        brief_review = ",content_review" if "content_review" in brief_columns else ""
+        briefs = [r for s in sources for r in rows(db, "SELECT one_sentence,what_happened,why_it_matters,uncertainty,confidence" + brief_review + " FROM analysis_brief WHERE source_link_id=?", (s["id"],), ("content_review",))]
     read_sources = [s for s in sources if s["read_attempts"]]
     executed = [q for q in queries if q["executed"]]
     verified_families = {q["query_family"] for q in executed if any(
