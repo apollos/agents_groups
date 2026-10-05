@@ -564,6 +564,8 @@ def audit(root, manifest, steps):
                   "events_created_by_this_run": len(events)}
         used = diag.get("budget_used", {})
         sent = used.get("gateway_requests_sent", 0)
+        from mic.content_review import contract_diagnostics
+        review_contract = contract_diagnostics(report.get("content_reviews", []))
         checks = {
             "one_task_planned": steps.get("plan", {}).get("result", {}).get("task_count") == 1,
             "one_collection_attempt": len(attempts) == 1 and len(runs) == 1,
@@ -580,6 +582,7 @@ def audit(root, manifest, steps):
             "run_time_within_deadline": isinstance(diag.get("elapsed_seconds"), (int, float)) and diag["elapsed_seconds"] <= CAPS["max_run_seconds"],
             "reported_budget_limits_match": all(diag.get("budget_limits", {}).get(k) == v for k, v in CAPS.items()),
             "agent_output_usable": quality.get("usable") is True,
+            "content_review_contract_complete": review_contract["complete"],
             "mic_database_counts_match_report": bool(mic and mic["run_status"] == "completed" and not mic["count_mismatches"]),
             "formal_records_passed_date_gate": bool(mic) and not mic["date_gate_violations"] and not mic["missing_publication_time"],
             "all_model_requests_real_and_64k": bool(mic and mic["model_checks"]["all_requests_real"]
@@ -593,11 +596,12 @@ def audit(root, manifest, steps):
             "no_collection_messages_left": bus.execute("SELECT COUNT(*) FROM messages WHERE topic='intelligence.collection' AND status IN ('open','in_progress')").fetchone()[0] == 0,
             "no_active_attempts_left": data.execute("SELECT COUNT(*) FROM collection_attempt WHERE state IN ('starting','running','cancelling')").fetchone()[0] == 0,
         }
-        engineering = [k for k in checks if k not in ("agent_output_usable", "agent_event_ledger_consistent", "all_model_requests_real_and_64k")]
+        engineering = [k for k in checks if k not in ("agent_output_usable", "agent_event_ledger_consistent", "all_model_requests_real_and_64k", "content_review_contract_complete")]
         execution_verified = all(checks[k] for k in engineering) and checks["all_model_requests_real_and_64k"] is not False \
             and checks["agent_event_ledger_consistent"] is not False
         return {"execution_verified": execution_verified, "usable": quality.get("usable") is True,
-                "business_positive_candidate": execution_verified and quality.get("usable") is True and bool(mic and mic["formal_total"]) and not pending,
+                "business_positive_candidate": execution_verified and quality.get("usable") is True and bool(mic and mic["formal_total"]) and not pending and review_contract["complete"],
+                "content_review_contract": review_contract,
                 "semantic_event_review_required": bool(report.get("event_resolution_protocol")),
                 "pending_event_resolutions": pending,
                 "real_model_used": isinstance(sent, int) and sent > 0,

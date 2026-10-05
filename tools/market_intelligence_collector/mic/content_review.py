@@ -12,12 +12,16 @@ import hashlib
 import json
 
 from mic.content_review_policy import (CORE_FIELDS, GROUPS, METADATA_FIELDS,
-                                       NARRATIVE_FIELDS, PROTOCOL, STATES)
-from mic.money import normalize_cny_fields
+                                       NARRATIVE_FIELDS, PROTOCOL, STATES, field_kinds)
+from mic.money import normalize_cny_fields, normalize_quoted_price
 
 
 def _present(value):
-    return value is not None and value != "" and value != [] and value != {}
+    if isinstance(value, dict):
+        return any(_present(v) for v in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_present(v) for v in value)
+    return value is not None and value != ""
 
 
 def _quote_supported(evidence, passages):
@@ -85,6 +89,7 @@ class ContentReview:
                 or not isinstance(claim.get("kind"), str)
                 or claim["kind"] not in {"observation", "identity", "analysis", "comparability", "limitation"}
                 or not isinstance(claim.get("statement"), str) or not claim["statement"].strip()
+                or ("field_values" in claim and not isinstance(claim["field_values"], dict))
                 or not isinstance(dependencies, list) or any(not isinstance(d, str) for d in dependencies)):
             state, reason = "pending_review", "invalid_claim"
             dependencies = []
@@ -107,7 +112,34 @@ class ContentReview:
                           "claim_ids": list(ids), "original": deepcopy(value)})
         self.warnings.append(f"content review: {path}; {reason}; {status}")
 
-    def field(self, path, value, default, *, inherited=None, narrative=False):
+    def reviewed_value(self, ids, field):
+        """Materialize the model's explicit typed judgment, not a borrowed ID.
+
+        JSON member names are protocol structure, never entity matching rules.
+        All approved values of the same field must agree; no last-writer wins.
+        """
+        values = []
+        for cid in ids:
+            current = self.claims[cid].get("field_values", {})
+            for part in field.split("/"):
+                if not isinstance(current, dict) or part not in current:
+                    break
+                current = current[part]
+            else:
+                values.append(current)
+        if not values:
+            return False, None
+        if all(isinstance(v, dict) for v in values):
+            combined = {}
+            for v in values:
+                for key, item in v.items():
+                    if key in combined and combined[key] != item:
+                        return False, None
+                    combined[key] = item
+            return True, deepcopy(combined)
+        return (True, deepcopy(values[0])) if all(v == values[0] for v in values) else (False, None)
+
+    def field(self, path, value, default, *, inherited=None, narrative=False, group="", field=""):
         ids = self.ids(path, inherited)
         # Explicit child bindings override a shared parent binding. This lets an
         # unknown owner be held without erasing the known event subject.
@@ -116,11 +148,13 @@ class ContentReview:
             for key, child in value.items():
                 child_default = default.get(key) if isinstance(default, dict) else None
                 result[key] = self.field(path + "/" + key, child, child_default,
-                                         inherited=ids, narrative=False)
+                                         inherited=ids, narrative=False, group=group, field=field + "/" + key)
             return result
-        if not _present(value) or (value == default and not ids):
+        if not _present(value) or value == default:
             return deepcopy(value)
-        accepted = [cid for cid in ids if cid in self.claims and self.state(cid) == "source_supported"]
+        kinds = field_kinds(group, field.split("/")[0])
+        accepted = [cid for cid in ids if cid in self.claims and self.state(cid) == "source_supported"
+                    and self.claims[cid].get("kind") in kinds]
         held = [cid for cid in ids if cid not in accepted]
         self.fields[path] = {"claim_ids": ids,
                              "states": {cid: self.state(cid) for cid in ids},
@@ -128,8 +162,24 @@ class ContentReview:
         if ids and not held:
             if narrative:
                 return "；".join(dict.fromkeys(self.claims[cid]["statement"] for cid in accepted))
+            if kinds != {"observation"}:
+                valid, reviewed = self.reviewed_value(accepted, field)
+                if not valid:
+                    self.fields[path]["status"] = "pending_review"
+                    self.hold(path, value, "reviewed_value_missing_or_conflicting", ids)
+                    return deepcopy(default)
+                if reviewed != value:
+                    self.hold(path, value, "replaced_by_explicit_reviewed_value", ids)
+                return reviewed
             return deepcopy(value)
-        self.hold(path, value, "claim_not_supported" if ids else "missing_field_review", ids)
+        wrong_kind = any(not isinstance(self.claims[cid].get("kind"), str)
+                         or self.claims[cid]["kind"] not in kinds for cid in ids if cid in self.claims)
+        reason = "claim_kind_mismatch" if wrong_kind else "claim_not_supported" if ids else "missing_record_review"
+        if any(cid not in self.claims for cid in ids):
+            reason = "unknown_claim_id"
+        elif any(self.reasons.get(cid) == "invalid_claim" for cid in ids):
+            reason = "invalid_claim"
+        self.hold(path, value, reason, ids)
         if narrative and accepted:
             self.fields[path]["status"] = "partially_held"
             return "；".join(dict.fromkeys(self.claims[cid]["statement"] for cid in accepted))
@@ -140,11 +190,14 @@ class ContentReview:
         before = obj.model_dump(mode="json")
         out = deepcopy(before)
         start = len(self.held)
+        group = path.split("/")[1]
+        record_ids = self.ids(path)
         for name, value in before.items():
             if name in METADATA_FIELDS or name.endswith("_id"):
                 continue
             out[name] = self.field(path + "/" + name, value, default[name],
-                                   narrative=name in NARRATIVE_FIELDS)
+                                   inherited=record_ids, narrative=name in NARRATIVE_FIELDS,
+                                   group=group, field=name)
         # A model-supplied 'official_confirmed' is not independent verification.
         if "source_corroboration_status" in out:
             out["source_corroboration_status"] = "single_source"
@@ -153,14 +206,16 @@ class ContentReview:
             if not isinstance(values, dict) or values.get("amount") is None:
                 continue
             money_path = path + "/" + name
-            ids = self.ids(money_path + "/amount", self.ids(money_path))
+            ids = self.ids(money_path + "/amount", self.ids(money_path, record_ids))
             specifications = [self.claims[cid]["amount"] for cid in ids
                               if cid in self.claims and isinstance(self.claims[cid].get("amount"), dict)
                               and self.state(cid) == "source_supported"]
             # The semantic model identifies the currency/unit and ownership;
             # deterministic code verifies source numbers and performs conversion.
-            updated, reason = normalize_cny_fields(values, self.passages,
-                before.get("evidence_locator", {}).get("passage_id"), specifications)
+            pid = before.get("evidence_locator", {}).get("passage_id")
+            updated, reason = normalize_quoted_price(values, self.passages, pid, specifications)
+            if reason == "not_unit_price":
+                updated, reason = normalize_cny_fields(values, self.passages, pid, specifications)
             if updated is not None:
                 out[name] = updated
             else:
@@ -178,8 +233,14 @@ class ContentReview:
         audit["claims"] = {cid: {**self.claims[cid], "effective_status": self.state(cid),
                                  "effective_reason": self.reasons[cid]} for cid in ids if cid in self.claims}
         comparability = [cid for cid in ids if self.claims.get(cid, {}).get("kind") == "comparability"]
-        if "scope" in out and comparability:
-            allowed = all(self.state(cid) == "source_supported" for cid in comparability)
+        if "scope" in out:
+            # A reported price is not automatically a benchmark, even when
+            # the model places an approval flag inside factual scope metadata.
+            proposals = [(self.claims[cid].get("field_values") or {}).get("scope", {})
+                         if isinstance(self.claims[cid].get("field_values", {}), dict) else {}
+                         for cid in comparability]
+            allowed = bool(comparability) and all(self.state(cid) == "source_supported" for cid in comparability)
+            allowed = allowed and bool(proposals) and all(isinstance(p, dict) and p.get("usable_as_price_benchmark") is True for p in proposals)
             out["scope"]["usable_as_price_benchmark"] = allowed
             out["scope"]["source_price_basis_status"] = "source_supported" if allowed else "pending_review"
         out["content_review"] = audit
@@ -206,6 +267,9 @@ class ContentReview:
             "claims": {cid: {"status": self.state(cid), "reason": self.reasons[cid]}
                        for cid in self.claims}, "held": self.held,
             "counts": dict(Counter(item["status"] for item in self.held)),
+            "protocol_errors": [item for item in self.held if item["reason"] in {
+                "missing_record_review", "claim_kind_mismatch", "reviewed_value_missing_or_conflicting",
+                "unknown_claim_id", "invalid_claim"}],
         }
         return self.held
 
@@ -243,3 +307,23 @@ def reviewed_event(event):
     return (obj.content_review.get("protocol") == PROTOCOL
             and obj.content_review.get("materialized_digest") == _digest(obj)
             and bool(obj.summary))
+
+
+def contract_diagnostics(reviews):
+    """Report protocol/format failures separately from legitimate uncertainty."""
+    leaves = []
+    def visit(review):
+        if isinstance(review, dict) and review.get("contributions"):
+            for child in review["contributions"]:
+                visit(child)
+        else:
+            leaves.append(review if isinstance(review, dict) else {})
+    for review in reviews:
+        visit(review)
+    reasons = Counter(h.get("reason") for r in leaves for h in r.get("protocol_errors", []))
+    outdated = sum(r.get("protocol") != PROTOCOL or r.get("status") != "applied" for r in leaves)
+    formatting = sum(h.get("status") == "format_pending" for r in leaves for h in r.get("held", []))
+    return {"protocol": PROTOCOL, "reviewed_sources": len(leaves),
+            "protocol_errors": sum(reasons.values()), "protocol_error_reasons": dict(reasons),
+            "outdated_or_missing_reviews": outdated, "format_pending": formatting,
+            "complete": bool(leaves) and not reasons and not outdated and not formatting}

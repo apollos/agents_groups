@@ -1,0 +1,1606 @@
+{
+  "provenance": "Saved real run run_a81652e65aca; event decisions and claim mappings are original. metric_candidates are exact originals preserved in held records. Corrected contract responses in tests are human-labelled, NOT fresh model output.",
+  "samples": [
+    {
+      "source_link_id": "link_1bf2aa8d67b3",
+      "passages": [
+        {
+          "passage_id": "title",
+          "text": "远景能源、宁德时代中标！河北100MW/400MWh储能系统采购中标公示"
+        },
+        {
+          "passage_id": "p0",
+          "text": "2026年9月15日，河北任丘智弘100MW/400MWh新型技术路线磷酸铁锂电池+钠电池独立储能试点项目储能系统设备采购中标结果公示。"
+        },
+        {
+          "passage_id": "p1",
+          "text": "项目共两个标段，一标段为磷酸铁锂电池储能系统，30MW/120MWh大容量磷酸铁锂+60MW/240MWh长寿命磷酸铁锂，远景能源中标价为19461.6万元，合单价0.518元/Wh；"
+        },
+        {
+          "passage_id": "p2",
+          "text": "二标段为钠电池储能系统，10MW/40MWh钠离子储能系统，宁德时代中标价为4141.622万元，合单价1.035元/Wh。"
+        },
+        {
+          "passage_id": "t1",
+          "text": "远景能源、宁德时代中标！河北100MW/400MWh储能系统采购中标公示\n作者: | 发布日期: 2026 年 09 月 15 日 14:41 | 分类: 产业资讯 Edit"
+        }
+      ],
+      "events": [
+        {
+          "confidence": 0.8,
+          "entities": {
+            "counterparty": "远景能源、宁德时代",
+            "product": "储能系统",
+            "regulator": null,
+            "subject": "河北任丘智弘项目（招标方）"
+          },
+          "event_date": null,
+          "event_id": null,
+          "event_resolution": {
+            "candidate_refs": [],
+            "event_fingerprint": "36c97610bdd0389b91d9e58b4d05293e3e08d5ae85669f6fcf91b5d75e7affaf",
+            "model_decision": {
+              "comparisons": [],
+              "current_evidence": [
+                {
+                  "passage_id": "p0",
+                  "quote": "河北任丘智弘100MW/400MWh新型技术路线磷酸铁锂电池+钠电池独立储能试点项目储能系统设备采购中标结果公示"
+                }
+              ],
+              "reason": "输入候选事件为空（candidate_count=0，complete=true），本次抽取结果无对应历史候选，故判定为新事件。",
+              "reviewed": true,
+              "verdict": "new"
+            },
+            "protocol": "semantic_event_v1",
+            "reason": "输入候选事件为空（candidate_count=0，complete=true），本次抽取结果无对应历史候选，故判定为新事件。",
+            "ref": "mic:run_a81652e65aca:link_1bf2aa8d67b3:0",
+            "relation": "new",
+            "status": "resolved"
+          },
+          "event_type": "unknown",
+          "evidence_locator": {
+            "excerpt": "2026年9月15日，河北任丘智弘100MW/400MWh新型技术路线磷酸铁锂电池+钠电池独立储能试点项目储能系统设备采购中标结果公示。",
+            "passage_id": "p0",
+            "section": null,
+            "table_id": null
+          },
+          "impact": {
+            "channels": [],
+            "direction": "unclear",
+            "horizon": "unclear",
+            "magnitude_guess": "unknown"
+          },
+          "impact_channels": [],
+          "metrics": {
+            "amount": null,
+            "capacity": "100MW/400MWh",
+            "currency": null,
+            "volume": null
+          },
+          "source": {
+            "domain": "energytrend.cn",
+            "published_at": "2026-09-15T14:41:00+08:00",
+            "query_family": "orders_tender",
+            "source_type": "media",
+            "title": "远景能源、宁德时代中标！河北100MW/400MWh储能系统采购中标公示",
+            "url": "https://www.energytrend.cn/news/20260915-148614.html"
+          },
+          "source_corroboration_status": "single_source",
+          "source_link_id": "link_1bf2aa8d67b3",
+          "summary": "河北任丘智弘100MW/400MWh新型技术路线磷酸铁锂电池+钠电池独立储能试点项目的储能系统设备采购中标结果已于2026年9月15日公示。",
+          "tracking_variables": []
+        },
+        {
+          "confidence": 0.85,
+          "entities": {},
+          "event_date": null,
+          "event_id": null,
+          "event_resolution": {
+            "candidate_refs": [],
+            "event_fingerprint": "0e6ae053d8916962030bb6dcf5593ec351a0a70cd64796411159f639483ce684",
+            "model_decision": {
+              "comparisons": [],
+              "current_evidence": [
+                {
+                  "passage_id": "p2",
+                  "quote": "宁德时代中标价为4141.622万元，合单价1.035元/Wh"
+                }
+              ],
+              "reason": "候选为空，宁德时代二标段钠离子储能系统中标为本次来源新披露的独立事项。",
+              "reviewed": true,
+              "verdict": "new"
+            },
+            "protocol": "semantic_event_v1",
+            "reason": "候选为空，宁德时代二标段钠离子储能系统中标为本次来源新披露的独立事项。",
+            "ref": "mic:run_a81652e65aca:link_1bf2aa8d67b3:1",
+            "relation": "new",
+            "status": "resolved"
+          },
+          "event_type": "unknown",
+          "evidence_locator": {
+            "excerpt": "二标段为钠电池储能系统，10MW/40MWh钠离子储能系统，宁德时代中标价为4141.622万元，合单价1.035元/Wh。",
+            "passage_id": "p2",
+            "section": null,
+            "table_id": null
+          },
+          "impact": {
+            "channels": [
+              "revenue",
+              "demand"
+            ],
+            "direction": "positive",
+            "horizon": "1m",
+            "magnitude_guess": "low"
+          },
+          "impact_channels": [
+            "revenue",
+            "demand"
+          ],
+          "metrics": {
+            "amount": 41416220,
+            "amount_evidence": {
+              "passage_id": "p2",
+              "quote": "4141.622万元"
+            },
+            "amount_input": {
+              "amount": 4141.622,
+              "capacity": "10MW/40MWh",
+              "currency": "CNY",
+              "volume": null
+            },
+            "amount_raw": 4141.622,
+            "amount_raw_unit": "万元",
+            "amount_unit": "元",
+            "capacity": "10MW/40MWh",
+            "currency": "CNY",
+            "volume": null
+          },
+          "source": {
+            "domain": "energytrend.cn",
+            "published_at": "2026-09-15T14:41:00+08:00",
+            "query_family": "orders_tender",
+            "source_type": "media",
+            "title": "远景能源、宁德时代中标！河北100MW/400MWh储能系统采购中标公示",
+            "url": "https://www.energytrend.cn/news/20260915-148614.html"
+          },
+          "source_corroboration_status": "single_source",
+          "source_link_id": "link_1bf2aa8d67b3",
+          "summary": "宁德时代中标该项目二标段10MW/40MWh钠离子储能系统，中标价4141.622万元，合单价1.035元/Wh。",
+          "tracking_variables": []
+        },
+        {
+          "confidence": 0.8,
+          "entities": {},
+          "event_date": null,
+          "event_id": null,
+          "event_resolution": {
+            "candidate_refs": [],
+            "event_fingerprint": "37bd45d6bf76da4ffbedbdcbac4b13cb2892f66f8613072409064976c76cbe9d",
+            "model_decision": {
+              "comparisons": [],
+              "current_evidence": [
+                {
+                  "passage_id": "p1",
+                  "quote": "远景能源中标价为19461.6万元，合单价0.518元/Wh"
+                }
+              ],
+              "reason": "候选为空，远景能源一标段磷酸铁锂储能系统中标为本次来源新披露的独立标段事项。",
+              "reviewed": true,
+              "verdict": "new"
+            },
+            "protocol": "semantic_event_v1",
+            "reason": "候选为空，远景能源一标段磷酸铁锂储能系统中标为本次来源新披露的独立标段事项。",
+            "ref": "mic:run_a81652e65aca:link_1bf2aa8d67b3:2",
+            "relation": "new",
+            "status": "resolved"
+          },
+          "event_type": "unknown",
+          "evidence_locator": {
+            "excerpt": "项目共两个标段，一标段为磷酸铁锂电池储能系统，30MW/120MWh大容量磷酸铁锂+60MW/240MWh长寿命磷酸铁锂，远景能源中标价为19461.6万元，合单价0.518元/Wh；",
+            "passage_id": "p1",
+            "section": null,
+            "table_id": null
+          },
+          "impact": {
+            "channels": [],
+            "direction": "unclear",
+            "horizon": "unclear",
+            "magnitude_guess": "unknown"
+          },
+          "impact_channels": [],
+          "metrics": {
+            "amount": 194616000,
+            "amount_evidence": {
+              "passage_id": "p1",
+              "quote": "19461.6万元"
+            },
+            "amount_input": {
+              "amount": 19461.6,
+              "capacity": "90MW/360MWh",
+              "currency": "CNY",
+              "volume": null
+            },
+            "amount_raw": 19461.6,
+            "amount_raw_unit": "万元",
+            "amount_unit": "元",
+            "capacity": "90MW/360MWh",
+            "currency": "CNY",
+            "volume": null
+          },
+          "source": {
+            "domain": "energytrend.cn",
+            "published_at": "2026-09-15T14:41:00+08:00",
+            "query_family": "orders_tender",
+            "source_type": "media",
+            "title": "远景能源、宁德时代中标！河北100MW/400MWh储能系统采购中标公示",
+            "url": "https://www.energytrend.cn/news/20260915-148614.html"
+          },
+          "source_corroboration_status": "single_source",
+          "source_link_id": "link_1bf2aa8d67b3",
+          "summary": "远景能源中标该项目一标段磷酸铁锂储能系统（30MW/120MWh大容量+60MW/240MWh长寿命），中标价19461.6万元，合单价0.518元/Wh。",
+          "tracking_variables": []
+        }
+      ],
+      "model_review": {
+        "bindings": {
+          "/brief/affected_business_lines": [
+            "award_catl"
+          ],
+          "/brief/impact_channels": [
+            "award_catl"
+          ],
+          "/brief/one_sentence": [
+            "award_catl"
+          ],
+          "/brief/time_horizon": [
+            "award_catl"
+          ],
+          "/brief/uncertainty": [
+            "price_scope_limitation",
+            "owner_identity"
+          ],
+          "/brief/what_happened": [
+            "project_result",
+            "award_catl",
+            "award_yuanjing"
+          ],
+          "/brief/why_it_matters": [
+            "price_gap",
+            "price_scope_limitation"
+          ],
+          "/catalysts/0/description": [
+            "project_result",
+            "award_catl"
+          ],
+          "/customer_supplier_signals/0/business_meaning": [
+            "award_catl"
+          ],
+          "/events/0/entities": [
+            "project_result"
+          ],
+          "/events/0/metrics": [
+            "project_result"
+          ],
+          "/events/0/summary": [
+            "project_result"
+          ],
+          "/events/1/entities": [
+            "award_catl",
+            "owner_identity"
+          ],
+          "/events/1/impact": [
+            "award_catl"
+          ],
+          "/events/1/metrics": [
+            "award_catl"
+          ],
+          "/events/1/summary": [
+            "award_catl"
+          ],
+          "/events/2/entities": [
+            "award_yuanjing",
+            "owner_identity"
+          ],
+          "/events/2/metrics": [
+            "award_yuanjing"
+          ],
+          "/events/2/summary": [
+            "award_yuanjing"
+          ],
+          "/facts/0/direction": [
+            "award_catl"
+          ],
+          "/facts/0/entities": [
+            "award_catl",
+            "owner_identity"
+          ],
+          "/facts/0/fact_statement": [
+            "award_catl"
+          ],
+          "/facts/0/metrics": [
+            "award_catl"
+          ],
+          "/facts/1/direction": [
+            "award_yuanjing"
+          ],
+          "/facts/1/entities": [
+            "award_yuanjing",
+            "owner_identity"
+          ],
+          "/facts/1/fact_statement": [
+            "award_yuanjing"
+          ],
+          "/facts/1/metrics": [
+            "award_yuanjing"
+          ],
+          "/facts/2/entities": [
+            "project_result"
+          ],
+          "/facts/2/fact_statement": [
+            "project_result"
+          ],
+          "/facts/2/metrics": [
+            "project_result"
+          ],
+          "/facts/3/fact_statement": [
+            "price_catl"
+          ],
+          "/facts/3/metrics": [
+            "price_catl"
+          ],
+          "/facts/4/fact_statement": [
+            "price_yuanjing"
+          ],
+          "/facts/4/metrics": [
+            "price_yuanjing"
+          ],
+          "/metrics/0/interpretation": [
+            "award_catl"
+          ],
+          "/metrics/0/metric_value": [
+            "award_catl"
+          ],
+          "/metrics/1/interpretation": [
+            "price_catl"
+          ],
+          "/metrics/1/metric_value": [
+            "price_catl"
+          ],
+          "/metrics/2/metric_value": [
+            "award_yuanjing"
+          ],
+          "/metrics/3/metric_value": [
+            "price_yuanjing"
+          ],
+          "/metrics/4/metric_value": [
+            "project_result"
+          ],
+          "/metrics/5/metric_value": [
+            "award_catl"
+          ],
+          "/price_cost_margin_signals/0/direction": [
+            "price_scope_limitation"
+          ],
+          "/price_cost_margin_signals/0/value": [
+            "price_gap"
+          ],
+          "/relations/0/object_entity": [
+            "owner_identity"
+          ],
+          "/relations/0/qualifiers": [
+            "award_catl"
+          ],
+          "/relations/0/subject_entity": [
+            "award_catl"
+          ],
+          "/relations/1/object_entity": [
+            "owner_identity"
+          ],
+          "/relations/1/qualifiers": [
+            "award_yuanjing"
+          ],
+          "/relations/1/subject_entity": [
+            "award_yuanjing"
+          ],
+          "/risks/0/risk_summary": [
+            "price_gap",
+            "price_scope_limitation"
+          ]
+        },
+        "claims": [
+          {
+            "amount": null,
+            "depends_on": [],
+            "evidence": [
+              {
+                "passage_id": "p0",
+                "quote": "河北任丘智弘100MW/400MWh新型技术路线磷酸铁锂电池+钠电池独立储能试点项目储能系统设备采购中标结果公示"
+              }
+            ],
+            "id": "project_result",
+            "kind": "observation",
+            "reason": "p0直接给出项目名称、规模、技术路线、采购内容与公示日期，属公示性事实。",
+            "statement": "河北任丘智弘100MW/400MWh新型技术路线磷酸铁锂电池+钠电池独立储能试点项目的储能系统设备采购中标结果已于2026年9月15日公示。",
+            "status": "source_supported"
+          },
+          {
+            "amount": {
+              "currency": "CNY",
+              "evidence": {
+                "passage_id": "p2",
+                "quote": "4141.622万元"
+              },
+              "unit": "万元",
+              "value": 4141.622
+            },
+            "depends_on": [],
+            "evidence": [
+              {
+                "passage_id": "p2",
+                "quote": "宁德时代中标价为4141.622万元，合单价1.035元/Wh"
+              }
+            ],
+            "id": "award_catl",
+            "kind": "observation",
+            "reason": "p2明确将二标段、规模、中标人、金额与单价归于宁德时代，要素完整。",
+            "statement": "宁德时代中标该项目二标段10MW/40MWh钠离子储能系统，中标价4141.622万元，合单价1.035元/Wh。",
+            "status": "source_supported"
+          },
+          {
+            "amount": {
+              "currency": "CNY",
+              "evidence": {
+                "passage_id": "p1",
+                "quote": "19461.6万元"
+              },
+              "unit": "万元",
+              "value": 19461.6
+            },
+            "depends_on": [],
+            "evidence": [
+              {
+                "passage_id": "p1",
+                "quote": "远景能源中标价为19461.6万元，合单价0.518元/Wh"
+              }
+            ],
+            "id": "award_yuanjing",
+            "kind": "observation",
+            "reason": "p1明确归属于远景能源，含标段构成、金额与单价。",
+            "statement": "远景能源中标该项目一标段磷酸铁锂储能系统（30MW/120MWh大容量+60MW/240MWh长寿命），中标价19461.6万元，合单价0.518元/Wh。",
+            "status": "source_supported"
+          },
+          {
+            "amount": {
+              "currency": "CNY",
+              "evidence": {
+                "passage_id": "p2",
+                "quote": "1.035元/Wh"
+              },
+              "unit": "元/Wh",
+              "value": 1.035
+            },
+            "depends_on": [],
+            "evidence": [
+              {
+                "passage_id": "p2",
+                "quote": "合单价1.035元/Wh"
+              }
+            ],
+            "id": "price_catl",
+            "kind": "observation",
+            "reason": "p2给出该单价数值，仅记录来源报道的报价，不代表成本或利润得到确认。",
+            "statement": "来源报道二标段钠离子储能系统中标单价为1.035元/Wh（原文报价记录）。",
+            "status": "source_supported"
+          },
+          {
+            "amount": {
+              "currency": "CNY",
+              "evidence": {
+                "passage_id": "p1",
+                "quote": "0.518元/Wh"
+              },
+              "unit": "元/Wh",
+              "value": 0.518
+            },
+            "depends_on": [],
+            "evidence": [
+              {
+                "passage_id": "p1",
+                "quote": "合单价0.518元/Wh"
+              }
+            ],
+            "id": "price_yuanjing",
+            "kind": "observation",
+            "reason": "p1给出该单价数值，属来源报道的报价记录。",
+            "statement": "来源报道一标段磷酸铁锂储能系统中标单价为0.518元/Wh（原文报价记录）。",
+            "status": "source_supported"
+          },
+          {
+            "amount": null,
+            "depends_on": [
+              "price_catl",
+              "price_yuanjing"
+            ],
+            "evidence": [
+              {
+                "passage_id": "p1",
+                "quote": "合单价0.518元/Wh"
+              },
+              {
+                "passage_id": "p2",
+                "quote": "合单价1.035元/Wh"
+              }
+            ],
+            "id": "price_gap",
+            "kind": "comparability",
+            "reason": "基于同项目两个标段报价的算术比较，但两者技术路线与供货范围不同，不能据此推断成本或利润水平。",
+            "statement": "二标段钠离子储能系统中标单价1.035元/Wh约为同项目一标段磷酸铁锂0.518元/Wh的两倍，价差约0.517元/Wh。",
+            "status": "inference"
+          },
+          {
+            "amount": null,
+            "depends_on": [
+              "price_gap"
+            ],
+            "evidence": [
+              {
+                "passage_id": "p1",
+                "quote": "一标段为磷酸铁锂电池储能系统"
+              },
+              {
+                "passage_id": "p2",
+                "quote": "二标段为钠电池储能系统"
+              }
+            ],
+            "id": "price_scope_limitation",
+            "kind": "limitation",
+            "reason": "原文只披露标段构成与单价，未给出可比的供货范围与口径，比较结论存在口径障碍。",
+            "statement": "两个标段的储能技术路线（磷酸铁锂/钠离子）与供货范围不同，其单价不宜直接类比为成本、利润或竞争力的差异。",
+            "status": "inference"
+          },
+          {
+            "amount": null,
+            "depends_on": [],
+            "evidence": [
+              {
+                "passage_id": "p0",
+                "quote": "河北任丘智弘100MW/400MWh新型技术路线磷酸铁锂电池+钠电池独立储能试点项目"
+              }
+            ],
+            "id": "owner_identity",
+            "kind": "identity",
+            "reason": "'智弘'仅出现于项目全称，缺少独立的主体表述，身份归属无法确认。",
+            "statement": "项目业主/招标方的具体法律主体应是与'任丘智弘'相关的公司，原文未给出完整工商名称。",
+            "status": "pending_review"
+          }
+        ],
+        "protocol": "content_review_v1"
+      },
+      "metric_candidates": [
+        {
+          "comparison": {
+            "mom": null,
+            "wow": null,
+            "yoy": null
+          },
+          "confidence": 0.85,
+          "content_review": {},
+          "evidence_locator": {
+            "excerpt": null,
+            "passage_id": "p2",
+            "section": null,
+            "table_id": null
+          },
+          "impact_channels": [
+            "revenue"
+          ],
+          "interpretation": "宁德时代在钠离子储能系统标段的中标金额。",
+          "metric_id": null,
+          "metric_name": "宁德时代中标金额",
+          "metric_value": 4141.622,
+          "period": "2026-09-15",
+          "scope": {
+            "product": "钠离子储能系统",
+            "region": "河北任丘",
+            "segment": "二标段"
+          },
+          "unit": "万元"
+        },
+        {
+          "comparison": {
+            "mom": null,
+            "wow": null,
+            "yoy": null
+          },
+          "confidence": 0.8,
+          "content_review": {},
+          "evidence_locator": {
+            "excerpt": null,
+            "passage_id": "p2",
+            "section": null,
+            "table_id": null
+          },
+          "impact_channels": [
+            "revenue"
+          ],
+          "interpretation": "来源报道的二标段钠电系统中标单价。",
+          "metric_id": null,
+          "metric_name": "钠离子储能系统中标单价",
+          "metric_value": 1.035,
+          "period": "2026-09-15",
+          "scope": {
+            "product": "钠离子储能系统",
+            "region": "河北任丘",
+            "segment": "二标段"
+          },
+          "unit": "元/Wh"
+        },
+        {
+          "comparison": {
+            "mom": null,
+            "wow": null,
+            "yoy": null
+          },
+          "confidence": 0.85,
+          "content_review": {},
+          "evidence_locator": {
+            "excerpt": null,
+            "passage_id": "p1",
+            "section": null,
+            "table_id": null
+          },
+          "impact_channels": [
+            "revenue"
+          ],
+          "interpretation": "一标段磷酸铁锂储能系统中标金额。",
+          "metric_id": null,
+          "metric_name": "远景能源中标金额",
+          "metric_value": 19461.6,
+          "period": "2026-09-15",
+          "scope": {
+            "product": "磷酸铁锂储能系统",
+            "region": "河北任丘",
+            "segment": "一标段"
+          },
+          "unit": "万元"
+        },
+        {
+          "comparison": {
+            "mom": null,
+            "wow": null,
+            "yoy": null
+          },
+          "confidence": 0.8,
+          "content_review": {},
+          "evidence_locator": {
+            "excerpt": null,
+            "passage_id": "p1",
+            "section": null,
+            "table_id": null
+          },
+          "impact_channels": [
+            "revenue"
+          ],
+          "interpretation": "来源报道的一标段磷酸铁锂系统中标单价。",
+          "metric_id": null,
+          "metric_name": "磷酸铁锂储能系统中标单价",
+          "metric_value": 0.518,
+          "period": "2026-09-15",
+          "scope": {
+            "product": "磷酸铁锂储能系统",
+            "region": "河北任丘",
+            "segment": "一标段"
+          },
+          "unit": "元/Wh"
+        },
+        {
+          "comparison": {
+            "mom": null,
+            "wow": null,
+            "yoy": null
+          },
+          "confidence": 0.8,
+          "content_review": {},
+          "evidence_locator": {
+            "excerpt": null,
+            "passage_id": "p0",
+            "section": null,
+            "table_id": null
+          },
+          "impact_channels": [
+            "demand"
+          ],
+          "interpretation": "项目总装机100MW/400MWh。",
+          "metric_id": null,
+          "metric_name": "项目总规模",
+          "metric_value": 100.0,
+          "period": "2026-09-15",
+          "scope": {
+            "product": "磷酸铁锂+钠电池储能系统",
+            "region": "河北任丘",
+            "segment": "全项目（100MW/400MWh）"
+          },
+          "unit": "MW"
+        },
+        {
+          "comparison": {
+            "mom": null,
+            "wow": null,
+            "yoy": null
+          },
+          "confidence": 0.8,
+          "content_review": {},
+          "evidence_locator": {
+            "excerpt": null,
+            "passage_id": "p2",
+            "section": null,
+            "table_id": null
+          },
+          "impact_channels": [
+            "revenue"
+          ],
+          "interpretation": "宁德时代中标标段的装机规模10MW/40MWh。",
+          "metric_id": null,
+          "metric_name": "二标段规模",
+          "metric_value": 10.0,
+          "period": "2026-09-15",
+          "scope": {
+            "product": "钠离子储能系统",
+            "region": "河北任丘",
+            "segment": "二标段（10MW/40MWh）"
+          },
+          "unit": "MW"
+        }
+      ],
+      "price_fields": [
+        {
+          "amount": 1.035,
+          "currency": "CNY",
+          "mom": null,
+          "unit": "元/Wh",
+          "volume": null,
+          "yoy": null
+        },
+        {
+          "amount": 0.518,
+          "currency": "CNY",
+          "mom": null,
+          "unit": "元/Wh",
+          "volume": null,
+          "yoy": null
+        }
+      ]
+    },
+    {
+      "source_link_id": "link_f9c64e0aac43",
+      "passages": [
+        {
+          "passage_id": "title",
+          "text": "远景能源、宁德时代中标！河北100MW/400MWh储能系统采购中标公示-北极星储能网"
+        },
+        {
+          "passage_id": "p0",
+          "text": "北极星储能网讯：2026年9月15日，河北任丘智弘100MW/400MWh新型技术路线磷酸铁锂电池+钠电池独立储能试点项目 储能系统 设备采购中标结果公示。"
+        },
+        {
+          "passage_id": "p1",
+          "text": "项目共两个标段，一标段为磷酸铁锂电池储能系统，30MW/120MWh大容量磷酸铁锂+60MW/240MWh长寿命磷酸铁锂，远景能源中标价为19461.6万元，合单价0.518元/Wh；"
+        },
+        {
+          "passage_id": "p2",
+          "text": "二标段为钠电池储能系统，10MW/40MWh钠离子储能系统，宁德时代中标价为4141.622万元，合单价1.035元/Wh。"
+        }
+      ],
+      "events": [
+        {
+          "confidence": 0.9,
+          "entities": {
+            "counterparty": "河北任丘智弘100MW/400MWh独立储能试点项目（招标方主体未明确）",
+            "product": "钠离子储能系统",
+            "regulator": null,
+            "subject": "宁德时代"
+          },
+          "event_date": null,
+          "event_id": null,
+          "event_resolution": {
+            "candidate_refs": [
+              "mic:run_a81652e65aca:link_1bf2aa8d67b3:0",
+              "mic:run_a81652e65aca:link_1bf2aa8d67b3:1",
+              "mic:run_a81652e65aca:link_1bf2aa8d67b3:2"
+            ],
+            "event_fingerprint": "a76a5509f63e8c30f6a18746e67ae1f28cbb4c32cf71b9e4a3cce040d2ccf1e6",
+            "model_decision": {
+              "comparisons": [
+                {
+                  "candidate_evidence": [
+                    {
+                      "passage_id": "p0",
+                      "quote": "2026年9月15日，河北任丘智弘100MW/400MWh新型技术路线磷酸铁锂电池+钠电池独立储能试点项目储能系统设备采购中标结果公示。"
+                    }
+                  ],
+                  "candidate_ref": "mic:run_a81652e65aca:link_1bf2aa8d67b3:0",
+                  "current_evidence": [
+                    {
+                      "passage_id": "p0",
+                      "quote": "2026年9月15日，河北任丘智弘100MW/400MWh新型技术路线磷酸铁锂电池+钠电池独立储能试点项目 储能系统 设备采购中标结果公示。"
+                    }
+                  ],
+                  "reason": "候选概括该项目的整体中标结果公示（招标方、远景能源与宁德时代、100MW/400MWh、2026年9月15日），与当前来源p0所述同一项目同一公示一致，未发现实质冲突。",
+                  "relation": "same_event"
+                },
+                {
+                  "candidate_evidence": [
+                    {
+                      "passage_id": "p2",
+                      "quote": "二标段为钠电池储能系统，10MW/40MWh钠离子储能系统，宁德时代中标价为4141.622万元，合单价1.035元/Wh。"
+                    }
+                  ],
+                  "candidate_ref": "mic:run_a81652e65aca:link_1bf2aa8d67b3:1",
+                  "current_evidence": [
+                    {
+                      "passage_id": "p2",
+                      "quote": "二标段为钠电池储能系统，10MW/40MWh钠离子储能系统，宁德时代中标价为4141.622万元，合单价1.035元/Wh。"
+                    }
+                  ],
+                  "reason": "候选聚焦宁德时代中标二标段10MW/40MWh钠离子储能系统、4141.622万元、1.035元/Wh，与当前来源p2完全一致，系同一标段中标事实。",
+                  "relation": "same_event"
+                },
+                {
+                  "candidate_evidence": [
+                    {
+                      "passage_id": "p1",
+                      "quote": "一标段为磷酸铁锂电池储能系统，30MW/120MWh大容量磷酸铁锂+60MW/240MWh长寿命磷酸铁锂，远景能源中标价为19461.6万元，合单价0.518元/Wh"
+                    }
+                  ],
+                  "candidate_ref": "mic:run_a81652e65aca:link_1bf2aa8d67b3:2",
+                  "current_evidence": [
+                    {
+                      "passage_id": "p1",
+                      "quote": "一标段为磷酸铁锂电池储能系统，30MW/120MWh大容量磷酸铁锂+60MW/240MWh长寿命磷酸铁锂，远景能源中标价为19461.6万元，合单价0.518元/Wh；"
+                    }
+                  ],
+                  "reason": "候选聚焦远景能源中标一标段磷酸铁锂储能系统、19461.6万元、0.518元/Wh，与当前来源p1一致，属同项目另一标段，同为该公示内容。",
+                  "relation": "same_event"
+                }
+              ],
+              "current_evidence": [
+                {
+                  "passage_id": "p0",
+                  "quote": "2026年9月15日，河北任丘智弘100MW/400MWh新型技术路线磷酸铁锂电池+钠电池独立储能试点项目 储能系统 设备采购中标结果公示。"
+                },
+                {
+                  "passage_id": "p2",
+                  "quote": "二标段为钠电池储能系统，10MW/40MWh钠离子储能系统，宁德时代中标价为4141.622万元，合单价1.035元/Wh。"
+                }
+              ],
+              "reason": "当前来源与三个候选均为2026年9月15日河北任丘智弘100MW/400MWh项目储能系统采购中标结果公示，主体、项目、日期与标段内容一致，属同一来源事件在不同媒体间的同内容呈现。",
+              "reviewed": true,
+              "verdict": "same_event"
+            },
+            "protocol": "semantic_event_v1",
+            "reason": "multiple_matching_candidates",
+            "ref": "mic:run_a81652e65aca:link_f9c64e0aac43:0",
+            "relation": "uncertain",
+            "status": "pending"
+          },
+          "event_type": "unknown",
+          "evidence_locator": {
+            "excerpt": "二标段为钠电池储能系统，10MW/40MWh钠离子储能系统，宁德时代中标价为4141.622万元，合单价1.035元/Wh。",
+            "passage_id": "p2",
+            "section": null,
+            "table_id": null
+          },
+          "impact": {
+            "channels": [
+              "revenue",
+              "demand"
+            ],
+            "direction": "positive",
+            "horizon": "1m",
+            "magnitude_guess": "low"
+          },
+          "impact_channels": [
+            "revenue",
+            "demand"
+          ],
+          "metrics": {
+            "amount": 41416220,
+            "amount_evidence": {
+              "passage_id": "p2",
+              "quote": "4141.622万元"
+            },
+            "amount_input": {
+              "amount": 4141.622,
+              "capacity": "10MW/40MWh",
+              "currency": "CNY",
+              "volume": null
+            },
+            "amount_raw": 4141.622,
+            "amount_raw_unit": "万元",
+            "amount_unit": "元",
+            "capacity": "10MW/40MWh",
+            "currency": "CNY",
+            "volume": null
+          },
+          "source": {
+            "domain": "news.bjx.com.cn",
+            "published_at": "2026-09-15T11:47:00+08:00",
+            "query_family": "orders_tender",
+            "source_type": "media",
+            "title": "远景能源、宁德时代中标！河北100MW/400MWh储能系统采购中标公示-北极星储能网",
+            "url": "https://news.bjx.com.cn/html/20260915/1512829.shtml"
+          },
+          "source_corroboration_status": "single_source",
+          "source_link_id": "link_f9c64e0aac43",
+          "summary": "宁德时代中标该项目二标段10MW/40MWh钠离子储能系统，中标价4141.622万元，合单价1.035元/Wh。",
+          "tracking_variables": []
+        },
+        {
+          "confidence": 0.9,
+          "entities": {
+            "counterparty": "河北任丘智弘100MW/400MWh独立储能试点项目（招标方主体未明确）",
+            "product": "磷酸铁锂电池储能系统",
+            "regulator": null,
+            "subject": "远景能源"
+          },
+          "event_date": null,
+          "event_id": null,
+          "event_resolution": {
+            "candidate_refs": [
+              "mic:run_a81652e65aca:link_1bf2aa8d67b3:0",
+              "mic:run_a81652e65aca:link_1bf2aa8d67b3:1",
+              "mic:run_a81652e65aca:link_1bf2aa8d67b3:2"
+            ],
+            "event_fingerprint": "68779e613687e1200545b12c1215deb29df45eebbef3193c5cb4a1afeb318ea7",
+            "model_decision": {
+              "comparisons": [
+                {
+                  "candidate_evidence": [
+                    {
+                      "passage_id": "p1",
+                      "quote": "一标段为磷酸铁锂电池储能系统，30MW/120MWh大容量磷酸铁锂+60MW/240MWh长寿命磷酸铁锂，远景能源中标价为19461.6万元，合单价0.518元/Wh；"
+                    }
+                  ],
+                  "candidate_ref": "mic:run_a81652e65aca:link_1bf2aa8d67b3:0",
+                  "current_evidence": [
+                    {
+                      "passage_id": "p1",
+                      "quote": "远景能源中标价为19461.6万元，合单价0.518元/Wh；"
+                    }
+                  ],
+                  "reason": "候选概括项目整体中标公示，包含一标段远景能源中标信息，与当前p1一致。",
+                  "relation": "same_event"
+                },
+                {
+                  "candidate_evidence": [
+                    {
+                      "passage_id": "p2",
+                      "quote": "二标段为钠电池储能系统，10MW/40MWh钠离子储能系统，宁德时代中标价为4141.622万元，合单价1.035元/Wh。"
+                    }
+                  ],
+                  "candidate_ref": "mic:run_a81652e65aca:link_1bf2aa8d67b3:1",
+                  "current_evidence": [
+                    {
+                      "passage_id": "p1",
+                      "quote": "项目共两个标段，一标段为磷酸铁锂电池储能系统"
+                    }
+                  ],
+                  "reason": "候选为同项目二标段钠电中标，与一标段磷酸铁锂中标同属同一次公示事项的两个标段，标段不同但为同一采购事件，不构成冲突。",
+                  "relation": "same_event"
+                },
+                {
+                  "candidate_evidence": [
+                    {
+                      "passage_id": "p1",
+                      "quote": "一标段为磷酸铁锂电池储能系统，30MW/120MWh大容量磷酸铁锂+60MW/240MWh长寿命磷酸铁锂，远景能源中标价为19461.6万元，合单价0.518元/Wh"
+                    }
+                  ],
+                  "candidate_ref": "mic:run_a81652e65aca:link_1bf2aa8d67b3:2",
+                  "current_evidence": [
+                    {
+                      "passage_id": "p1",
+                      "quote": "一标段为磷酸铁锂电池储能系统，30MW/120MWh大容量磷酸铁锂+60MW/240MWh长寿命磷酸铁锂，远景能源中标价为19461.6万元，合单价0.518元/Wh；"
+                    }
+                  ],
+                  "reason": "候选即一标段磷酸铁锂储能系统中标细节，与当前p1完全一致。",
+                  "relation": "same_event"
+                }
+              ],
+              "current_evidence": [
+                {
+                  "passage_id": "p1",
+                  "quote": "项目共两个标段，一标段为磷酸铁锂电池储能系统，30MW/120MWh大容量磷酸铁锂+60MW/240MWh长寿命磷酸铁锂，远景能源中标价为19461.6万元，合单价0.518元/Wh；"
+                }
+              ],
+              "reason": "该事件为同项目一标段磷酸铁锂储能系统中标结果，与候选0（整体公示）、候选2（一标段细节）同属该事件；与候选1（二标段钠电）为同项目不同标段但同属同一公示事项，均判为同一事件的组成部分。",
+              "reviewed": true,
+              "verdict": "same_event"
+            },
+            "protocol": "semantic_event_v1",
+            "reason": "multiple_matching_candidates",
+            "ref": "mic:run_a81652e65aca:link_f9c64e0aac43:1",
+            "relation": "uncertain",
+            "status": "pending"
+          },
+          "event_type": "unknown",
+          "evidence_locator": {
+            "excerpt": "项目共两个标段，一标段为磷酸铁锂电池储能系统，30MW/120MWh大容量磷酸铁锂+60MW/240MWh长寿命磷酸铁锂，远景能源中标价为19461.6万元，合单价0.518元/Wh；",
+            "passage_id": "p1",
+            "section": null,
+            "table_id": null
+          },
+          "impact": {
+            "channels": [
+              "demand"
+            ],
+            "direction": "neutral",
+            "horizon": "1m",
+            "magnitude_guess": "low"
+          },
+          "impact_channels": [
+            "demand"
+          ],
+          "metrics": {
+            "amount": 194616000,
+            "amount_evidence": {
+              "passage_id": "p1",
+              "quote": "19461.6万元"
+            },
+            "amount_input": {
+              "amount": 19461.6,
+              "capacity": "90MW/360MWh",
+              "currency": "CNY",
+              "volume": null
+            },
+            "amount_raw": 19461.6,
+            "amount_raw_unit": "万元",
+            "amount_unit": "元",
+            "capacity": "90MW/360MWh",
+            "currency": "CNY",
+            "volume": null
+          },
+          "source": {
+            "domain": "news.bjx.com.cn",
+            "published_at": "2026-09-15T11:47:00+08:00",
+            "query_family": "orders_tender",
+            "source_type": "media",
+            "title": "远景能源、宁德时代中标！河北100MW/400MWh储能系统采购中标公示-北极星储能网",
+            "url": "https://news.bjx.com.cn/html/20260915/1512829.shtml"
+          },
+          "source_corroboration_status": "single_source",
+          "source_link_id": "link_f9c64e0aac43",
+          "summary": "远景能源中标该项目一标段磷酸铁锂电池储能系统（30MW/120MWh大容量磷酸铁锂+60MW/240MWh长寿命磷酸铁锂），中标价19461.6万元，合单价0.518元/Wh。",
+          "tracking_variables": []
+        }
+      ],
+      "model_review": {
+        "bindings": {
+          "/analyst_questions/0/question": [
+            "tender_owner_unknown"
+          ],
+          "/analyst_questions/2/question": [
+            "price_comparison"
+          ],
+          "/brief/affected_business_lines": [
+            "award_catl"
+          ],
+          "/brief/impact_channels": [
+            "award_catl"
+          ],
+          "/brief/one_sentence": [
+            "award_catl"
+          ],
+          "/brief/time_horizon": [
+            "award_catl"
+          ],
+          "/brief/uncertainty": [
+            "tender_owner_unknown",
+            "source_repost"
+          ],
+          "/brief/what_happened": [
+            "project_public",
+            "award_catl",
+            "award_yuanjing"
+          ],
+          "/brief/why_it_matters": [
+            "award_catl",
+            "price_comparison"
+          ],
+          "/catalysts/0/description": [
+            "award_catl"
+          ],
+          "/catalysts/0/potential_impact": [
+            "award_catl"
+          ],
+          "/coverage_gaps/0/description": [
+            "source_repost"
+          ],
+          "/coverage_gaps/1/description": [
+            "tender_owner_unknown"
+          ],
+          "/customer_supplier_signals/0/business_meaning": [
+            "award_catl"
+          ],
+          "/customer_supplier_signals/0/customer_or_supplier": [
+            "tender_owner_unknown"
+          ],
+          "/decision": [
+            "project_public",
+            "award_catl"
+          ],
+          "/events/0/entities": [
+            "award_catl"
+          ],
+          "/events/0/event_resolution": [
+            "project_public",
+            "award_catl"
+          ],
+          "/events/0/impact": [
+            "award_catl"
+          ],
+          "/events/0/metrics": [
+            "amount_catl",
+            "award_catl"
+          ],
+          "/events/0/summary": [
+            "award_catl"
+          ],
+          "/events/1/entities": [
+            "award_yuanjing"
+          ],
+          "/events/1/event_resolution": [
+            "project_public",
+            "award_yuanjing"
+          ],
+          "/events/1/impact": [
+            "award_yuanjing"
+          ],
+          "/events/1/metrics": [
+            "amount_yuanjing",
+            "award_yuanjing"
+          ],
+          "/events/1/summary": [
+            "award_yuanjing"
+          ],
+          "/facts/0/entities": [
+            "award_catl"
+          ],
+          "/facts/0/fact_statement": [
+            "award_catl"
+          ],
+          "/facts/0/metrics": [
+            "amount_catl"
+          ],
+          "/facts/1/entities": [
+            "award_yuanjing"
+          ],
+          "/facts/1/fact_statement": [
+            "award_yuanjing"
+          ],
+          "/facts/1/metrics": [
+            "amount_yuanjing"
+          ],
+          "/facts/2/entities": [
+            "project_public"
+          ],
+          "/facts/2/fact_statement": [
+            "project_public"
+          ],
+          "/metrics/0/interpretation": [
+            "unit_price_catl"
+          ],
+          "/metrics/0/metric_value": [
+            "unit_price_catl"
+          ],
+          "/metrics/1/metric_value": [
+            "amount_catl"
+          ],
+          "/metrics/2/metric_value": [
+            "unit_price_yuanjing"
+          ],
+          "/metrics/3/metric_value": [
+            "award_yuanjing"
+          ],
+          "/metrics/4/metric_value": [
+            "award_catl"
+          ],
+          "/metrics/5/metric_value": [
+            "project_public"
+          ],
+          "/overall_score": [
+            "award_catl",
+            "award_yuanjing",
+            "source_repost"
+          ],
+          "/price_cost_margin_signals/0/direction": [
+            "price_comparison"
+          ],
+          "/price_cost_margin_signals/0/product_or_material": [
+            "price_comparison"
+          ],
+          "/relations/0/qualifiers": [
+            "award_catl"
+          ],
+          "/relations/1/qualifiers": [
+            "award_yuanjing"
+          ],
+          "/risks/0/risk_summary": [
+            "price_comparison"
+          ],
+          "/source_quality/is_original_source": [
+            "source_repost"
+          ]
+        },
+        "claims": [
+          {
+            "amount": null,
+            "depends_on": [],
+            "evidence": [
+              {
+                "passage_id": "p0",
+                "quote": "2026年9月15日，河北任丘智弘100MW/400MWh新型技术路线磷酸铁锂电池+钠电池独立储能试点项目 储能系统 设备采购中标结果公示。"
+              }
+            ],
+            "id": "project_public",
+            "kind": "observation",
+            "reason": "p0直接给出项目名称、规模与公示日期，且说明为储能系统设备采购中标结果公示。",
+            "statement": "河北任丘智弘100MW/400MWh新型技术路线磷酸铁锂电池+钠电池独立储能试点项目的储能系统设备采购中标结果于2026年9月15日公示。",
+            "status": "source_supported"
+          },
+          {
+            "amount": null,
+            "depends_on": [
+              "project_public"
+            ],
+            "evidence": [
+              {
+                "passage_id": "p2",
+                "quote": "二标段为钠电池储能系统，10MW/40MWh钠离子储能系统，宁德时代中标价为4141.622万元，合单价1.035元/Wh。"
+              }
+            ],
+            "id": "award_catl",
+            "kind": "observation",
+            "reason": "p2直接给出中标方宁德时代、标段容量、中标金额与折合单价。",
+            "statement": "宁德时代中标该项目二标段10MW/40MWh钠离子储能系统，中标价4141.622万元，合单价1.035元/Wh。",
+            "status": "source_supported"
+          },
+          {
+            "amount": {
+              "currency": "CNY",
+              "evidence": {
+                "passage_id": "p2",
+                "quote": "4141.622万元"
+              },
+              "unit": "万元",
+              "value": 4141.622
+            },
+            "depends_on": [
+              "award_catl"
+            ],
+            "evidence": [
+              {
+                "passage_id": "p2",
+                "quote": "4141.622万元"
+              }
+            ],
+            "id": "amount_catl",
+            "kind": "observation",
+            "reason": "p2原文明确出现“4141.622万元”并归属于宁德时代二标段。",
+            "statement": "宁德时代二标段中标金额为4141.622万元。",
+            "status": "source_supported"
+          },
+          {
+            "amount": null,
+            "depends_on": [
+              "award_catl"
+            ],
+            "evidence": [
+              {
+                "passage_id": "p2",
+                "quote": "合单价1.035元/Wh"
+              }
+            ],
+            "id": "unit_price_catl",
+            "kind": "observation",
+            "reason": "p2原文给出“合单价1.035元/Wh”。",
+            "statement": "二标段钠离子储能系统中标折合单价为1.035元/Wh。",
+            "status": "source_supported"
+          },
+          {
+            "amount": null,
+            "depends_on": [
+              "project_public"
+            ],
+            "evidence": [
+              {
+                "passage_id": "p1",
+                "quote": "一标段为磷酸铁锂电池储能系统，30MW/120MWh大容量磷酸铁锂+60MW/240MWh长寿命磷酸铁锂，远景能源中标价为19461.6万元，合单价0.518元/Wh；"
+              }
+            ],
+            "id": "award_yuanjing",
+            "kind": "observation",
+            "reason": "p1直接给出中标方远景能源、标段构成、中标金额与折合单价。",
+            "statement": "远景能源中标该项目一标段磷酸铁锂电池储能系统（30MW/120MWh大容量磷酸铁锂+60MW/240MWh长寿命磷酸铁锂），中标价19461.6万元，合单价0.518元/Wh。",
+            "status": "source_supported"
+          },
+          {
+            "amount": {
+              "currency": "CNY",
+              "evidence": {
+                "passage_id": "p1",
+                "quote": "19461.6万元"
+              },
+              "unit": "万元",
+              "value": 19461.6
+            },
+            "depends_on": [
+              "award_yuanjing"
+            ],
+            "evidence": [
+              {
+                "passage_id": "p1",
+                "quote": "19461.6万元"
+              }
+            ],
+            "id": "amount_yuanjing",
+            "kind": "observation",
+            "reason": "p1原文明确出现“19461.6万元”并归属远景能源一标段。",
+            "statement": "远景能源一标段中标金额为19461.6万元。",
+            "status": "source_supported"
+          },
+          {
+            "amount": null,
+            "depends_on": [
+              "award_yuanjing"
+            ],
+            "evidence": [
+              {
+                "passage_id": "p1",
+                "quote": "合单价0.518元/Wh"
+              }
+            ],
+            "id": "unit_price_yuanjing",
+            "kind": "observation",
+            "reason": "p1原文给出“合单价0.518元/Wh”。",
+            "statement": "一标段磷酸铁锂储能系统中标折合单价为0.518元/Wh。",
+            "status": "source_supported"
+          },
+          {
+            "amount": null,
+            "depends_on": [
+              "unit_price_catl",
+              "unit_price_yuanjing"
+            ],
+            "evidence": [
+              {
+                "passage_id": "p2",
+                "quote": "合单价1.035元/Wh"
+              },
+              {
+                "passage_id": "p1",
+                "quote": "合单价0.518元/Wh"
+              }
+            ],
+            "id": "price_comparison",
+            "kind": "comparability",
+            "reason": "两单价分别来自p1、p2原文，但标段技术路线、容量与供货范围不同，来源未给出可比性口径，属分析推断而非原文结论。",
+            "statement": "同项目内钠离子储能系统折合单价1.035元/Wh高于一标段磷酸铁锂储能系统0.518元/Wh。",
+            "status": "inference"
+          },
+          {
+            "amount": null,
+            "depends_on": [],
+            "evidence": [
+              {
+                "passage_id": "p0",
+                "quote": "河北任丘智弘100MW/400MWh新型技术路线磷酸铁锂电池+钠电池独立储能试点项目"
+              }
+            ],
+            "id": "tender_owner_unknown",
+            "kind": "limitation",
+            "reason": "p0仅给出项目名称，未披露招标方公司全称，无法确认业主与合同相对方身份。",
+            "statement": "该项目招标方/业主主体公司名称在原文中未明确，仅以“河北任丘智弘项目”指代。",
+            "status": "pending_review"
+          },
+          {
+            "amount": null,
+            "depends_on": [],
+            "evidence": [
+              {
+                "passage_id": "p0",
+                "quote": "北极星储能网讯："
+              },
+              {
+                "passage_id": "title",
+                "quote": "远景能源、宁德时代中标！河北100MW/400MWh储能系统采购中标公示-北极星储能网"
+              }
+            ],
+            "id": "source_repost",
+            "kind": "limitation",
+            "reason": "p0以“北极星储能网讯”开头，标题末尾标注“-北极星储能网”，表明为媒体转述性质。",
+            "statement": "该来源为行业媒体北极星储能网转述的中标结果公示内容，非招标方或交易平台发布的原始公告。",
+            "status": "source_supported"
+          }
+        ],
+        "protocol": "content_review_v1"
+      },
+      "metric_candidates": [
+        {
+          "comparison": {
+            "mom": null,
+            "wow": null,
+            "yoy": null
+          },
+          "confidence": 0.9,
+          "content_review": {},
+          "evidence_locator": {
+            "excerpt": null,
+            "passage_id": "p2",
+            "section": null,
+            "table_id": null
+          },
+          "impact_channels": [
+            "revenue"
+          ],
+          "interpretation": "二标段钠离子储能系统中标价折合单价，为该标段独立报价口径。",
+          "metric_id": null,
+          "metric_name": "宁德时代钠离子储能系统中标单价",
+          "metric_value": 1.035,
+          "period": "2026-09-15",
+          "scope": {
+            "product": "钠离子储能系统",
+            "region": "河北任丘",
+            "segment": "二标段10MW/40MWh"
+          },
+          "unit": "元/Wh"
+        },
+        {
+          "comparison": {
+            "mom": null,
+            "wow": null,
+            "yoy": null
+          },
+          "confidence": 0.9,
+          "content_review": {},
+          "evidence_locator": {
+            "excerpt": null,
+            "passage_id": "p2",
+            "section": null,
+            "table_id": null
+          },
+          "impact_channels": [
+            "revenue"
+          ],
+          "interpretation": "钠离子储能系统标段中标价，是否含税及供货范围未披露。",
+          "metric_id": null,
+          "metric_name": "宁德时代二标段中标金额",
+          "metric_value": 4141.622,
+          "period": "2026-09-15",
+          "scope": {
+            "product": "钠离子储能系统",
+            "region": "河北任丘",
+            "segment": "二标段10MW/40MWh"
+          },
+          "unit": "万元"
+        },
+        {
+          "comparison": {
+            "mom": null,
+            "wow": null,
+            "yoy": null
+          },
+          "confidence": 0.9,
+          "content_review": {},
+          "evidence_locator": {
+            "excerpt": null,
+            "passage_id": "p1",
+            "section": null,
+            "table_id": null
+          },
+          "impact_channels": [
+            "revenue"
+          ],
+          "interpretation": "一标段磷酸铁锂储能系统中标折合单价，作为同项目对照但技术路线不同。",
+          "metric_id": null,
+          "metric_name": "远景能源磷酸铁锂储能系统中标单价",
+          "metric_value": 0.518,
+          "period": "2026-09-15",
+          "scope": {
+            "product": "磷酸铁锂电池储能系统",
+            "region": "河北任丘",
+            "segment": "一标段90MW/360MWh"
+          },
+          "unit": "元/Wh"
+        },
+        {
+          "comparison": {
+            "mom": null,
+            "wow": null,
+            "yoy": null
+          },
+          "confidence": 0.85,
+          "content_review": {},
+          "evidence_locator": {
+            "excerpt": null,
+            "passage_id": "p1",
+            "section": null,
+            "table_id": null
+          },
+          "impact_channels": [
+            "demand"
+          ],
+          "interpretation": "由30MW/120MWh大容量与60MW/240MWh长寿命两段相加所得规模。",
+          "metric_id": null,
+          "metric_name": "一标段储能容量",
+          "metric_value": 90.0,
+          "period": "2026-09-15",
+          "scope": {
+            "product": "磷酸铁锂电池储能系统",
+            "region": "河北任丘",
+            "segment": "一标段30MW/120MWh+60MW/240MWh"
+          },
+          "unit": "MW"
+        },
+        {
+          "comparison": {
+            "mom": null,
+            "wow": null,
+            "yoy": null
+          },
+          "confidence": 0.9,
+          "content_review": {},
+          "evidence_locator": {
+            "excerpt": null,
+            "passage_id": "p2",
+            "section": null,
+            "table_id": null
+          },
+          "impact_channels": [
+            "demand"
+          ],
+          "interpretation": "钠离子储能系统标段规模，配套40MWh容量。",
+          "metric_id": null,
+          "metric_name": "二标段储能容量",
+          "metric_value": 10.0,
+          "period": "2026-09-15",
+          "scope": {
+            "product": "钠离子储能系统",
+            "region": "河北任丘",
+            "segment": "二标段10MW/40MWh"
+          },
+          "unit": "MW"
+        },
+        {
+          "comparison": {
+            "mom": null,
+            "wow": null,
+            "yoy": null
+          },
+          "confidence": 0.9,
+          "content_review": {},
+          "evidence_locator": {
+            "excerpt": null,
+            "passage_id": "p0",
+            "section": null,
+            "table_id": null
+          },
+          "impact_channels": [
+            "demand"
+          ],
+          "interpretation": "项目整体规模100MW/400MWh，含磷酸铁锂与钠电两个标段。",
+          "metric_id": null,
+          "metric_name": "项目总规模",
+          "metric_value": 100.0,
+          "period": "2026-09-15",
+          "scope": {
+            "product": "储能系统",
+            "region": "河北任丘",
+            "segment": "独立储能试点项目"
+          },
+          "unit": "MW"
+        }
+      ],
+      "price_fields": []
+    }
+  ]
+}

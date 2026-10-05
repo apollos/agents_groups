@@ -58,7 +58,10 @@ class BundleValidator:
         if self.require_content_review or bundle.content_review:
             from mic.content_review import ContentReview, seal
             bundle = bundle.model_copy(deep=True)
-            reviews = ContentReview(bundle, passages, warnings).apply()
+            try:
+                reviews = ContentReview(bundle, passages, warnings).apply()
+            except (ValidationError, TypeError, ValueError) as exc:
+                return ValidationReport(False, errors=[f"content_review: {type(exc).__name__}"], warnings=warnings)
             self._enforce_limits(bundle, warnings, truncate_brief=False)
             self._check_evidence(bundle, {p.passage_id for p in passages}, warnings)
             self._attach_excerpts(bundle, {p.passage_id: p.text for p in passages})

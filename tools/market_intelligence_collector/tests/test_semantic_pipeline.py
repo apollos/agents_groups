@@ -69,6 +69,8 @@ def test_existing_model_calls_carry_context_then_persist_decisions(config, monke
                 "current_evidence": evidence,
                 "comparisons": [{"candidate_ref": c["ref"],
                                  "relation": "same_event" if c["ref"] == matching else "different",
+                                 "scope_relation": "equivalent" if c["ref"] == matching else "disjoint",
+                                 "same_occurrence": c["ref"] == matching, "stage_relation": "same",
                                  "reason": "人工标注测试替身：对照标段、获标方、公告上下文。",
                                  "current_evidence": evidence,
                                  "candidate_evidence": [{"passage_id": c["passages"][0]["passage_id"],

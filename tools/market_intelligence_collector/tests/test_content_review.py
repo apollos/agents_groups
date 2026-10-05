@@ -45,6 +45,11 @@ def case():
               claim("quote", "来源报道磷酸铁锂标段合单价0.518元/Wh。", "p1"),
               claim("comparison", compare, "p1", "pending_review", kind="comparability"),
               claim("profit", "由价格对标可以证明盈利优势。", "p1", dependencies=["comparison"], kind="analysis")]
+    parties = claim("parties", "宁德时代为获标方；业主未确认。", kind="identity")
+    parties["field_values"] = {"entities": {"subject": "宁德时代"}}
+    project_role = claim("project_role", "文中该名称是项目名称。", "p0", kind="identity")
+    project_role["field_values"] = {"entities": {"subject": "项目"}}
+    claims.extend([parties, project_role])
     raw = {"decision": "save_structured", "overall_score": 76, "confidence": .8,
            "brief": {"one_sentence": project + owner, "why_it_matters": compare},
            "facts": [{"fact_statement": project + owner, "entities": {"subject": "项目", "owner": "河北任丘智弘"},
@@ -58,9 +63,9 @@ def case():
                        "evidence_locator": {"passage_id": "p2"}}],
            "content_review": {"protocol": PROTOCOL, "claims": claims, "bindings": {
                "/brief/one_sentence": ["project", "owner"], "/brief/why_it_matters": ["comparison"],
-               "/facts/0/fact_statement": ["project", "owner"], "/facts/0/entities": ["project"],
+               "/facts/0/fact_statement": ["project", "owner"], "/facts/0/entities": ["project_role"],
                "/facts/0/entities/owner": ["owner"], "/events/0/summary": ["award"],
-               "/events/0/event_date": ["project"], "/events/0/entities": ["award"],
+               "/events/0/event_date": ["project"], "/events/0/entities": ["parties"],
                "/events/0/entities/counterparty": ["owner"], "/events/0/metrics": ["money"],
                **{f"/metrics/{i}/{field}": ["quote"] for i in (0, 1) for field in ("metric_name", "metric_value", "unit")},
                "/metrics/0/interpretation": ["comparison"], "/metrics/1/interpretation": ["profit"],
@@ -215,6 +220,7 @@ def test_agent_boundary_preserves_review_and_rejects_missing_review(tmp_path):
     from agent_trade_intel.persistence import ResultPersister
     bundle = validate(case())
     bundle.events[0].event_resolution = {"reviewed": True, "verdict": "new", "reason": "候选为空",
+        "current_claim_ids": ["award"],
         "current_evidence": [{"passage_id": "p2", "quote": TEXT["p2"]}], "comparisons": []}
     finalize(bundle, build_context(None, []), PASSAGES, run_id="run", link_id="source")
     event = {**bundle.events[0].model_dump(mode="json"), "source_link_id": "source"}

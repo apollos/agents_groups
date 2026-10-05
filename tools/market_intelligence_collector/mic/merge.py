@@ -145,6 +145,7 @@ class MultiModelMerger:
         if reviews:
             merged.content_review = {"protocol": REVIEW_PROTOCOL, "status": "applied",
                                      "contributions": reviews,
+                                     "protocol_errors": [e for r in reviews for e in r.get("protocol_errors", [])],
                                      "held": [h for r in reviews for h in r.get("held", [])]}
             enforce_integrity(merged)
         decision_diagnostics = self._apply_decision_rules(merged)

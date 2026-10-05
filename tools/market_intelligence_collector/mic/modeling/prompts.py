@@ -24,6 +24,8 @@ SYSTEM_PROMPT = """你是一名服务于股票/行业研究分析师的信息抽
 3. 每个 fact / metric / event / relation / risk 都要给出 evidence_locator.passage_id，
    该 passage_id 必须来自输入的 selected_passages。
 4. 不确定或缺失的信息放入 analyst_questions 或 coverage_gaps，不要编造。
+   输出模板说明字段含义，不要求填满。没有来源依据的分析字段保持默认空值，
+   不要为了填写 impact 而猜测 positive、1m 或 low。没有明确催化剂/风险时输出空数组。
 5. decision 取值：save_structured（值得入库）| link_only（仅记录链接）| skip（无价值）。
 6. 关系方向必须标准化：A 向 B 供货 => A supplier_of B，B customer_of A。
 7. 如果 target_profile.tracking_variables 非空，每个 events[] 项应尽量判断它覆盖了哪些
@@ -50,12 +52,25 @@ SYSTEM_PROMPT = """你是一名服务于股票/行业研究分析师的信息抽
    不要求主体、事件类型、项目简称或标段字符串一致；理解别名、省略、代词和主被动表述。
    同一公司、相同金额或容量不足以认定同一事件。不同项目、标段、交易、日期、
    主体角色的实质冲突必须说明；中标、签约、交付等真实进展为 follow_up，不能吞掉。
-   项目总体公告和某个标段中标可以是不同事项。一篇文章内同一事项只输出一次。
+   比较对象是当前 events[] 的 summary 对应 claim 与候选 summary/focus 对应的具体事项，
+   不是两篇文章的全部内容。上下文用于补足指代，不能把当前事项改成同文中的另一事项。
+   一个总体公告包含多个子事项，不能把总体公告与每个子事项都判为 same_event。
+   两个不同获标方各自获得不同标段，是两个事项；第二篇分别报道它们时分别关联原有事项。
+   不强制每篇输出固定事件数。一篇文章内同一事项只输出一次。
+   current_claim_ids 必须等于当前 summary 所绑定的 claim id 列表（通常为单个 observation）。
+   每对比较先给出三个语义判断：
+   scope_relation=equivalent（事项范围相同）|contains（当前包含候选）|
+      contained_by（当前为候选的子事项）|overlaps（部分交叉）|disjoint（不同事项）|uncertain；
+   same_occurrence=true|false|null：是否为同一次事项/同一条交易进展，而非仅在同一篇公告出现；
+   stage_relation=same|progression|uncertain：同一阶段还是当前为后续进展。
+   equivalent+true+same 才是 same_event；equivalent+true+progression 为 follow_up；
+   contains/contained_by/overlaps+true 为 related（相关但不合并）；disjoint 或 false 为 different。
+   同一公告的另一标段应为 disjoint/different；总体公示与其中标段为 contains/contained_by+related。
    event_resolution.comparisons 必须逐一覆盖所有候选（不要只填写相似的候选）：
-   relation = same_event | follow_up | different | uncertain，附中文理由和双方原文引用。
+   relation = same_event | follow_up | related | different | uncertain，附中文理由和双方原文引用。
    引用格式 {passage_id, quote}，quote 必须是对应输入段落中连续的原文（至少8字符）。
    current_evidence 引当前 selected_passages，candidate_evidence 引该候选 passages。
-   verdict = new（全部不同或候选为空）| same_event | follow_up | uncertain；
+   verdict = new（没有同一事项或进展匹配；可存在 related）| same_event | follow_up | uncertain；
    无法排除是同一事件时用 uncertain。缺少项目上下文时不得补全猜测。
    reviewed=true 表示完成上述比较；current_evidence 和 reason 在候选为空时也必须填写。
 """
@@ -87,7 +102,8 @@ SCHEMA_HINT = {
     "facts": [{
         "fact_type": "order|sales|production|inventory|capacity|price|cost|policy|customer|supplier|risk|finance|product|technology",
         "fact_statement": "...", "entities": {"subject": "", "object": "", "product": "", "region": ""},
-        "metrics": {"amount": None, "currency": None, "volume": None, "unit": None, "yoy": None, "mom": None},
+        "metrics": {"amount": None, "currency": None, "amount_unit": None,
+                    "unit_price": None, "unit_price_unit": None, "volume": None, "unit": None, "yoy": None, "mom": None},
         "period": "...", "direction": "positive|negative|neutral|mixed|unclear",
         "evidence_locator": {"passage_id": "p1", "section": ""}, "confidence": 0.0,
     }],
@@ -100,18 +116,22 @@ SCHEMA_HINT = {
     }],
     "events": [{
         "event_resolution": {
+            "current_claim_ids": ["当前summary对应的claim id"],
             "reviewed": True, "verdict": "new|same_event|follow_up|uncertain", "reason": "中文判断依据",
             "current_evidence": [{"passage_id": "p0", "quote": "当前原文连续引用"}],
-            "comparisons": [{"candidate_ref": "来自输入候选ref", "relation": "same_event|follow_up|different|uncertain",
+            "comparisons": [{"candidate_ref": "来自输入候选ref", "relation": "same_event|follow_up|related|different|uncertain",
+                             "scope_relation": "equivalent|contains|contained_by|overlaps|disjoint|uncertain",
+                             "same_occurrence": "true|false|null", "stage_relation": "same|progression|uncertain",
                              "reason": "结合上下文的中文理由，说明实质一致、进展或差异",
                              "current_evidence": [{"passage_id": "p0", "quote": "当前原文连续引用"}],
                              "candidate_evidence": [{"passage_id": "p0", "quote": "候选原文连续引用"}]}]},
         "event_type": "major_order|tender|price_change|capacity_change|policy_change|customer_change|supplier_change|risk_event|earnings_change|financing|mna|product_launch|management_change",
         "event_date": "", "summary": "",
         "entities": {"subject": "", "counterparty": "", "regulator": None, "product": ""},
-        "metrics": {"amount": None, "currency": None, "capacity": None, "volume": None},
-        "impact": {"direction": "positive|negative|mixed|unclear", "channels": ["..."],
-                   "horizon": "1w|1m|quarter|annual|long_term", "magnitude_guess": "low|medium|high|unknown"},
+        "metrics": {"amount": None, "currency": None, "amount_unit": None,
+                    "unit_price": None, "unit_price_unit": None, "capacity": None, "volume": None},
+        "impact": {"direction": "unclear", "channels": [],
+                   "horizon": "unclear", "magnitude_guess": "unknown"},
         "source_corroboration_status": "single_source|multi_source|official_confirmed|conflicting",
         "evidence_locator": {"passage_id": "p1"}, "confidence": 0.0,
         "tracking_variables": [{

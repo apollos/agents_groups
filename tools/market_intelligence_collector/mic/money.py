@@ -20,6 +20,7 @@ _MONEY = re.compile(
     r"\s*(?P<unit>亿元|万元|元)(?!\s*[/／每])(?![A-Za-z])"
 )
 _FOREIGN = re.compile(r"美元|美金|港元|港币|澳元|加元|新台币|新臺幣|新加坡元|新元|欧元|歐元|日元|韩元|韓元|英镑|英鎊|(?<![A-Za-z])(?:USD|HKD|TWD|SGD|AUD|CAD|EUR|JPY|KRW|GBP)(?![A-Za-z])|[$€£]", re.I)
+_PRICE_UNIT = re.compile(r"^(?:CNY|RMB|人民币)?(亿元|万元|元)\s*[/／每]\s*([A-Za-z\u4e00-\u9fff]+)$", re.I)
 
 
 def _decimal(value: Any) -> Decimal | None:
@@ -137,11 +138,59 @@ def normalize_cny_fields(fields: dict, passages: dict[str, str], pid: str | None
         evidence, evidence_pid = next(iter(resolved.values()))
     if evidence is None:
         return None, reason
-    return {**fields, "amount": _number(evidence["normalized"]), "currency": "CNY",
+    output = {**fields, "amount": _number(evidence["normalized"]), "currency": "CNY",
             "amount_unit": "元", "amount_raw": _number(evidence["source_value"]),
             "amount_raw_unit": evidence["source_unit"],
             "amount_input": dict(fields),
-            "amount_evidence": {"passage_id": evidence_pid, "quote": evidence["quote"]}}, "supported"
+            "amount_evidence": {"passage_id": evidence_pid, "quote": evidence["quote"]}}
+    if fields.get("unit") in _FACTORS:
+        output.update(unit="元", unit_raw=fields["unit"])
+    return output, "supported"
+
+
+def normalize_quoted_price(fields: dict, passages: dict[str, str], pid: str | None,
+                           specifications: list[dict]) -> tuple[dict | None, str]:
+    """Preserve a quoted currency-per-unit quantity, never turn it into money.
+
+    Only dimensional syntax and a source number are checked here. Ownership,
+    comparability, price trends and economic implications remain model reviews.
+    """
+    units = [u for u in (fields.get("amount_unit"), fields.get("unit"))
+             if isinstance(u, str) and _PRICE_UNIT.fullmatch(u.strip())]
+    units += [s["unit"] for s in specifications if isinstance(s.get("unit"), str)
+              and _PRICE_UNIT.fullmatch(s["unit"].strip())]
+    if not units:
+        return None, "not_unit_price"
+    currency = str(fields.get("currency") or "").strip().upper()
+    if currency and currency not in _CURRENCIES:
+        return None, "conflicting_price_currency"
+    canonical = {re.sub(r"\s+", "", u).replace("／", "/").replace("每", "/") for u in units}
+    if len(canonical) != 1:
+        return None, "conflicting_price_unit"
+    unit = next(iter(canonical))
+    value = _decimal(fields.get("amount"))
+    if value is None:
+        return None, "invalid_price"
+    numerator, denominator = _PRICE_UNIT.fullmatch(unit).groups()
+    pattern = re.compile(r"(?<![\d.,+\-])([+\-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s*"
+                         + re.escape(numerator) + r"\s*[/／每]\s*" + re.escape(denominator) + r"(?![A-Za-z])")
+    citations = [{"passage_id": pid, "quote": passages.get(pid, "")}]
+    citations += [s.get("evidence", {}) for s in specifications]
+    for citation in citations:
+        if not isinstance(citation, dict):
+            continue
+        text, source_pid = citation.get("quote"), citation.get("passage_id")
+        if not isinstance(text, str) or source_pid == "title" or text not in passages.get(source_pid, ""):
+            continue
+        match = next((m for m in pattern.finditer(text) if _decimal(m.group(1)) == value), None)
+        if match:
+            if fields.get("unit_price") is not None and _decimal(fields["unit_price"]) != value:
+                return None, "conflicting_price_value"
+            return {**fields, "amount": None, "amount_kind": "unit_price",
+                    "unit_price": _number(value), "unit_price_unit": numerator + "/" + denominator,
+                    "price_input": dict(fields),
+                    "price_evidence": {"passage_id": source_pid, "quote": match.group(0)}}, "source_quote"
+    return None, "amount_not_supported_by_citation"
 
 
 def cny_amount_supported(fields: dict[str, Any], text: str) -> bool:

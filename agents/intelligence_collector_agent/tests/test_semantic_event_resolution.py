@@ -27,6 +27,9 @@ def decision(event, context, *, match=None, relation="same_event"):
             "reason": "对照原文，项目、标段、获标方及公告阶段一致。" if match else "候选为空或均为其他事项。",
             "current_evidence": current,
             "comparisons": [{"candidate_ref": c["ref"], "relation": relation if c["ref"] == match else "different",
+                             "scope_relation": "equivalent" if c["ref"] == match else "disjoint",
+                             "same_occurrence": c["ref"] == match,
+                             "stage_relation": "progression" if relation == "follow_up" else "same",
                              "reason": "两处原文描述同一标段中标。" if c["ref"] == match else "总体公告与分标段中标或另一标段不同。",
                              "current_evidence": current, "candidate_evidence": citation(c["passages"])}
                             for c in context["candidates"]]}
@@ -180,6 +183,7 @@ def test_multiple_semantic_matches_do_not_arbitrarily_choose_one():
     ctx = build_context({"candidates": [candidate(e, "event:a"), candidate(e, "event:b")]}, [])
     raw = decision(e, ctx, match="event:a")
     raw["comparisons"][1]["relation"] = "same_event"
+    raw["comparisons"][1].update(scope_relation="equivalent", same_occurrence=True, stage_relation="same")
     assert resolve(raw, ctx, e["source_context"])["reason"] == "multiple_matching_candidates"
 
 
