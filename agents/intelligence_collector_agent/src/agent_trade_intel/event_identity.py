@@ -162,7 +162,7 @@ def _strip_subject_and_verbs(summary: str, subject: str) -> str:
     return LEADING_VERBS.sub("", text)
 
 
-def scope_of(event: dict[str, Any]) -> dict[str, str]:
+def scope_of(event: dict[str, Any], *, aliases: EntityAliases | None = None) -> dict[str, str]:
     """Project key and lot of the matter an event is about."""
     entities = event.get("entities") or {}
     subject = str(entities.get("subject") or "")
@@ -181,19 +181,28 @@ def scope_of(event: dict[str, Any]) -> dict[str, str]:
         if lot:
             break
     if not lot:
-        lot = _lot_from_summary(summary, subject)
+        lot = _lot_from_summary(summary, subject, aliases=aliases)
     return {"project": project, "lot": lot, "project_raw": project_raw}
 
 
-def _lot_from_summary(summary: str, subject: str) -> str:
-    """The lot of the subject's own clause; a unique lot in the summary; else ''."""
+def _lot_from_summary(summary: str, subject: str, *, aliases: EntityAliases | None = None) -> str:
+    """A unique lot in the subject's clauses (including known aliases), else the summary."""
     clauses = [c for c in re.split(r"[，。；,;：:]", summary or "") if c.strip()]
-    subject_norm = _norm(subject)
-    if subject_norm:
-        for clause in clauses:
-            if subject_norm in _norm(clause) and lot_key(clause):
-                return lot_key(clause)
-    lots = {lot_key(c) for c in clauses if lot_key(c)}
+    subject_names = {_norm(subject)} - {""}
+    if aliases is not None and aliases.resolve(subject)[1]:
+        # Only expand spellings of this confirmed entity. Other companies in the
+        # same collection task must keep their own clauses and lots.
+        subject_names.update(_norm(name) for name in aliases.names if _norm(name))
+    subject_lots = {
+        lot_key(match.group(0))
+        for clause in clauses
+        if any(name in _norm(clause) for name in subject_names)
+        for match in LOT.finditer(clause)
+    }
+    if subject_lots:
+        # Conflicting lots remain ambiguous; do not pick whichever alias occurs first.
+        return subject_lots.pop() if len(subject_lots) == 1 else ""
+    lots = {lot_key(match.group(0)) for clause in clauses for match in LOT.finditer(clause)}
     return lots.pop() if len(lots) == 1 else ""
 
 
@@ -313,7 +322,7 @@ def signature(event: dict[str, Any], *, published_at: str | None,
     family = ACTION_FAMILY.get(str(event.get("event_type") or ""), str(event.get("event_type") or ""))
     if not raw_subject or not family or family in ("other", "unknown"):
         return None
-    scope = scope_of(event)
+    scope = scope_of(event, aliases=aliases)
     # A project named as the subject ("…储能试点项目" announcing its award result);
     # otherwise a company, resolved against the target's known names.
     resolved = False

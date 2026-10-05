@@ -14,6 +14,8 @@ import copy
 import json
 from pathlib import Path
 
+import pytest
+
 from agent_trade_intel.adapters.common import ToolResult
 from agent_trade_intel.db import SQLiteStore
 from agent_trade_intel.event_identity import (EntityAliases, amount_wan, capacity_mwh, project_key, project_name,
@@ -383,3 +385,56 @@ def test_rows_keyed_under_earlier_rules_are_rekeyed_not_duplicated(tmp_path):
     assert counts["events_rekeyed"] == 1 and counts["events"] == 0 and counts["events_linked"] == 1
     ev = rows(s, "SELECT business_key, source_count FROM structured_events")
     assert ev == [{"business_key": "宁德时代|award|任丘智弘|标段二", "source_count": 2}]
+
+
+@pytest.mark.parametrize("subject", ["宁德时代新能源科技股份有限公司", "CATL"])
+@pytest.mark.parametrize("other_company_first", [False, True])
+def test_subject_alias_in_multi_lot_summary_links_to_existing_event(tmp_path, subject, other_company_first):
+    clauses = ["宁德时代中标二标段10MW/40MWh钠离子储能系统", "远景能源中标一标段磷酸铁锂储能系统"]
+    if other_company_first:
+        clauses.reverse()
+    summary = "河北任丘智弘100MW/400MWh储能系统采购中标公示：" + "，".join(clauses) + "。"
+    first = catl(summary=summary)
+    second = copy.deepcopy(first)
+    second["entities"]["subject"] = subject
+    second["summary"] = "转载：" + summary  # prose legitimately keeps the short company name
+    second["event_type"] = "tender"
+    second["source_link_id"] = "link_alias"
+    second["source"]["url"] = "https://example.test/link_alias"
+    aliases = ["宁德时代", "CATL"]
+    s = store(tmp_path)
+    p = ResultPersister(s)
+    assert p.save_mic_structures(task=TASK, result=round3_result([first], aliases=aliases))["events"] == 1
+    next_task = {**TASK, "task_id": "task_alias", "idempotency_key": "next_cycle_alias"}
+    counts = p.save_mic_structures(task=next_task, result=round3_result([second], "run_alias", aliases=aliases))
+    assert counts["events"] == 0 and counts["events_linked"] == 1
+    assert counts["events_replayed"] == 0
+    assert rows(s, "SELECT business_key, source_count FROM structured_events") == [
+        {"business_key": "宁德时代|award|任丘智弘|标段二", "source_count": 2}]
+    assert len(rows(s, "SELECT 1 FROM structured_event_sources")) == 2
+    again = p.save_mic_structures(task=next_task, result=round3_result([second], "run_alias", aliases=aliases))
+    assert again["events"] == 0 and again["events_linked"] == 0 and again["events_replayed"] == 1
+
+
+def test_lot_aliases_apply_only_to_the_resolved_subject():
+    aliases = EntityAliases(["宁德时代", "宁德时代新能源科技股份有限公司", "CATL"], key="宁德时代")
+    summary = "宁德时代中标任丘智弘储能项目二标段，远景能源中标一标段。"
+    own = signature(catl(subject="宁德时代新能源科技股份有限公司", summary=summary),
+                    published_at=None, aliases=aliases)
+    other = signature(catl(subject="远景能源", summary=summary), published_at=None, aliases=aliases)
+    unknown = signature(catl(subject="未确认公司", summary=summary), published_at=None, aliases=aliases)
+    assert own.lot == "标段二" and other.lot == "标段一" and unknown.lot == ""
+    assert own.subject != other.subject and not own.compatible_with(other)
+
+
+@pytest.mark.parametrize("summary", [
+    "宁德时代中标任丘智弘储能项目二标段，CATL中标一标段。",
+    "宁德时代中标任丘智弘储能项目一标段和二标段。",
+])
+def test_conflicting_lots_for_known_aliases_remain_ambiguous(summary):
+    aliases = EntityAliases(["宁德时代", "宁德时代新能源科技股份有限公司", "CATL"], key="宁德时代")
+    ambiguous = signature(catl(subject="宁德时代新能源科技股份有限公司", summary=summary),
+                          published_at=None, aliases=aliases)
+    definite = signature(catl(), published_at=None, aliases=aliases)
+    assert ambiguous.lot == ""
+    assert not ambiguous.compatible_with(definite)  # missing lot is not a wildcard
