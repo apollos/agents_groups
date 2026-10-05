@@ -1046,6 +1046,9 @@ class Pipeline:
         return {
             "search_run_id": run_id,
             "target": profile.get("canonical_name", target_id),
+            # Known spellings of the target (profile aliases) so the consumer can treat
+            # "宁德时代新能源科技股份有限公司" and "宁德时代" as one event subject.
+            "target_aliases": [str(a) for a in (profile.get("aliases") or [])],
             "time_window": task_profile.get("time_window", ""),
             "log_file": stats.log_file,
             "collection_diagnostics": diagnostics,

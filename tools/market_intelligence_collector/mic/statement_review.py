@@ -53,7 +53,7 @@ ECONOMICS_CLAIM = re.compile(r"成本|毛利|盈利|利润率|经济性|溢价|�
 ECONOMICS_CUE = re.compile(r"成本|毛利|盈利|利润率|经济性|溢价|降本|cost|margin|profit", re.I)
 
 PRICE_WORD = re.compile(rf"价|{PRICE_UNIT}|元/")
-PRICE_ORDERING = re.compile(r"高于|低于|持平|倍|差距|相差|高出|低出|翻番")
+PRICE_ORDERING = re.compile(r"高于|低于|持平|倍|差距|相差|高出|低出|翻番|一半|更低|更高|较低|较高|偏低|偏高|相比|便宜|昂贵|之上|之下")
 PRICE_COMPARABILITY = re.compile(r"可比|参照|基准|对照|对比|比较|benchmark", re.I)
 
 # Hedged or already-held wording is a statement of what is unknown, not a claim.
@@ -65,6 +65,7 @@ HOLD_MATERIALITY = "订单对公司收入的贡献尚未核实。"
 HOLD_COMPETITION = "对目标公司竞争影响的判断缺少依据，待核查。"
 HOLD_ECONOMICS = "成本或盈利含义待核查。"
 HOLD_PRICE_BASIS = "同项目两个标段报价的供货范围与口径尚未核实，不作为可比基准。"
+HOLD_PRICE_COMPARISON = "与其他报价的比较缺少另一侧的数值依据，待核查。"
 
 
 def clauses(text):
@@ -75,8 +76,17 @@ def _bare(clause):
     return clause.strip().rstrip("。；;， ")
 
 
+def prices_with_units(text):
+    return {(m.group(1), m.group(2)) for m in re.finditer(rf"(?<![\d.])({NUMBER})\s*({PRICE_UNIT})", text or "")}
+
+
 def prices_in(text):
-    return {m.group(1) for m in re.finditer(rf"(?<![\d.])({NUMBER})\s*{PRICE_UNIT}", text or "")}
+    return {value for value, _unit in prices_with_units(text)}
+
+
+def price_unit_in(text):
+    units = {unit for _value, unit in prices_with_units(text)}
+    return units.pop() if len(units) == 1 else None
 
 
 def classify(clause, passage, *, price_basis_pending, combined):
@@ -150,11 +160,18 @@ class StatementReview:
         return (body + "；" if body else "") + "".join(tails), held
 
     def _price_comparison(self, item, path, statement):
-        """Both sides of a quoted-price comparison must be evidenced; attach limitation."""
+        """Both sides of a quoted-price comparison must be evidenced; attach limitation.
+
+        Codex review R3: "0.518元/Wh，显著低于钠电二标段" names the other side without
+        its number. An elided comparison has the same evidence requirement as an
+        explicit one — the other quotation is resolved from the document (unique
+        other price in the same unit) and attached, or the comparison clause is
+        moved to pending review while the quoted observation stays.
+        """
         if not PRICE_ORDERING.search(statement) and not PRICE_COMPARABILITY.search(statement):
             return
         quoted = prices_in(statement)
-        if len(quoted) < 2:
+        if not quoted:
             return
         own = item.evidence_locator.passage_id
         evidence, missing, touched = [], [], set()
@@ -172,6 +189,35 @@ class StatementReview:
             self._hold(path, "economics", statement, {"unsupported_prices": missing})
             self._set_statement(item, HOLD_ECONOMICS)
             return
+        if len(quoted) == 1 and PRICE_ORDERING.search(statement):
+            # Elided other side: resolve it from the document or hold the comparison clause.
+            unit = price_unit_in(statement)
+            others = {}
+            for pid, text in self.body.items():
+                for value, text_unit in prices_with_units(text):
+                    if value not in quoted and (unit is None or text_unit == unit):
+                        others.setdefault(value, pid)
+            if len(others) == 1:
+                (value, pid), = others.items()
+                evidence.append({"value": value, "passage_id": pid, "resolved_from": "elided_reference"})
+                touched.add(pid)
+            else:
+                kept, held = [], []
+                for clause in clauses(statement):
+                    (held if PRICE_ORDERING.search(clause) and not prices_in(clause) else kept).append(clause)
+                if not held:   # ordering word sits in the clause with the price: hold the wording only
+                    kept, held = [], [statement]
+                item.metrics["comparison_review"] = {
+                    "status": "pending_review", "original": statement,
+                    "reason": "other side of the comparison is not quoted and cannot be resolved uniquely",
+                    "held_clauses": [_bare(c) for c in held],
+                    "candidate_prices": sorted(others)}
+                self._hold(path, "price_basis" if self.price_basis_pids else "economics", statement,
+                           {"held_clauses": [_bare(c) for c in held], "candidates": sorted(others)})
+                body = "".join(kept).rstrip("。；;， ")
+                quote = next(iter(quoted)) + (unit or "")
+                self._set_statement(item, (body + "；" if body else f"来源报价{quote}；") + HOLD_PRICE_COMPARISON)
+                return
         if evidence:
             item.metrics["comparison_evidence"] = evidence
         if self.price_basis_pids:

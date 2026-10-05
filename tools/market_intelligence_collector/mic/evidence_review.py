@@ -54,7 +54,9 @@ def numeric_quote(text, value, unit):
     wanted = decimal(value)
     if wanted is None or not unit:
         return None
-    pattern = rf"(?<![\d.,+\-])({NUMBER})\s*{re.escape(unit)}(?![A-Za-z/／])"
+    # A unit must not continue into letters or a per-unit slash ("元" in "元/Wh"); a slash that
+    # starts a second quantity ("100MW/400MWh") does not change the first quantity's unit.
+    pattern = rf"(?<![\d.,+\-])({NUMBER})\s*{re.escape(unit)}(?![A-Za-z]|[/／](?!\d))"
     for match in re.finditer(pattern, text):
         if decimal(match.group(1)) == wanted:
             return match.group(0)

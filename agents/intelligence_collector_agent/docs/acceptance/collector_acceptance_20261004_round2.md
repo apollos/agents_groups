@@ -1,5 +1,7 @@
 # 情报收集员 Agent × MIC 验收第二轮：Codex 复核 F1–F3 修复（2026-10-04/05）
 
+> 后续：Codex 对本轮提交 `693b3df` 的复核提出 R1–R3（事件去重范围、功率/能量单位、省略式价格比较），修复与第三轮端到端见 `collector_acceptance_20261005_round3.md`。
+
 依据：`/home/yu/Downloads/codex_e2e_review_b62a210_20261004.md`（Codex 对提交 `b62a210` 的独立复核：工程链通过、**内容质量未通过**）。本轮在 `b62a210` 之上修复 F1/F2/F3，补齐 Q1–Q5 回归，并按复核 §5 在冻结版本上跑了新的隔离端到端任务。第一轮报告见 `collector_acceptance_20261004.md`。
 
 ## 首屏判定

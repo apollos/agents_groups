@@ -14,6 +14,7 @@ from pydantic import ValidationError
 
 from mic.schemas import BundleExtraction, Passage
 from mic.money import cny_amount_supported, normalize_bundle_amounts
+from mic.quantity_units import normalize_bundle_quantities, repair_metric_value_strings
 from mic.relation_evidence import quarantine_relations
 from mic.evidence_review import EvidenceReview, date_supported, quantity_supported
 
@@ -46,7 +47,7 @@ class BundleValidator:
         errors: list[str] = []
         warnings: list[str] = []
         try:
-            bundle = BundleExtraction.model_validate(raw)
+            bundle = BundleExtraction.model_validate(repair_metric_value_strings(raw, warnings))
         except ValidationError as exc:
             return ValidationReport(False, errors=[f"schema: {e['msg']}" for e in exc.errors()])
 
@@ -63,6 +64,7 @@ class BundleValidator:
         if review:
             review.separate_prices()
         normalize_bundle_amounts(bundle, passage_text, warnings)
+        normalize_bundle_quantities(bundle, passage_text, warnings)
         quality_reviews = review.apply() if review else []
         if strict:
             warnings[:] = [w.replace("; unchanged", "; held for review") for w in warnings]

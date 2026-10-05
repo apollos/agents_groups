@@ -4,7 +4,7 @@ from typing import Any
 
 from .adapters.common import ToolResult
 from .db import SQLiteStore, dumps_json, loads_json
-from .event_identity import EventSignature, signature
+from .event_identity import EntityAliases, EventSignature, signature
 from .ids import make_idempotency_key, new_id, stable_hash, utc_now_iso
 from .variable_mapper import CandidateVariableMapper
 
@@ -68,12 +68,18 @@ class ResultPersister:
         ticker = target.get("ticker")
         company_name = target.get("company_name")
         allowed_variables = [str(v) for v in (target.get("tracking_variables") or [])]
+        # Known spellings of the target company: the task's short name, MIC's profile canonical
+        # name (report "target") and profile aliases. Only these are treated as one subject.
+        aliases = EntityAliases(
+            [company_name, report.get("target"), *(report.get("target_aliases") or [])], key=company_name
+        )
         # Prefer the full event list (MIC >= V0.7.3); top_events keeps older reports working.
         # Coverage accounting must not lose minor events that miss the top-5 display cut.
         top_events = report.get("all_events") or report.get("top_events") or []
         with self.store.session() as con:
             retrieved_at = utc_now_iso()
-            counts["legacy_events_keyed"] = self._backfill_business_keys(con)
+            counts["legacy_events_keyed"] = self._backfill_business_keys(con, aliases)
+            counts["events_rekeyed"] = self._rekey_business_events(con, target_id, aliases)
             for ev in top_events:
                 summary = ev.get("summary") or ev.get("summary_cn") or str(ev)[:200]
                 event_type = ev.get("event_type") or "other"
@@ -88,7 +94,9 @@ class ResultPersister:
                 counts["source_event_rows"] += 1
                 # Exact-content key: identical replays of the same source row are no-ops.
                 idem = make_idempotency_key("event", target_id or ticker, event_type, event_date or "unknown", stable_hash(summary, 12))
-                sig = signature(ev, published_at=published_at)
+                sig = signature(ev, published_at=published_at, aliases=aliases)
+                # Keep how the row was identified (raw names → keys) with the stored payload.
+                ev = {**ev, "business_identity": sig.describe() if sig else {"business_key": None, "status": "unresolved"}}
                 # Linked rows live only in the source ledger; legacy rows only on the event.
                 existing = (con.execute("SELECT event_id FROM structured_event_sources WHERE content_key=?", (idem,)).fetchone()
                             or con.execute("SELECT event_id FROM structured_events WHERE idempotency_key=?", (idem,)).fetchone())
@@ -96,7 +104,7 @@ class ResultPersister:
                 if existing:
                     event_id = str(existing["event_id"])
                     counts["events_replayed"] += 1
-                elif sig is not None and (linked_to := self._matching_business_event(con, target_id, sig)) is not None:
+                elif sig is not None and (linked_to := self._matching_business_event(con, target_id, sig, aliases)) is not None:
                     # Same business event from another source / wording / type label:
                     # add evidence, do not create a new event.
                     event_id = linked_to
@@ -197,7 +205,30 @@ class ResultPersister:
         return counts
 
     @staticmethod
-    def _backfill_business_keys(con) -> int:
+    def _rekey_business_events(con, target_id: str | None, aliases: EntityAliases) -> int:
+        """Re-derive business keys of this target's events under the current identity rules.
+
+        Keys are a derived index, not data: when the rules change (alias resolution, project
+        head) rows keyed earlier must still be found by later copies. Updates business_key /
+        dedup_status only; never deletes, merges or rewrites events or their sources.
+        """
+        rows = con.execute(
+            "SELECT event_id, business_key, dedup_status, published_at, payload_json FROM structured_events "
+            "WHERE target_id IS ? AND dedup_status IS NOT NULL ORDER BY created_at, rowid",
+            (target_id,),
+        ).fetchall()
+        rekeyed = 0
+        for row in rows:
+            sig = signature(loads_json(row["payload_json"], {}), published_at=row["published_at"], aliases=aliases)
+            key, status = (sig.business_key, "keyed") if sig else (None, "unresolved")
+            if key != row["business_key"] or status != row["dedup_status"]:
+                con.execute("UPDATE structured_events SET business_key = ?, dedup_status = ? WHERE event_id = ?",
+                            (key, status, row["event_id"]))
+                rekeyed += 1
+        return rekeyed
+
+    @staticmethod
+    def _backfill_business_keys(con, aliases: EntityAliases) -> int:
         """Key pre-v9 event rows (dedup_status NULL) so re-extracted copies link to them.
 
         Additive only: never deletes or rewrites existing events; registers each legacy
@@ -211,7 +242,7 @@ class ResultPersister:
         keyed = 0
         for row in rows:
             payload = loads_json(row["payload_json"], {})
-            sig = signature(payload, published_at=row["published_at"])
+            sig = signature(payload, published_at=row["published_at"], aliases=aliases)
             con.execute(
                 "UPDATE structured_events SET business_key = ?, dedup_status = ? WHERE event_id = ?",
                 (sig.business_key if sig else None, "keyed" if sig else "unresolved", row["event_id"]),
@@ -234,7 +265,7 @@ class ResultPersister:
         return keyed
 
     @staticmethod
-    def _matching_business_event(con, target_id: str | None, sig: EventSignature) -> str | None:
+    def _matching_business_event(con, target_id: str | None, sig: EventSignature, aliases: EntityAliases) -> str | None:
         """Oldest existing business event this source row is evidence for, or None."""
         rows = con.execute(
             "SELECT event_id, payload_json, published_at FROM structured_events "
@@ -242,7 +273,7 @@ class ResultPersister:
             (target_id, sig.business_key),
         ).fetchall()
         for row in rows:
-            other = signature(loads_json(row["payload_json"], {}), published_at=row["published_at"])
+            other = signature(loads_json(row["payload_json"], {}), published_at=row["published_at"], aliases=aliases)
             if other is not None and sig.compatible_with(other):
                 return str(row["event_id"])
         return None

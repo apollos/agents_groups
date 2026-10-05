@@ -108,6 +108,9 @@ def test_browser_run_records_attempts_discovery_and_diagnostics(strict_cfg, monk
     disc = links[0]["metadata"]["discovery"]
     assert disc["engine"] == "bing" and disc["page_attempt_id"] in {r["id"] for r in rows}
     assert "relevance" in disc
+    # Target identity for consumers: profile canonical name + aliases (business-event subject resolution).
+    assert report["target"] == "宁德时代新能源科技股份有限公司"
+    assert "宁德时代" in report["target_aliases"] and "CATL" in report["target_aliases"]
     # legacy summary keys preserved + new counters
     s = report["summary"]
     assert "queries_executed" in s and s["queries_executed"] == s["queries_completed"] == 2

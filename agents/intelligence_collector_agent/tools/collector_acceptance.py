@@ -14,6 +14,10 @@ modified by this tool):
   next-cycle  on a throw-away copy of the databases, tick the runtime one day
               later: a new task must be planned and must not reuse the old run
   export      read-only content review export for a finished run
+  replay-events
+              replay a finished run's saved MIC event rows through the production
+              persister into an empty throw-away database and print the business
+              event -> source mapping (no collection, works on any workspace)
   summary     aggregate all runs of the workspace into one judgement block
 
 Budget per real run is fixed (section 3.2 of the handoff) and the batch budget
@@ -937,6 +941,67 @@ def next_cycle(root, run_dir):
     return out
 
 
+# --- replay-events ----------------------------------------------------------------
+
+def replay_events(root, run_dir, out=None):
+    """Replay a saved run's MIC event rows through the production persister into an
+    empty throw-away database and report the business-event -> source mapping.
+
+    Read-only on the workspace (any workspace, including a reviewer's): the only inputs
+    are ``run-1/mic-report.json`` (``all_events`` with per-event source blocks) and the
+    demand's target. No collection, no model call, no write to the reviewed databases.
+    """
+    root = root.expanduser().resolve()
+    run_dir = (root / run_dir).resolve() if not Path(run_dir).is_absolute() else Path(run_dir)
+    report = load(run_dir / "mic-report.json")
+    demand = load(root / "demand.json")
+    target = next(iter(demand.get("targets") or []), {})
+    events = report.get("all_events") or report.get("top_events") or []
+    from agent_trade_intel.adapters.common import ToolResult
+    from agent_trade_intel.db import SQLiteStore
+    from agent_trade_intel.persistence import ResultPersister
+    with tempfile.TemporaryDirectory(prefix="acceptance-replay-events-") as tmp:
+        store = SQLiteStore(Path(tmp) / "data.db")
+        store.init_schema()
+        task = {"task_id": "replay", "idempotency_key": f"replay:{report.get('search_run_id')}", "target": target}
+        tool = ToolResult(tool_name="market_intelligence_collector", operation="collect_intelligence", request={})
+        tool.status = "success"
+        tool.result = report
+        counts = ResultPersister(store).save_mic_structures(task=task, result=tool.finish())
+        with closing(sqlite3.connect(Path(tmp) / "data.db")) as con:
+            con.row_factory = sqlite3.Row
+            business = [dict(r) for r in con.execute(
+                "SELECT event_id, business_key, dedup_status, event_type, event_date, source_count, "
+                "source_corroboration_status, summary_cn, payload_json FROM structured_events ORDER BY rowid")]
+            ledger = [dict(r) for r in con.execute(
+                "SELECT event_id, link_status, source_link_id, source_domain, source_url, published_at, event_type, summary_cn "
+                "FROM structured_event_sources ORDER BY rowid")]
+    mapping = []
+    for ev in business:
+        payload = json.loads(ev.pop("payload_json") or "{}")
+        ev["business_identity"] = payload.get("business_identity")
+        ev["source_rows"] = [{k: r[k] for k in ("link_status", "source_link_id", "source_domain", "source_url", "published_at", "event_type", "summary_cn")}
+                             for r in ledger if r["event_id"] == ev["event_id"]]
+        mapping.append(ev)
+    result = {
+        "status": "EVENT_REPLAY",
+        "workspace": str(root), "run_dir": str(run_dir), "search_run_id": report.get("search_run_id"),
+        "target": {"target_id": target.get("target_id"), "company_name": target.get("company_name"),
+                   "report_target": report.get("target"), "report_target_aliases": report.get("target_aliases")},
+        "ledger": {"mic_event_rows": len(events), "source_rows_recorded": len(ledger),
+                   "independent_events": len(business),
+                   "new_events": sum(1 for r in ledger if r["link_status"] == "primary"),
+                   "linked_rows": sum(1 for r in ledger if r["link_status"] == "linked"),
+                   "replayed_rows": sum(1 for r in ledger if r["link_status"] == "replayed"),
+                   "unresolved_events": sum(1 for e in business if e["dedup_status"] == "unresolved")},
+        "persist_counts": counts,
+        "business_events": mapping,
+    }
+    if out:
+        save(Path(out).expanduser().resolve(), result)
+    return result
+
+
 # --- export / summary ----------------------------------------------------------
 
 def export(root, run_dir):
@@ -983,10 +1048,12 @@ def main():
     for name in ("run", "summary"):
         p = sub.add_parser(name)
         p.add_argument("--workspace", type=Path, required=True)
-    for name in ("redeliver", "next-cycle", "export"):
+    for name in ("redeliver", "next-cycle", "export", "replay-events"):
         p = sub.add_parser(name)
         p.add_argument("--workspace", type=Path, required=True)
         p.add_argument("--run-dir", default="run-1")
+        if name == "replay-events":
+            p.add_argument("--out", type=Path, default=None, help="also write the replay JSON here")
     args = parser.parse_args()
     os.umask(0o077)
     try:
@@ -1000,6 +1067,8 @@ def main():
             result = next_cycle(args.workspace, args.run_dir)
         elif args.command == "export":
             result = export(args.workspace, args.run_dir)
+        elif args.command == "replay-events":
+            result = replay_events(args.workspace, args.run_dir, args.out)
         else:
             result = summary(args.workspace)
     except KeyboardInterrupt:
@@ -1012,7 +1081,7 @@ def main():
         return 1
     emit(result)
     status = result.get("status", "")
-    return 0 if status.endswith(("READY", "COMPLETE", "PASS", "SUMMARY")) or args.command == "export" else 2
+    return 0 if status.endswith(("READY", "COMPLETE", "PASS", "SUMMARY", "REPLAY")) or args.command == "export" else 2
 
 
 if __name__ == "__main__":

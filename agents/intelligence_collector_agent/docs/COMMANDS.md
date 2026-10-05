@@ -65,5 +65,8 @@ python tools/collector_acceptance.py run        --workspace ~/.local/state/agent
 python tools/collector_acceptance.py redeliver  --workspace ... --run-dir .../run-1   # 同一消息重投，必须复用 run、零新模型调用
 python tools/collector_acceptance.py next-cycle --workspace ... --run-dir .../run-1   # 隔离副本 + 假时钟，不发真实请求；
 #   含"改写摘要/换类型/换来源 id 的同一事项在下一周期重存 → 0 新事件、全部 linked"与原样重放 → 全部 replayed 两项检查
+python tools/collector_acceptance.py replay-events --workspace ... --run-dir run-1 [--out replay.json]
+#   只读：把已保存 run 的 MIC 事件行（mic-report.json all_events）经生产 ResultPersister 写入空的临时库，
+#   输出业务事件 → 来源映射与账本计数；不采集、不调模型、不写被检工作区；可对任何（含复核方的）工作区运行
 python tools/collector_acceptance.py summary    --workspace ...
 ```
