@@ -11,7 +11,7 @@ MIC_STRUCTURED_FIELDS = (
 )
 
 
-def mic_output_summary(report: dict[str, Any]) -> dict[str, Any]:
+def mic_output_summary(report: dict[str, Any], ledger: dict[str, Any] | None = None) -> dict[str, Any]:
     """Describe actual structured output, independent of tool execution success.
 
     Briefs, questions, search hits and coverage gaps alone are not usable structured
@@ -30,6 +30,12 @@ def mic_output_summary(report: dict[str, Any]) -> dict[str, Any]:
     events = report.get("all_events") or report.get("top_events") or report.get("events") or []
     relations = report.get("top_relations") or []
     counts["events"] = max(counts["events"], len(events) if isinstance(events, list) else 0)
+    if report.get("event_resolution_protocol"):
+        # Pending identity decisions remain available for review but are not
+        # counted as confirmed business events / usable event-only output.
+        counts["events"] = sum(1 for e in events if (e.get("event_resolution") or {}).get("status") == "resolved")
+        if ledger is not None:
+            counts["events"] = sum(int(ledger.get(k, 0)) for k in ("events", "events_linked", "events_replayed"))
     counts["relations"] = max(counts["relations"], len(relations) if isinstance(relations, list) else 0)
     total = sum(counts.values())
     return {"output_status": "structured_output" if total else "no_structured_output",
@@ -140,12 +146,16 @@ class QualityGate:
             return out
         report = result.result if isinstance(result.result, dict) else {}
         summary = report.get("summary", {}) or {}
-        output = mic_output_summary(report)
+        ledger = (result.quality or {}).get("event_ledger")
+        output = mic_output_summary(report, ledger=ledger)
         usable = output["structured_output_count"] > 0
         links_read = int(summary.get("links_read") or 0)
         model_calls = int(summary.get("model_calls") or 0)
         cached = int(summary.get("cached_or_reused_results") or 0)
         issues: list[dict[str, Any]] = []
+        if ledger and ledger.get("events_pending"):
+            issues.append({"issue_type": "event_resolution_pending", "severity": "medium",
+                           "detail": f"{ledger['events_pending']} source events await semantic resolution"})
         if not usable:
             issues.append({"issue_type": "no_structured_output", "severity": "medium",
                            "detail": "tool completed but produced no structured facts, metrics, events or signals"})
@@ -186,6 +196,8 @@ class QualityGate:
             severity = "P2" if significant else "P3"
         out = {"decision": decision, "severity": severity, "usable": usable,
                "execution_status": execution_status, **output, "issues": issues}
+        if ledger is not None:
+            out["event_ledger"] = ledger
         if diag:
             out["collection_diagnostics"] = _diag_summary(diag)
         return out

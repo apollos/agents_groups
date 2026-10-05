@@ -283,6 +283,8 @@ class EventCardRow(Base):
     tracking_variables: Mapped[dict | None] = mapped_column(JSON)
     source_corroboration_status: Mapped[str | None] = mapped_column(String)
     evidence_locator: Mapped[dict | None] = mapped_column(JSON)
+    event_resolution: Mapped[dict | None] = mapped_column(JSON)
+    source_context: Mapped[dict | None] = mapped_column(JSON)
     confidence: Mapped[float | None] = mapped_column(Float)
     created_at: Mapped[datetime | None] = mapped_column(DateTime)
 

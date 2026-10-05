@@ -56,6 +56,9 @@ class ResultPersister:
 
     def save_mic_structures(self, *, task: dict[str, Any], result: ToolResult) -> dict[str, int]:
         report = result.result if isinstance(result.result, dict) else {}
+        if report.get("event_resolution_protocol"):
+            from .semantic_event_store import save
+            return save(self, task=task, report=report)
         # events            : independent business events created by this save (new事项)
         # events_linked     : source rows attached as evidence to an existing business event
         # events_replayed   : exact same source row seen again (idempotent replay)
@@ -214,7 +217,7 @@ class ResultPersister:
         """
         rows = con.execute(
             "SELECT event_id, business_key, dedup_status, published_at, payload_json FROM structured_events "
-            "WHERE target_id IS ? AND dedup_status IS NOT NULL ORDER BY created_at, rowid",
+            "WHERE target_id IS ? AND dedup_status IN ('keyed', 'unresolved') ORDER BY created_at, rowid",
             (target_id,),
         ).fetchall()
         rekeyed = 0

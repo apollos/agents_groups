@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from mic.config import MICConfig
 from mic.pipeline import Pipeline, RunStats
+from mic.event_resolution import build_context, finalize
 from mic.schemas import BundleExtraction, EventCard, SearchHit
 from mic.store.database import Database
 from mic.store.repository import Repository
@@ -50,6 +51,13 @@ def pipeline_without_services():
 
 def export_fresh(bundle, source):
     pipeline, stats = pipeline_without_services(), RunStats()
+    passages = [{'passage_id': e.evidence_locator.passage_id, 'text': '离线证据测试正文：' + e.summary}
+                for e in bundle.events]
+    for event, passage in zip(bundle.events, passages):
+        event.event_resolution = {'reviewed': True, 'verdict': 'new', 'reason': '空库的独立测试事项',
+                                 'current_evidence': [{'passage_id': passage['passage_id'], 'quote': passage['text']}],
+                                 'comparisons': []}
+    finalize(bundle, build_context(None, []), passages, run_id='offline-evidence-replay', link_id=bundle.source_link_id)
     pipeline._tally(stats, bundle, source_metadata=source)
     report = pipeline._summary('offline-evidence-replay', 'company_300750', {}, stats)
     report['replay_context'] = {'mode':'offline_saved_bundle', 'new_model_calls':0}
@@ -101,7 +109,10 @@ def through_agent(report, root):
             outcomes.append(agent.run_once(topics=['intelligence.collection']))
         count = provider.call_count
     stored = IntelligenceReader(agent.data_store,agent.bus_store,agent.state_store).read_recent_events(target_id='company_300750')['items']
-    return {'events':stored,'outcomes':outcomes,'saved_report_deliveries':count,'new_model_calls':0}
+    from agent_trade_intel.db import loads_json
+    with agent.data_store.session() as con:
+        pending = [loads_json(r['payload_json'], {}) for r in con.execute('SELECT payload_json FROM pending_event_resolutions')]
+    return {'events':stored,'pending':pending,'outcomes':outcomes,'saved_report_deliveries':count,'new_model_calls':0}
 
 
 def evidence_roundtrip(expected, actual):
@@ -163,10 +174,14 @@ class EventEvidenceExportTests(unittest.TestCase):
                              (expected[event['summary']].get('event_date') or '').split('T')[0])
         self.assertEqual(cloned['events'],2)
 
-    def test_cache_agent_queue_and_reader_roundtrip(self):
+    def test_cache_without_fresh_comparison_keeps_evidence_pending(self):
         report,_=export_cached(self.bundle,SOURCE,self.root/'cache')
         result=through_agent(report,self.root/'agent')
-        self.assertTrue(evidence_roundtrip(report['all_events'],result['events']))
+        self.assertEqual(result['events'], [])
+        self.assertEqual(len(result['pending']), len(report['all_events']))
+        for expected, actual in zip(report['all_events'], result['pending']):
+            for field in EVIDENCE_FIELDS:
+                self.assertEqual(expected.get(field), actual.get(field))
         self.assertEqual(result['saved_report_deliveries'],1)
 
     def test_legacy_agent_report_keeps_unknown_evidence_unknown(self):

@@ -30,7 +30,8 @@ class Database:
         """
         # Add nullable columns only: legacy rows keep unknown evidence as NULL.
         additions = {
-            "event_card": {"tracking_variables": "JSON", "evidence_locator": "JSON"},
+            "event_card": {"tracking_variables": "JSON", "evidence_locator": "JSON",
+                           "event_resolution": "JSON", "source_context": "JSON"},
             "metric_observation": {"evidence_locator": "JSON"},
             "analysis_brief": {"uncertainty": "TEXT"},
             # Browser-route fetch/scope diagnostics; legacy rows stay NULL.

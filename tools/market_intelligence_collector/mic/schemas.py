@@ -110,6 +110,8 @@ class EventCard(BaseModel):
     source_corroboration_status: str = "single_source"
     evidence_locator: EvidenceLocator = Field(default_factory=EvidenceLocator)
     confidence: float = 0.0
+    event_resolution: dict[str, Any] = Field(default_factory=dict)
+    source_context: list[dict[str, Any]] = Field(default_factory=list)
     # Which of target_profile.tracking_variables this event covers; empty when none fits.
     tracking_variables: list[TrackingVariableEvidence] = Field(default_factory=list)
 

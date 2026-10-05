@@ -261,6 +261,17 @@ class MultiModelMerger:
 
     def _merge_events(self, contributions: list[ModelContribution]
                       ) -> tuple[list[EventCard], list[dict]]:
+        if any(e.event_resolution for c in contributions for e in c.bundle.events):
+            # Semantic extraction must not first lose different projects/lots to
+            # the legacy (type, counterparty) bucket. Preserve source candidates;
+            # a joint comparison is required before multiple extractions confirm
+            # new business events. Exact identical output rows can be deduplicated.
+            distinct = {}
+            for c in contributions:
+                for e in c.bundle.events:
+                    key = e.model_dump_json()
+                    distinct.setdefault(key, e.model_copy(deep=True))
+            return list(distinct.values()), []
         clusters: dict[str, list[tuple[EventCard, float]]] = {}
         for c in contributions:
             for e in c.bundle.events:

@@ -552,9 +552,13 @@ def audit(root, manifest, steps):
         # must account for every source row as primary / linked / replayed.
         ledger_rows = rows(data, "SELECT content_key,event_id,link_status,source_domain FROM structured_event_sources WHERE source_run_id=?",
                            (report.get("search_run_id"),))
+        pending = rows(data, "SELECT content_key,reason,payload_json FROM pending_event_resolutions WHERE source_run_id=?",
+                       (report.get("search_run_id"),), ("payload_json",)) if report.get("event_resolution_protocol") else []
         ledger = {"mic_event_rows": len(expected), "source_rows_recorded": len(ledger_rows),
+                  "pending_rows": len(pending),
                   "independent_events": len({r["event_id"] for r in ledger_rows}),
-                  "new_events": sum(1 for r in ledger_rows if r["link_status"] == "primary"),
+                  "new_events": sum(1 for r in ledger_rows if r["link_status"] in ("primary", "follow_up")),
+                  "follow_up_rows": sum(1 for r in ledger_rows if r["link_status"] == "follow_up"),
                   "linked_rows": sum(1 for r in ledger_rows if r["link_status"] == "linked"),
                   "replayed_rows": sum(1 for r in ledger_rows if r["link_status"] == "replayed"),
                   "events_created_by_this_run": len(events)}
@@ -580,7 +584,7 @@ def audit(root, manifest, steps):
             "formal_records_passed_date_gate": bool(mic) and not mic["date_gate_violations"] and not mic["missing_publication_time"],
             "all_model_requests_real_and_64k": bool(mic and mic["model_checks"]["all_requests_real"]
                                                    and mic["model_checks"]["all_requests_capped_at_65536"]) if (mic and mic["model_requests"]) else None,
-            "agent_event_ledger_consistent": (ledger["source_rows_recorded"] == ledger["mic_event_rows"]
+            "agent_event_ledger_consistent": (ledger["source_rows_recorded"] + ledger["pending_rows"] == ledger["mic_event_rows"]
                                               and ledger["new_events"] + ledger["linked_rows"] + ledger["replayed_rows"] == ledger["source_rows_recorded"]
                                               and ledger["new_events"] == ledger["events_created_by_this_run"]) if expected else None,
             "browser_cleanup_complete": diag.get("cleanup", {}).get("cleanup") == "complete",
@@ -593,7 +597,9 @@ def audit(root, manifest, steps):
         execution_verified = all(checks[k] for k in engineering) and checks["all_model_requests_real_and_64k"] is not False \
             and checks["agent_event_ledger_consistent"] is not False
         return {"execution_verified": execution_verified, "usable": quality.get("usable") is True,
-                "business_positive_candidate": execution_verified and quality.get("usable") is True and bool(mic and mic["formal_total"]),
+                "business_positive_candidate": execution_verified and quality.get("usable") is True and bool(mic and mic["formal_total"]) and not pending,
+                "semantic_event_review_required": bool(report.get("event_resolution_protocol")),
+                "pending_event_resolutions": pending,
                 "real_model_used": isinstance(sent, int) and sent > 0,
                 "checks": checks, "search_run_id": report.get("search_run_id"),
                 "ids": {"demand_id": demand_id, "task_id": steps.get("task_id"), "task_idempotency_key": steps.get("task_idempotency_key"),
@@ -635,7 +641,8 @@ def content_review(root, report):
             for key in FORMAL:
                 for rec in rows(db, f"SELECT * FROM {TABLES[key]} WHERE source_link_id=? ORDER BY rowid", (lid,),
                                 ("entities", "metrics", "evidence_locator", "scope", "comparison", "impact_channels", "impact",
-                                 "tracking_variables", "subject_entity", "object_entity", "evidence")):
+                                 "tracking_variables", "subject_entity", "object_entity", "evidence",
+                                 "event_resolution", "source_context")):
                     formal.append({"record_type": key, "record_id": rec.get("id"), "merged_analysis_id": rec.get("merged_analysis_id"),
                                    "source_link_id": lid, "source": {"url": src["url"], "title": src["title"], "source_type": src["source_type"],
                                                                      "published_at": retrieved.get("extracted_publish_time"),
@@ -928,6 +935,15 @@ def next_cycle(root, run_dir):
                   "new_task_would_not_reuse_old_run": bool(new_task) and agent._successful_mic_run(new_task) is None,
                   "old_task_key_still_maps_to_old_run": agent._successful_mic_run({"idempotency_key": old_key}) == result["ids"]["agent_run_id"],
                   "same_task_key_for_same_target": bool(new_task) and _mic_task_key(new_task, TARGET_ID) is not None}
+        if old_report.get("event_resolution_protocol"):
+            # Changing summaries invalidates the original model decision. This
+            # offline command tests scheduling/replay, not a fresh model judgement.
+            checks.pop("same_facts_rewritten_next_cycle_add_no_events")
+            checks["rewritten_without_fresh_comparison_stays_pending"] = (
+                events_after_next == events_before and resaved_next.get("events_pending") == len(old_events))
+            checks["same_facts_exact_replay_is_noop"] = (events_after == events_before
+                and resaved.get("events", 0) == resaved.get("events_linked", 0) == 0
+                and resaved.get("events_replayed", 0) + resaved.get("events_pending", 0) == len(old_events))
         out = {"status": "ACCEPTANCE_NEXT_CYCLE_PASS" if all(checks.values()) else "ACCEPTANCE_NEXT_CYCLE_FAIL",
                "run_dir": str(run_dir), "reference_now": started, "simulated_next_now": tomorrow,
                "same_day_now": same_day_now, "same_day_tick": same_day, "same_day_plans": same_day_plans,
@@ -935,6 +951,7 @@ def next_cycle(root, run_dir):
                "next_day_tick": next_day, "plan": plan,
                "new_task": {k: new_task.get(k) for k in ("task_id", "idempotency_key", "as_of", "task_type")} if new_task else None,
                "old_task_idempotency_key": old_key, "event_ledger": event_ledger, "checks": checks,
+               "live_semantic_comparison_tested": False,
                "effect": {"databases": "throw-away copy only", "new_model_calls": 0, "browser_launch": False,
                           "workspace_databases_modified": False}}
     save(run_dir / "next-cycle.json", out)
@@ -976,10 +993,12 @@ def replay_events(root, run_dir, out=None):
             ledger = [dict(r) for r in con.execute(
                 "SELECT event_id, link_status, source_link_id, source_domain, source_url, published_at, event_type, summary_cn "
                 "FROM structured_event_sources ORDER BY rowid")]
+            pending = [dict(r) for r in con.execute("SELECT reason,payload_json FROM pending_event_resolutions")]
     mapping = []
     for ev in business:
         payload = json.loads(ev.pop("payload_json") or "{}")
         ev["business_identity"] = payload.get("business_identity")
+        ev["event_resolution"] = payload.get("event_resolution")
         ev["source_rows"] = [{k: r[k] for k in ("link_status", "source_link_id", "source_domain", "source_url", "published_at", "event_type", "summary_cn")}
                              for r in ledger if r["event_id"] == ev["event_id"]]
         mapping.append(ev)
@@ -990,11 +1009,13 @@ def replay_events(root, run_dir, out=None):
                    "report_target": report.get("target"), "report_target_aliases": report.get("target_aliases")},
         "ledger": {"mic_event_rows": len(events), "source_rows_recorded": len(ledger),
                    "independent_events": len(business),
+                   "pending_rows": len(pending),
                    "new_events": sum(1 for r in ledger if r["link_status"] == "primary"),
                    "linked_rows": sum(1 for r in ledger if r["link_status"] == "linked"),
                    "replayed_rows": sum(1 for r in ledger if r["link_status"] == "replayed"),
                    "unresolved_events": sum(1 for e in business if e["dedup_status"] == "unresolved")},
         "persist_counts": counts,
+        "pending_event_resolutions": pending,
         "business_events": mapping,
     }
     if out:

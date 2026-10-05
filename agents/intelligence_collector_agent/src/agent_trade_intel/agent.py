@@ -400,6 +400,8 @@ class IntelligenceCollectorAgent:
             return {"status": previous.status, "run_id": existing_run, "reused": True,
                     "quality": q, "usable": bool(q["usable"]), "output_status": q.get("output_status")}
         task_profile = _mic_task_profile(task, self.config.raw, default_focus=target.get("focus"))
+        from .semantic_event_store import history
+        task_profile["event_resolution_history"] = history(self.data_store, target_id)
         # One supervised attempt per delivery (design 8.3): a stable task key, an attempt token
         # and a unique active attempt per task. A verified-live leftover worker from a run whose
         # cleanup failed blocks new runs on the shared browser profile.
@@ -474,6 +476,11 @@ class IntelligenceCollectorAgent:
                               "attempt_id": attempt_id, "run_dir": run_dir},
                              parent_ticket_id=ticket["ticket_id"], correlation_id=ticket.get("correlation_id"))
         saved = self.persister.save_mic_structures(task=task, result=result) if result.status == "success" else {"events": 0, "coverage_gaps": 0}
+        result.quality["event_ledger"] = {k: saved.get(k, 0) for k in (
+            "source_event_rows", "events", "events_linked", "events_replayed", "events_unresolved",
+            "events_pending", "events_follow_up")}
+        q = self.quality.evaluate(result, context={"priority": ticket.get("priority"), "target": target})
+        result.quality.update(q)
         if q["severity"] in {"P0", "P1", "P2"}:
             self._emit_data_quality(
                 severity=q["severity"],
@@ -485,8 +492,8 @@ class IntelligenceCollectorAgent:
             )
         # Ledger counts (source rows / linked evidence) ride along in the result quality so
         # consumers never read "N new events" when most rows were copies of known events.
-        result.quality["event_ledger"] = {k: saved.get(k, 0) for k in (
-            "source_event_rows", "events", "events_linked", "events_replayed", "events_unresolved")}
+        with self.data_store.session() as con:
+            con.execute("UPDATE collection_runs SET quality_json=? WHERE run_id=?", (dumps_json(result.quality), run_id))
         if saved.get("events"):
             self._emit_event_summary(ticket=ticket, target=target, count=saved["events"], run_id=run_id)
         if saved.get("coverage_gaps"):

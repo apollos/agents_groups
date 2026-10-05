@@ -306,6 +306,19 @@ CREATE TABLE IF NOT EXISTS structured_event_sources (
 CREATE INDEX IF NOT EXISTS idx_structured_event_sources_event ON structured_event_sources(event_id);
 CREATE INDEX IF NOT EXISTS idx_structured_event_sources_run ON structured_event_sources(source_run_id);
 
+CREATE TABLE IF NOT EXISTS pending_event_resolutions (
+  content_key TEXT PRIMARY KEY, target_id TEXT, source_run_id TEXT,
+  reason TEXT NOT NULL, payload_json TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS event_resolution_refs (
+  ref TEXT NOT NULL, target_id TEXT NOT NULL, event_id TEXT NOT NULL,
+  fingerprint TEXT NOT NULL, PRIMARY KEY(ref, target_id)
+);
+CREATE TABLE IF NOT EXISTS event_progress_links (
+  event_id TEXT PRIMARY KEY, predecessor_event_id TEXT NOT NULL, reason TEXT
+);
+
 CREATE TABLE IF NOT EXISTS market_features (
   feature_id TEXT PRIMARY KEY,
   schema_version TEXT NOT NULL DEFAULT 'market_feature.v1',

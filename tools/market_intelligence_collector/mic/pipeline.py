@@ -16,6 +16,7 @@ from typing import Any
 from mic.browser.contracts import SearchBatch, SearchRequest
 from mic.budget import DEFAULT_LIMITS, BudgetExceeded, RunBudget, merge_limits
 from mic.config import MICConfig, load_config
+from mic.event_resolution import PROTOCOL, build_context, finalize
 from mic.logging_utils import get_logger, setup_logging
 from mic.merge import ModelContribution, MultiModelMerger
 from mic.modeling.adapter import ModelRegistry
@@ -649,6 +650,8 @@ class Pipeline:
                 "publish_time": read.publish_time,
                 "query_family": hit.query_family,
             }
+            resolution_context = build_context(task_profile.get("event_resolution_history"), stats.top_events)
+            source_metadata["event_resolution_context"] = resolution_context
             materiality = tri.read_priority
             self._check_alive(context)  # before any model request for this link
             link_result = call_planner.run_for_link(
@@ -702,6 +705,8 @@ class Pipeline:
                         self._model_feedback)
 
             bundle = merge_result.bundle
+            finalize(bundle, resolution_context, read.passages, run_id=run_id, link_id=link_id,
+                     multiple_extractions=len(merge_result.model_outputs) > 1)
             stats.output_decisions.append({"source_link_id": link_id,
                                            **merge_result.decision_diagnostics})
 
@@ -1045,6 +1050,7 @@ class Pipeline:
                        if context is not None else None)
         return {
             "search_run_id": run_id,
+            "event_resolution_protocol": PROTOCOL,
             "target": profile.get("canonical_name", target_id),
             # Known spellings of the target (profile aliases) so the consumer can treat
             # "宁德时代新能源科技股份有限公司" and "宁德时代" as one event subject.
