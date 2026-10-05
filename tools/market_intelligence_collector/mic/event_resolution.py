@@ -126,11 +126,13 @@ def finalize(bundle, context: dict, passages, *, run_id: str, link_id: str,
                             reason="multiple_extractions_require_joint_comparison")
         decision["ref"] = f"mic:{run_id}:{link_id}:{index}"
         event.event_resolution = decision
-        # Keep a bounded evidence window, including the article's introductory
-        # project context: a lot paragraph often says only "the same project".
+        # Keep a bounded evidence window plus title and opening body context.
+        # Reader assigns p0 to the first body paragraph; index 0 may be the
+        # title. Use those structural IDs, not list position or inferred roles.
         cited = event.evidence_locator.passage_id
         at = next((i for i, p in enumerate(full) if p.get("passage_id") == cited), 0)
-        indices = sorted({0, max(0, at - 1), at, min(len(full) - 1, at + 1)})
+        indices = {max(0, at - 1), at, min(len(full) - 1, at + 1)}
+        indices.update(i for i, p in enumerate(full) if p.get("passage_id") in {"title", "p0"})
         event.source_context = [{"passage_id": full[i]["passage_id"], "text": full[i]["text"][:1500]}
-                                for i in indices if 0 <= i < len(full)]
+                                for i in sorted(indices) if 0 <= i < len(full)]
         decision["event_fingerprint"] = fingerprint({**event.model_dump(mode="json"), "source_link_id": link_id})

@@ -23,6 +23,7 @@ def test_existing_model_calls_carry_context_then_persist_decisions(config, monke
     from agent_trade_intel.adapters.common import ToolResult
     from agent_trade_intel.db import SQLiteStore
     from agent_trade_intel.persistence import ResultPersister
+    from agent_trade_intel.semantic_event_store import history
 
     config.raw["search_providers"]["active"] = "mock"
     config.raw["call_governance"]["batching"]["serp_batch_triage"] = False
@@ -44,7 +45,8 @@ def test_existing_model_calls_carry_context_then_persist_decisions(config, monke
         original = originals[0 if url == urls[0] else 2]
         return ReadResult(source_link_id=link_id, read_status="read", content_hash="body-" + str(urls.index(url)),
                           title="任丘智弘储能系统采购中标", http_status=200, content_length=241,
-                          passages=[Passage(**p, section="正文") for p in original["source_context"]])
+                          passages=[Passage(passage_id="title", section="标题", text="任丘智弘储能系统采购中标"),
+                                    *[Passage(**p, section="正文") for p in original["source_context"]]])
 
     monkeypatch.setattr(pipe.reader, "read", read)
     requests = []
@@ -85,11 +87,15 @@ def test_existing_model_calls_carry_context_then_persist_decisions(config, monke
     assert requests[0]["context"]["candidates"] == []
     if budget == 3:
         assert len(requests[1]["context"]["candidates"]) == 2
-        assert "智弘" in requests[1]["context"]["candidates"][0]["passages"][0]["text"]
+        intro = next(p["text"] for p in originals[0]["source_context"] if p["passage_id"] == "p0")
+        for candidate in requests[1]["context"]["candidates"]:
+            assert {p["passage_id"]: p["text"] for p in candidate["passages"]}["p0"] == intro
     assert all(e["event_resolution"]["status"] == "resolved" for e in report["all_events"])
     stored = pipe.repo.get_recent_events("company_300750")
     assert len(stored) == len(report["all_events"])
     assert all(e["source_context"] and e["event_resolution"]["event_fingerprint"] for e in stored)
+    assert all({"title", "p0", e["evidence_locator"]["passage_id"]}
+               <= {p["passage_id"] for p in e["source_context"]} for e in stored)
     store = SQLiteStore(tmp_path / "agent.db")
     store.init_schema()
     result = ToolResult(tool_name="market_intelligence_collector", operation="collect_intelligence", request={},
@@ -97,3 +103,7 @@ def test_existing_model_calls_carry_context_then_persist_decisions(config, monke
     counts = ResultPersister(store).save_mic_structures(task={"target": {"target_id": "company_300750",
         "company_name": "宁德时代"}}, result=result)
     assert (counts["events"], counts["events_linked"], counts["events_pending"]) == ((2, 0, 0) if budget == 1 else (3, 2, 0))
+    next_cycle = history(store, "company_300750")
+    assert len(next_cycle["candidates"]) == counts["events"]
+    assert all({"title", "p0"} <= {p["passage_id"] for p in c["passages"]}
+               for c in next_cycle["candidates"])

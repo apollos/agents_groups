@@ -1,0 +1,66 @@
+{
+  "search_run_id": "run_88f8aa20b573",
+  "provenance": "Original title/body/table excerpts retained in the uploaded content-review.json; p0 recovered from formal-record evidence. No model or network calls.",
+  "samples": [
+    {
+      "source_link_id": "link_8f0eb4539b1a",
+      "url": "https://www.energytrend.cn/news/20260915-148614.html",
+      "evidence_locator": {
+        "passage_id": "p2",
+        "section": null,
+        "table_id": null,
+        "excerpt": "二标段为钠电池储能系统，10MW/40MWh钠离子储能系统，宁德时代中标价为4141.622万元，合单价1.035元/Wh。"
+      },
+      "passages": [
+        {
+          "passage_id": "title",
+          "text": "远景能源、宁德时代中标！河北100MW/400MWh储能系统采购中标公示"
+        },
+        {
+          "passage_id": "p0",
+          "text": "2026年9月15日，河北任丘智弘100MW/400MWh新型技术路线磷酸铁锂电池+钠电池独立储能试点项目储能系统设备采购中标结果公示。"
+        },
+        {
+          "passage_id": "p1",
+          "text": "项目共两个标段，一标段为磷酸铁锂电池储能系统，30MW/120MWh大容量磷酸铁锂+60MW/240MWh长寿命磷酸铁锂，远景能源中标价为19461.6万元，合单价0.518元/Wh；"
+        },
+        {
+          "passage_id": "p2",
+          "text": "二标段为钠电池储能系统，10MW/40MWh钠离子储能系统，宁德时代中标价为4141.622万元，合单价1.035元/Wh。"
+        },
+        {
+          "passage_id": "t1",
+          "text": "远景能源、宁德时代中标！河北100MW/400MWh储能系统采购中标公示\n作者: | 发布日期: 2026 年 09 月 15 日 14:41 | 分类: 产业资讯 Edit"
+        }
+      ]
+    },
+    {
+      "source_link_id": "link_eb0470df949f",
+      "url": "https://news.bjx.com.cn/html/20260915/1512829.shtml",
+      "evidence_locator": {
+        "passage_id": "p2",
+        "section": null,
+        "table_id": null,
+        "excerpt": "二标段为钠电池储能系统，10MW/40MWh钠离子储能系统，宁德时代中标价为4141.622万元，合单价1.035元/Wh。"
+      },
+      "passages": [
+        {
+          "passage_id": "title",
+          "text": "远景能源、宁德时代中标！河北100MW/400MWh储能系统采购中标公示-北极星储能网"
+        },
+        {
+          "passage_id": "p0",
+          "text": "北极星储能网讯：2026年9月15日，河北任丘智弘100MW/400MWh新型技术路线磷酸铁锂电池+钠电池独立储能试点项目 储能系统 设备采购中标结果公示。"
+        },
+        {
+          "passage_id": "p1",
+          "text": "项目共两个标段，一标段为磷酸铁锂电池储能系统，30MW/120MWh大容量磷酸铁锂+60MW/240MWh长寿命磷酸铁锂，远景能源中标价为19461.6万元，合单价0.518元/Wh；"
+        },
+        {
+          "passage_id": "p2",
+          "text": "二标段为钠电池储能系统，10MW/40MWh钠离子储能系统，宁德时代中标价为4141.622万元，合单价1.035元/Wh。"
+        }
+      ]
+    }
+  ]
+}
