@@ -1,0 +1,214 @@
+{
+  "registered": {
+    "status": "registered",
+    "demand_id": "collector_acceptance_catl_20261005-v6",
+    "version": 1,
+    "validation_status": "passed",
+    "message_id": "msg_7bedaf53d2804ebfac14"
+  },
+  "demand_start": {
+    "status": "ok",
+    "demand_id": "collector_acceptance_catl_20261005-v6",
+    "old_status": "suspended",
+    "new_status": "active",
+    "version": 2,
+    "message_id": "msg_abc2ee1fae8447c4a643"
+  },
+  "runtime": {
+    "status": "ok",
+    "market_phase": "non_trading_day",
+    "created": [
+      "ticket_82be2e3f175c4553af00",
+      "msg_4bb90a3350c04506b346"
+    ],
+    "demand_events_consumed": [
+      {
+        "topic": "demand.changed",
+        "payload": {
+          "action": "resume",
+          "demand_id": "collector_acceptance_catl_20261005-v6",
+          "new_status": "active",
+          "old_status": "suspended",
+          "version": 2
+        }
+      },
+      {
+        "topic": "demand.registered",
+        "payload": {
+          "demand_id": "collector_acceptance_catl_20261005-v6",
+          "status": "suspended",
+          "version": 1
+        }
+      }
+    ],
+    "capability_check": null,
+    "expired_messages": 0,
+    "requeued_expired_leases": 0
+  },
+  "plan": {
+    "status": "processed",
+    "message_id": "msg_4bb90a3350c04506b346",
+    "result": {
+      "status": "planned",
+      "task_count": 1,
+      "created": [
+        "ticket_eae4b950672b4215b21b",
+        "msg_347501aae31245169223"
+      ]
+    }
+  },
+  "task_id": "task_a5b57158402d41ebbc17",
+  "task_idempotency_key": "collection_task:collector_acceptance_catl_20261005-v6:mic_deep_collect:company_300750:2026-10-05",
+  "collect_message_id": "msg_347501aae31245169223",
+  "collect_ticket_id": "ticket_eae4b950672b4215b21b",
+  "collect": {
+    "status": "processed",
+    "message_id": "msg_347501aae31245169223",
+    "result": {
+      "status": "success",
+      "run_id": "run_17317b65e5584628a604",
+      "quality": {
+        "decision": "accept_degraded",
+        "severity": "P2",
+        "usable": true,
+        "execution_status": "completed",
+        "output_status": "structured_output",
+        "structured_output_count": 10,
+        "structured_counts": {
+          "facts": 5,
+          "metrics": 4,
+          "events": 1,
+          "relations": 0,
+          "risks": 0,
+          "catalysts": 0,
+          "customer_supplier_signals": 0,
+          "price_cost_margin_signals": 0,
+          "policy_signals": 0
+        },
+        "issues": [
+          {
+            "issue_type": "low_authority_sources_only",
+            "severity": "medium",
+            "detail": "no exchange/regulator/official corroboration among event sources"
+          }
+        ],
+        "collection_diagnostics": {
+          "execution_status": "completed",
+          "search_status": "ok",
+          "search_reason": null,
+          "read_status": "partial",
+          "output_status": "ok",
+          "usable": true,
+          "stop_reason": null,
+          "budget_used": {
+            "queries_attempted": 2,
+            "queries_completed": 2,
+            "search_page_attempts": 2,
+            "search_hits": 20,
+            "links_selected_for_read": 6,
+            "http_read_attempts": 5,
+            "browser_read_attempts": 1,
+            "authenticated_retries": 0,
+            "model_calls": 2,
+            "gateway_requests_sent": 2
+          },
+          "elapsed_seconds": 79.47,
+          "provider": "browser(bing)",
+          "browser_run": true,
+          "attempt_id": "attempt_fa1f8c94857c4156ac99",
+          "search_outcomes": {
+            "completed": 2
+          },
+          "read_failures": {
+            "anti_bot_page": 1,
+            "article_scope_unresolved": 1
+          },
+          "page_attempts": {
+            "search_page_attempts": 2,
+            "by_status": {
+              "ok": 2
+            },
+            "by_engine": {
+              "bing": 2
+            },
+            "interrupted": 0
+          },
+          "auth_context": {
+            "auth_mode": "anonymous",
+            "auth_context_id": null
+          },
+          "cleanup": {
+            "browser_started": true,
+            "closed_by_user": false,
+            "navigations": 3,
+            "pages_opened": 3,
+            "pages_closed": 3,
+            "cookies_injected": 0,
+            "cleanup": "complete",
+            "problems": []
+          }
+        }
+      },
+      "saved": {
+        "events": 1,
+        "events_linked": 0,
+        "events_replayed": 0,
+        "events_unresolved": 0,
+        "source_event_rows": 1,
+        "coverage_gaps": 0,
+        "event_variable_links": 0,
+        "legacy_events_keyed": 0
+      },
+      "usable": true,
+      "output_status": "structured_output",
+      "attempt_id": "attempt_fa1f8c94857c4156ac99"
+    }
+  },
+  "supervisor": {
+    "status": "completed",
+    "attempt_id": "attempt_fa1f8c94857c4156ac99",
+    "run_dir": "/home/yu/.local/state/agents_groups/collector-acceptance-20261005-v6/mic_runs/attempt_fa1f8c94857c4156ac99",
+    "exit_code": 0,
+    "elapsed_seconds": 80.25,
+    "cleanup": "complete",
+    "worker_pid": 304316,
+    "budget_used": {
+      "queries_attempted": 2,
+      "queries_completed": 2,
+      "search_page_attempts": 2,
+      "search_hits": 20,
+      "links_selected_for_read": 6,
+      "http_read_attempts": 5,
+      "browser_read_attempts": 1,
+      "authenticated_retries": 0,
+      "model_calls": 2,
+      "gateway_requests_sent": 2
+    },
+    "gateway_requests_sent": 2,
+    "error_code": null
+  },
+  "demand_stop": {
+    "status": "ok",
+    "demand_id": "collector_acceptance_catl_20261005-v6",
+    "old_status": "active",
+    "new_status": "suspended",
+    "version": 3,
+    "message_id": "msg_fa5b260154044295b392"
+  },
+  "stop_cleanup": [
+    {
+      "topic": "demand.changed",
+      "payload": {
+        "action": "suspend",
+        "demand_id": "collector_acceptance_catl_20261005-v6",
+        "new_status": "suspended",
+        "old_status": "active",
+        "version": 3
+      },
+      "cancelled": {
+        "tickets": [],
+        "messages": []
+      }
+    }
+  ]
+}

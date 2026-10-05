@@ -1,0 +1,80 @@
+{
+  "schema": "collector-acceptance/1",
+  "label": "20261005-v6",
+  "created_at": "2026-10-05T08:28:18.853033+08:00",
+  "repo": "/home/yu/Workspace/agents_groups",
+  "python": "/home/yu/.venv/mydev/bin/python",
+  "code": {
+    "branch": "main",
+    "head": "693b3dfb9977c2c2ed89362bc29426621b817526",
+    "dirty": true,
+    "tracked_diff_sha256": "4af5468a0cd6fd05d2ca9ed64b23e6bed7edb9e881bcf2bac7188f8ffeb6d1bf",
+    "untracked_python_sha256": "edadc720f8146c435b446029598374b295c471dc9a1b253103c3c675fafe1ef7",
+    "status_porcelain": [
+      "M agents/intelligence_collector_agent/src/agent_trade_intel/event_identity.py",
+      " M agents/intelligence_collector_agent/tests/test_business_event_identity.py",
+      " M tools/market_intelligence_collector/mic/evidence_review.py",
+      " M tools/market_intelligence_collector/mic/statement_review.py",
+      " M tools/market_intelligence_collector/mic/validate.py",
+      "?? agents/intelligence_collector_agent/tests/fixtures/codex_e2e_693b3df_all_events.json",
+      "?? tools/market_intelligence_collector/mic/quantity_units.py",
+      "?? tools/market_intelligence_collector/tests/test_quantity_units_and_elided_comparison.py"
+    ]
+  },
+  "original_agent_config": "/home/yu/Workspace/agents_groups/agents/intelligence_collector_agent/config/intelligence_collector.yaml",
+  "original_mic_config": "/home/yu/.config/agents_groups/mic",
+  "environment_pins": {
+    "MIC_CONFIG_DIR": "/home/yu/.local/state/agents_groups/collector-acceptance-20261005-v6/mic-config",
+    "MIC_DATABASE_URL": "sqlite:////home/yu/.local/state/agents_groups/collector-acceptance-20261005-v6/mic.db",
+    "MIC_LOG_DIR": "/home/yu/.local/state/agents_groups/collector-acceptance-20261005-v6/mic-logs",
+    "MIC_ALLOW_MOCK": "false",
+    "INTEL_AGENT_PYTHON": "/home/yu/.venv/mydev/bin/python",
+    "INTEL_AGENT_MIC_PYTHON": "/home/yu/.venv/mydev/bin/python",
+    "OPENCLAW_AGENT_PRIMARY_MODEL": "volcengine-agent-plan/deepseek-v4.1-flash",
+    "OPENCLAW_AGENT_FALLBACK_MODELS": "deepseek/deepseek-v4-flash",
+    "OPENCLAW_GATEWAY_BASE_URL": "http://127.0.0.1:18791/v1",
+    "OPENCLAW_REQUEST_MODEL": "openclaw/main",
+    "MIC_BROWSER_PROFILE_DIR": "/home/yu/.local/share/agents_groups/browser/profiles/mic-edge"
+  },
+  "config_sha256": {
+    "agent-config.yaml": "8624f23dab48f0f6fc7e5f610ca0d677f9d8fe743fa2a1fae4774bbe24dcf5d0",
+    "demand.json": "d80c2b2369466847508b723a8cb3eddb43aac1cfeb276f593db621e3c34068d1",
+    "mic-config/access_profiles.yaml": "ef7e56eda2c6c2058a8fa586689c93e745bc249f2daf01daeaa3a4c91a50d311",
+    "mic-config/analyst_taxonomy.yaml": "858a192771f7e307574b19a7887aed52e28df1d13701d95891eab1dc8605122a",
+    "mic-config/browser_runtime.yaml": "2337fdd74a94c8e936d8973688efd9063f5ec558fd0cde645ddeb4703b38f47f",
+    "mic-config/call_governance.yaml": "d2eb5341a3ef4cc10b5935c9baa87daa54596e7ca16f771f54db5391b582f418",
+    "mic-config/merge_policy.yaml": "510bae4d061eea471f26bd149edbb00f90df8b80f0c4a4c7848544fdcf619a01",
+    "mic-config/model_policies.yaml": "abf2fee32e8d9231341ad7d4f354db7a051252e76b04fc449b082eee4b6042a3",
+    "mic-config/model_registry.yaml": "f3f67bec7ba445b326b03ddf380b355b0be44ed73ed59ae4e0cc79180cf6284d",
+    "mic-config/output_schema.yaml": "820b1883af3ae23ae20ee8a0f571ca25ecc3cbd4ceee1689425743552c1b0a1a",
+    "mic-config/query_families.yaml": "59bc69440307d87fe22ccdfab53cdc9baf6f354af3a5f063e2a39432068ed7b0",
+    "mic-config/query_scoring.yaml": "bbaa0b91c975952687fbf9cd0ce3b0415826c4a7f02bb5e873265de9535d3c72",
+    "mic-config/search_providers.yaml": "849a4d7bd55ab5199d3acce0fb000cc7a45d5456a8bd436854b31607714748bf",
+    "mic-config/source_packs.yaml": "12ca452005b68359ce096f5a933af4e2e62666c3c6ffabf3f92c8adc889d5be6",
+    "mic-config/storage_policy.yaml": "6931c42b422aac9a8fcaaa9d7e9d71a38c76147528b1bd2323388ca1671777aa",
+    "mic-config/target_profiles.yaml": "0e1c4cd8b0dad97a6a8fc7d75b32c86cfeafd1c3c5c5751eb171a9c57cd7c552"
+  },
+  "budget_per_run": {
+    "max_queries": 2,
+    "max_search_hits": 20,
+    "max_links_to_read": 6,
+    "max_http_read_attempts": 6,
+    "max_browser_read_attempts": 2,
+    "max_model_calls": 3,
+    "max_gateway_requests": 3,
+    "max_run_seconds": 300
+  },
+  "batch_budget": {
+    "max_runs": 2,
+    "max_gateway_requests": 6
+  },
+  "max_output_tokens": 65536,
+  "merge_min_overall_score": 70,
+  "demand_id": "collector_acceptance_catl_20261005-v6",
+  "target": {
+    "target_id": "company_300750",
+    "ticker": "300750.SZ",
+    "company_name": "宁德时代"
+  },
+  "credential_storage": "existing agent/MIC environment only; nothing stored here"
+}

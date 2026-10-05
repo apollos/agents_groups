@@ -1,0 +1,601 @@
+{
+  "all_events": [
+    {
+      "confidence": 0.85,
+      "entities": {
+        "counterparty": null,
+        "counterparty_candidate": "河北任丘智弘储能试点项目业主",
+        "counterparty_status": "pending_review",
+        "product": "钠离子储能系统",
+        "regulator": null,
+        "subject": "宁德时代"
+      },
+      "event_date": null,
+      "event_id": null,
+      "event_type": "tender",
+      "evidence_locator": {
+        "excerpt": "二标段为钠电池储能系统，10MW/40MWh钠离子储能系统，宁德时代中标价为4141.622万元，合单价1.035元/Wh。",
+        "passage_id": "p2",
+        "section": null,
+        "table_id": null
+      },
+      "impact": {
+        "channels": [
+          "revenue",
+          "demand"
+        ],
+        "direction": "positive",
+        "horizon": "1m",
+        "magnitude_guess": "low"
+      },
+      "impact_channels": [
+        "revenue",
+        "demand"
+      ],
+      "metrics": {
+        "amount": 41416220,
+        "amount_evidence": {
+          "passage_id": "p2",
+          "quote": "4141.622万元"
+        },
+        "amount_raw": 4141.622,
+        "amount_raw_unit": "万元",
+        "amount_unit": "元",
+        "capacity": 40,
+        "capacity_unit": "MWh",
+        "currency": "CNY",
+        "energy_evidence": {
+          "field": "capacity",
+          "passage_id": "p2",
+          "quote": "40MWh"
+        },
+        "energy_mwh": 40.0,
+        "event_date_review": {
+          "candidate": "2026-09-15",
+          "candidate_passages": [
+            {
+              "passage_id": "p0",
+              "quotes": [
+                "2026年9月15日"
+              ]
+            }
+          ],
+          "status": "pending_review"
+        },
+        "volume": null
+      },
+      "source": {
+        "domain": "energytrend.cn",
+        "published_at": "2026-09-15T14:41:00+08:00",
+        "query_family": "orders_tender",
+        "source_type": "media",
+        "title": "远景能源、宁德时代中标！河北100MW/400MWh储能系统采购中标公示",
+        "url": "https://www.energytrend.cn/news/20260915-148614.html"
+      },
+      "source_corroboration_status": "single_source",
+      "source_link_id": "link_583496b0856c",
+      "summary": "河北任丘智弘100MW/400MWh独立储能试点项目储能系统设备采购中标结果公示，宁德时代中标二标段10MW/40MWh钠离子储能系统，中标价4141.622万元（1.035元/Wh）。",
+      "tracking_variables": []
+    },
+    {
+      "confidence": 0.8,
+      "entities": {
+        "counterparty": null,
+        "counterparty_candidate": "河北任丘智弘储能试点项目业主",
+        "counterparty_status": "pending_review",
+        "product": "磷酸铁锂储能系统",
+        "regulator": null,
+        "subject": "远景能源"
+      },
+      "event_date": null,
+      "event_id": null,
+      "event_type": "tender",
+      "evidence_locator": {
+        "excerpt": "项目共两个标段，一标段为磷酸铁锂电池储能系统，30MW/120MWh大容量磷酸铁锂+60MW/240MWh长寿命磷酸铁锂，远景能源中标价为19461.6万元，合单价0.518元/Wh；",
+        "passage_id": "p1",
+        "section": null,
+        "table_id": null
+      },
+      "impact": {
+        "channels": [],
+        "direction": "unclear",
+        "horizon": "unclear",
+        "magnitude_guess": "unknown"
+      },
+      "impact_channels": [],
+      "metrics": {
+        "amount": 194616000,
+        "amount_evidence": {
+          "passage_id": "p1",
+          "quote": "19461.6万元"
+        },
+        "amount_raw": 19461.6,
+        "amount_raw_unit": "万元",
+        "amount_unit": "元",
+        "capacity": 360,
+        "capacity_unit": "MWh",
+        "currency": "CNY",
+        "energy_evidence": {
+          "field": "capacity",
+          "operands": [
+            120,
+            240
+          ],
+          "passage_id": "p1",
+          "quote": "30MW/120MWh大容量磷酸铁锂+60MW/240MWh"
+        },
+        "energy_mwh": 360.0,
+        "event_date_review": {
+          "candidate": "2026-09-15",
+          "candidate_passages": [
+            {
+              "passage_id": "p0",
+              "quotes": [
+                "2026年9月15日"
+              ]
+            }
+          ],
+          "status": "pending_review"
+        },
+        "impact_review": {
+          "impact": {
+            "channels": [
+              "revenue",
+              "demand"
+            ],
+            "direction": "positive",
+            "horizon": "1m",
+            "magnitude_guess": "low"
+          },
+          "reasons": [
+            "competition"
+          ],
+          "status": "pending_review"
+        },
+        "source_price_basis_status": "pending_review",
+        "volume": null
+      },
+      "source": {
+        "domain": "energytrend.cn",
+        "published_at": "2026-09-15T14:41:00+08:00",
+        "query_family": "orders_tender",
+        "source_type": "media",
+        "title": "远景能源、宁德时代中标！河北100MW/400MWh储能系统采购中标公示",
+        "url": "https://www.energytrend.cn/news/20260915-148614.html"
+      },
+      "source_corroboration_status": "single_source",
+      "source_link_id": "link_583496b0856c",
+      "summary": "同项目一标段磷酸铁锂储能系统由远景能源中标，中标价19461.6万元（0.518元/Wh），含30MW/120MWh大容量+60MW/240MWh长寿命磷酸铁锂。",
+      "tracking_variables": []
+    }
+  ],
+  "call_efficiency": {
+    "batch_triage_saved_calls_estimate": 6,
+    "deduplicated_links": 0,
+    "passage_selection_saved_tokens_estimate": 0,
+    "reused_existing_analysis": 0
+  },
+  "collection_diagnostics": {
+    "attempt_id": "attempt_d37847d31c934b0988a7",
+    "auth_context": {
+      "auth_context_id": null,
+      "auth_mode": "anonymous"
+    },
+    "browser_run": true,
+    "budget_limits": {
+      "max_authenticated_retries_per_origin": 1,
+      "max_authenticated_retries_per_run": 1,
+      "max_browser_read_attempts": 2,
+      "max_engines_per_query": 2,
+      "max_gateway_requests": 3,
+      "max_hits_per_query": 30,
+      "max_http_read_attempts": 6,
+      "max_links_to_read": 6,
+      "max_model_calls": 3,
+      "max_page_seconds": 25,
+      "max_queries": 2,
+      "max_retries_per_page": 0,
+      "max_run_seconds": 300,
+      "max_search_hits": 20,
+      "max_search_pages_per_query": 3,
+      "max_search_pages_per_run": 6,
+      "min_engine_interval_seconds": 3,
+      "results_per_page_cap": 10
+    },
+    "budget_used": {
+      "authenticated_retries": 0,
+      "browser_read_attempts": 1,
+      "gateway_requests_sent": 3,
+      "http_read_attempts": 5,
+      "links_selected_for_read": 6,
+      "model_calls": 3,
+      "queries_attempted": 2,
+      "queries_completed": 2,
+      "search_hits": 20,
+      "search_page_attempts": 2
+    },
+    "cleanup": {
+      "browser_started": true,
+      "cleanup": "complete",
+      "closed_by_user": false,
+      "cookies_injected": 0,
+      "navigations": 3,
+      "pages_closed": 3,
+      "pages_opened": 3,
+      "problems": []
+    },
+    "config_fingerprint": "3d9304f48c988be0",
+    "credential_sweep": null,
+    "elapsed_seconds": 100.7,
+    "execution_status": "completed",
+    "model_requests": [
+      {
+        "error_type": null,
+        "finish_reason": "stop",
+        "is_mock": false,
+        "model_config_id": "openclaw_research",
+        "model_run_id": null,
+        "output_tokens": 611,
+        "output_truncated": false,
+        "requested_max_tokens": 65536,
+        "requested_model": "openclaw/main",
+        "served_model": "openclaw/main",
+        "source_link_id": null,
+        "status": "success",
+        "task_name": "serp_batch_triage"
+      },
+      {
+        "error_type": null,
+        "finish_reason": "stop",
+        "is_mock": false,
+        "model_config_id": "openclaw_research",
+        "model_run_id": "mrun_c16304e885ef",
+        "output_tokens": 5173,
+        "output_truncated": false,
+        "requested_max_tokens": 65536,
+        "requested_model": "openclaw/main",
+        "served_model": "openclaw/main",
+        "source_link_id": "link_583496b0856c",
+        "status": "success",
+        "task_name": "bundle_extraction"
+      },
+      {
+        "error_type": null,
+        "finish_reason": "stop",
+        "is_mock": false,
+        "model_config_id": "openclaw_research",
+        "model_run_id": "mrun_7fe6c2fd3f23",
+        "output_tokens": 6440,
+        "output_truncated": false,
+        "requested_max_tokens": 65536,
+        "requested_model": "openclaw/main",
+        "served_model": "openclaw/main",
+        "source_link_id": "link_7b8657fafe1b",
+        "status": "success",
+        "task_name": "bundle_extraction"
+      }
+    ],
+    "output_decisions": [
+      {
+        "decision_after": "save_structured",
+        "decision_before": "save_structured",
+        "min_overall_score": 70,
+        "overall_score": 72.0,
+        "reason": "accepted",
+        "retained_counts_after_admission": {
+          "catalysts": 0,
+          "customer_supplier_signals": 0,
+          "events": 2,
+          "facts": 5,
+          "metrics": 5,
+          "policy_signals": 0,
+          "price_cost_margin_signals": 0,
+          "relations": 0,
+          "risks": 1
+        },
+        "source_link_id": "link_583496b0856c",
+        "stage": "merge_admission",
+        "validated_counts_before_admission": {
+          "catalysts": 0,
+          "customer_supplier_signals": 0,
+          "events": 2,
+          "facts": 5,
+          "metrics": 5,
+          "policy_signals": 0,
+          "price_cost_margin_signals": 0,
+          "relations": 0,
+          "risks": 1
+        }
+      }
+    ],
+    "output_status": "ok",
+    "page_attempts": {
+      "by_engine": {
+        "bing": 2
+      },
+      "by_status": {
+        "ok": 2
+      },
+      "interrupted": 0,
+      "search_page_attempts": 2
+    },
+    "provider": "browser(bing)",
+    "read_failures": {
+      "article_scope_unresolved": 1
+    },
+    "read_status": "partial",
+    "reuse_analysis": false,
+    "search_errors": [],
+    "search_outcomes": {
+      "completed": 2
+    },
+    "search_reason": null,
+    "search_status": "ok",
+    "stop_reason": null,
+    "time_window_filter": {
+      "basis": "verified_article_publication",
+      "cutoff": "2026-09-05T00:20:29.858831+00:00",
+      "days": 30,
+      "enabled": true,
+      "filtered_by_reason": {
+        "outside_time_window": 2,
+        "publication_time_unverified": 1
+      },
+      "filtered_links": [
+        {
+          "allowed": false,
+          "published_at": "2026-01-14T00:00:00+08:00",
+          "source": "sina:allbulletin.announcement-date",
+          "source_link_id": "link_7d900444deff",
+          "status": "outside_time_window",
+          "title": "容百科技：关于与宁德时代签署日常经营重大合同的公告",
+          "url": "https://vip.stock.finance.sina.com.cn/corp/view/vCB_AllBulletinDetail.php?id=11913341"
+        },
+        {
+          "allowed": false,
+          "reason": "pdf_publication_not_verified",
+          "source_link_id": "link_a8ebe65b3b6a",
+          "status": "publication_time_unverified",
+          "title": "",
+          "url": "https://static.cninfo.com.cn/finalpage/2026-01-14/1224932346.PDF"
+        },
+        {
+          "allowed": false,
+          "published_at": "2026-02-06T21:25:00+08:00",
+          "source": "sohu:#news-time",
+          "source_link_id": "link_9cb9d2b6a91c",
+          "status": "outside_time_window",
+          "title": "容百科技因重大合同公告误导性陈述收行政处罚事先告知书 公司及两高管合计拟被罚950万元_宁波容_合作_协议",
+          "url": "https://www.sohu.com/a/984630766_122014422"
+        }
+      ],
+      "naive_date_timezone": "Asia/Shanghai",
+      "passed": 2,
+      "reference_time": "2026-10-05T00:20:29.858831+00:00"
+    },
+    "usable": true
+  },
+  "log_file": "/home/yu/.local/state/agents_groups/collector-acceptance-20261005-v5/mic-logs/run_923d9ac70417.log",
+  "search_run_id": "run_923d9ac70417",
+  "structured_outputs": {
+    "analyst_questions": 3,
+    "briefs": 1,
+    "catalysts": 0,
+    "coverage_gaps": 34,
+    "customer_supplier_signals": 0,
+    "events": 2,
+    "facts": 5,
+    "metrics": 5,
+    "policy_signals": 0,
+    "price_cost_margin_signals": 0,
+    "relations": 0,
+    "risks": 1
+  },
+  "summary": {
+    "arbitration_calls": 0,
+    "authenticated_retries": 0,
+    "batch_triage_calls": 1,
+    "browser_read_attempts": 1,
+    "cached_or_reused_results": 0,
+    "cascade_calls": 0,
+    "estimated_model_cost": 0.0,
+    "fallback_calls": 0,
+    "gateway_requests_sent": 3,
+    "http_read_attempts": 5,
+    "links_model_analyzed": 2,
+    "links_read": 5,
+    "links_selected_for_read": 6,
+    "model_calls": 3,
+    "parallel_ensemble_calls": 0,
+    "queries_attempted": 2,
+    "queries_completed": 2,
+    "queries_executed": 2,
+    "queries_generated": 2,
+    "queries_skipped_by_hit_budget": 0,
+    "read_gate_demoted": {
+      "content_form": 3
+    },
+    "read_gate_related_only": 0,
+    "search_api_requests": 0,
+    "search_hits": 20,
+    "search_page_attempts": 2,
+    "split_extractions": 0,
+    "time_window_filtered": 3,
+    "time_window_passed": 2,
+    "unique_source_links": 20,
+    "vision_calls": 0
+  },
+  "target": "宁德时代新能源科技股份有限公司",
+  "time_window": "30d",
+  "top_events": [
+    {
+      "confidence": 0.85,
+      "entities": {
+        "counterparty": null,
+        "counterparty_candidate": "河北任丘智弘储能试点项目业主",
+        "counterparty_status": "pending_review",
+        "product": "钠离子储能系统",
+        "regulator": null,
+        "subject": "宁德时代"
+      },
+      "event_date": null,
+      "event_id": null,
+      "event_type": "tender",
+      "evidence_locator": {
+        "excerpt": "二标段为钠电池储能系统，10MW/40MWh钠离子储能系统，宁德时代中标价为4141.622万元，合单价1.035元/Wh。",
+        "passage_id": "p2",
+        "section": null,
+        "table_id": null
+      },
+      "impact": {
+        "channels": [
+          "revenue",
+          "demand"
+        ],
+        "direction": "positive",
+        "horizon": "1m",
+        "magnitude_guess": "low"
+      },
+      "impact_channels": [
+        "revenue",
+        "demand"
+      ],
+      "metrics": {
+        "amount": 41416220,
+        "amount_evidence": {
+          "passage_id": "p2",
+          "quote": "4141.622万元"
+        },
+        "amount_raw": 4141.622,
+        "amount_raw_unit": "万元",
+        "amount_unit": "元",
+        "capacity": 40,
+        "capacity_unit": "MWh",
+        "currency": "CNY",
+        "energy_evidence": {
+          "field": "capacity",
+          "passage_id": "p2",
+          "quote": "40MWh"
+        },
+        "energy_mwh": 40.0,
+        "event_date_review": {
+          "candidate": "2026-09-15",
+          "candidate_passages": [
+            {
+              "passage_id": "p0",
+              "quotes": [
+                "2026年9月15日"
+              ]
+            }
+          ],
+          "status": "pending_review"
+        },
+        "volume": null
+      },
+      "source": {
+        "domain": "energytrend.cn",
+        "published_at": "2026-09-15T14:41:00+08:00",
+        "query_family": "orders_tender",
+        "source_type": "media",
+        "title": "远景能源、宁德时代中标！河北100MW/400MWh储能系统采购中标公示",
+        "url": "https://www.energytrend.cn/news/20260915-148614.html"
+      },
+      "source_corroboration_status": "single_source",
+      "source_link_id": "link_583496b0856c",
+      "summary": "河北任丘智弘100MW/400MWh独立储能试点项目储能系统设备采购中标结果公示，宁德时代中标二标段10MW/40MWh钠离子储能系统，中标价4141.622万元（1.035元/Wh）。",
+      "tracking_variables": []
+    },
+    {
+      "confidence": 0.8,
+      "entities": {
+        "counterparty": null,
+        "counterparty_candidate": "河北任丘智弘储能试点项目业主",
+        "counterparty_status": "pending_review",
+        "product": "磷酸铁锂储能系统",
+        "regulator": null,
+        "subject": "远景能源"
+      },
+      "event_date": null,
+      "event_id": null,
+      "event_type": "tender",
+      "evidence_locator": {
+        "excerpt": "项目共两个标段，一标段为磷酸铁锂电池储能系统，30MW/120MWh大容量磷酸铁锂+60MW/240MWh长寿命磷酸铁锂，远景能源中标价为19461.6万元，合单价0.518元/Wh；",
+        "passage_id": "p1",
+        "section": null,
+        "table_id": null
+      },
+      "impact": {
+        "channels": [],
+        "direction": "unclear",
+        "horizon": "unclear",
+        "magnitude_guess": "unknown"
+      },
+      "impact_channels": [],
+      "metrics": {
+        "amount": 194616000,
+        "amount_evidence": {
+          "passage_id": "p1",
+          "quote": "19461.6万元"
+        },
+        "amount_raw": 19461.6,
+        "amount_raw_unit": "万元",
+        "amount_unit": "元",
+        "capacity": 360,
+        "capacity_unit": "MWh",
+        "currency": "CNY",
+        "energy_evidence": {
+          "field": "capacity",
+          "operands": [
+            120,
+            240
+          ],
+          "passage_id": "p1",
+          "quote": "30MW/120MWh大容量磷酸铁锂+60MW/240MWh"
+        },
+        "energy_mwh": 360.0,
+        "event_date_review": {
+          "candidate": "2026-09-15",
+          "candidate_passages": [
+            {
+              "passage_id": "p0",
+              "quotes": [
+                "2026年9月15日"
+              ]
+            }
+          ],
+          "status": "pending_review"
+        },
+        "impact_review": {
+          "impact": {
+            "channels": [
+              "revenue",
+              "demand"
+            ],
+            "direction": "positive",
+            "horizon": "1m",
+            "magnitude_guess": "low"
+          },
+          "reasons": [
+            "competition"
+          ],
+          "status": "pending_review"
+        },
+        "source_price_basis_status": "pending_review",
+        "volume": null
+      },
+      "source": {
+        "domain": "energytrend.cn",
+        "published_at": "2026-09-15T14:41:00+08:00",
+        "query_family": "orders_tender",
+        "source_type": "media",
+        "title": "远景能源、宁德时代中标！河北100MW/400MWh储能系统采购中标公示",
+        "url": "https://www.energytrend.cn/news/20260915-148614.html"
+      },
+      "source_corroboration_status": "single_source",
+      "source_link_id": "link_583496b0856c",
+      "summary": "同项目一标段磷酸铁锂储能系统由远景能源中标，中标价19461.6万元（0.518元/Wh），含30MW/120MWh大容量+60MW/240MWh长寿命磷酸铁锂。",
+      "tracking_variables": []
+    }
+  ],
+  "top_relations": []
+}
