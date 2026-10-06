@@ -19,6 +19,12 @@ CORRELATION_FIELDS = ("trace_id", "request_id", "parent_request_id", "ingestion_
 _configured = False
 _tool_sinks: dict[str, "ToolLogSink"] = {}
 _sink_lock = threading.Lock()
+_default_fields: dict[str, Any] = {"data_mode": "live"}
+
+
+def set_default_log_fields(**fields: Any) -> None:
+    """Process-wide defaults merged into every structured event (e.g. ``data_mode="simulated"``)."""
+    _default_fields.update(fields)
 
 
 def _json_safe(value: Any) -> Any:
@@ -44,7 +50,7 @@ class _StructuredEventFilter(logging.Filter):
 
 class JsonlEventFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
-        details: dict[str, Any] = dict(getattr(record, "details", {}) or {})
+        details: dict[str, Any] = {**_default_fields, **(getattr(record, "details", {}) or {})}
         payload: dict[str, Any] = {
             "event": getattr(record, "event", "log"),
             "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).astimezone().isoformat(timespec="milliseconds"),

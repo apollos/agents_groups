@@ -268,15 +268,8 @@ class MarketContextService:
         with log_context(request_id=stock_request.request_id, idempotency_key=stock_request.idempotency_key):
             result = self._build_result(request, entry, identity, observations, stock_response, records, warnings, unknown_date)
         status = self._status(result, errors)
-        if unknown_date and result.data_date is None:
-            emit(
-                logger,
-                logging.WARNING,
-                "snapshot_date_unknown",
-                stock_data_request_id=stock_response.request_id,
-                quality_status=result.quality.status,
-                error_codes=[str(e.error_code) for e in errors],
-            )
+        # The request-level WARNING for an unconfirmed snapshot date is emitted once, by
+        # IngestionRunner._confirm_snapshot_dates (it carries the reference-bar evidence).
         return MarketContextResponse(
             request_id=request.request_id,
             status=status,
