@@ -42,6 +42,7 @@ from stock_data_ingestion.schemas.market_context import (
     MarketContextSource,
 )
 from stock_data_ingestion.schemas.requests import Frequency, RequestType, StockDataRequest
+from stock_data_ingestion.schemas.quality import ValidationStatus
 from stock_data_ingestion.schemas.responses import StockDataResponse
 from stock_data_ingestion.services.ingestion_runner import IngestionRunner
 
@@ -89,6 +90,15 @@ _PERIOD_UNIT_BY_TYPE: dict[str, str] = {
     ContextType.fx: "observation",
     ContextType.interest_rate: "observation",
 }
+
+# These are decisions already made by the ingestion pipeline. The market-context
+# summary must not turn an isolated or failed record into an automatically usable value.
+_BLOCKING_VALIDATION_STATUSES = frozenset({
+    ValidationStatus.quarantined,
+    ValidationStatus.manual_review_required,
+    ValidationStatus.conflicted_high,
+    ValidationStatus.failed,
+})
 
 
 def _f(value: Any) -> float | None:
@@ -475,7 +485,10 @@ class MarketContextService:
                     raw_payload_ref=sorted(obs["raw_payload_refs"])[0] if obs["raw_payload_refs"] else None,
                     raw_row_index=obs["raw_row_index"],
                     data_quality=(sum(obs["quality"]) / len(obs["quality"])) if obs["quality"] else None,
-                    validation_status=sorted(obs["validation_status"])[0] if obs["validation_status"] else None,
+                    # An observation may combine multiple FX quote records. A blocking
+                    # status must survive aggregation, regardless of alphabetical order.
+                    validation_status=next(iter(sorted(obs["validation_status"] & _BLOCKING_VALIDATION_STATUSES)), None)
+                    or next(iter(sorted(obs["validation_status"])), None),
                 )
             )
         return observations
@@ -635,7 +648,10 @@ class MarketContextService:
         anomalies = self._anomalies(context_type, head, eligible, realtime)
         critical = [a for a in anomalies if a.get("severity") == "critical"]
         quality.anomalies = anomalies
-        quality.usable = head is not None and value is not None and not critical
+        blocked = head is not None and head.validation_status in _BLOCKING_VALIDATION_STATUSES
+        if blocked:
+            quality.warnings.append(f"upstream_validation_blocked: {head.validation_status}; value retained for inspection only")
+        quality.usable = head is not None and value is not None and not critical and not blocked
         if head is None:
             quality.status = "missing" if stock_response.status != "failed" or records else "failed"
         elif not quality.usable:
@@ -758,6 +774,11 @@ class MarketContextService:
             return changes
 
         def _make(periods: int, from_obs: MarketContextObservation | None, to_obs: MarketContextObservation, from_value: float | None, to_value: float | None, period_unit: str, reason: str | None = None) -> ChangeMetric:
+            blocked_endpoints = [o for o in (from_obs, to_obs) if o is not None and o.validation_status in _BLOCKING_VALIDATION_STATUSES]
+            if blocked_endpoints:
+                reason = "upstream_validation_blocked: " + ", ".join(
+                    f"{o.data_date.isoformat()}={o.validation_status}" for o in blocked_endpoints
+                )
             cm = ChangeMetric(periods=periods, period_unit=period_unit, kind=kind, from_date=from_obs.data_date if from_obs else None, to_date=to_obs.data_date, from_value=from_value, to_value=to_value, reason=reason)
             if reason is None and from_value is not None and to_value is not None:
                 if kind == "percentage_point":
