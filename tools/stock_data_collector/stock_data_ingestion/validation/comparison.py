@@ -68,6 +68,17 @@ def build_comparison_key(record: BaseModel | dict[str, Any]) -> str:
         return f"{data['index_code']}|{data['normalized_ticker']}|{data['effective_date']}"
     if record_type == "corporate_action":
         return f"{data['normalized_ticker']}|{data['action_type']}|{data.get('announcement_date')}|{data.get('ex_date')}"
+    if record_type == "index_bar":
+        return f"{data['index_code']}|{data.get('market')}|{data.get('frequency')}|{data['trade_date']}"
+    if record_type == "fx_rate":
+        return f"{data['base_currency']}/{data['quote_currency']}|{data.get('quote_basis')}|{data['rate_type']}|{data['rate_date']}"
+    if record_type == "commodity_price":
+        return (
+            f"{data['commodity']}|{data['instrument_type']}|{data['market']}|{data.get('contract')}|"
+            f"{data.get('frequency')}|{data['trade_date']}|{data.get('observed_at')}"
+        )
+    if record_type == "interest_rate":
+        return f"{data['rate_type']}|{data['market']}|{data.get('curve_name')}|{data['tenor']}|{data['rate_date']}"
     return "|".join(str(data.get(k)) for k in sorted(data.keys()) if k.endswith("_id") or k.endswith("code"))
 
 

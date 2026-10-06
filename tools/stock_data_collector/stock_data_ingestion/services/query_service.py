@@ -272,6 +272,70 @@ class QueryService:
         stmt = select(models.IndexConstituentModel).where(models.IndexConstituentModel.index_code == index_code)
         return self._rows_to_df(self.session.execute(stmt).scalars().all())
 
+    # ------------------------------------------------------------------
+    # Market context (index bars / FX / commodities / rates)
+    # ------------------------------------------------------------------
+    MARKET_CONTEXT_MODELS: dict[str, Any] = {
+        "equity_index": models.IndexBarModel,
+        "hk_index": models.IndexBarModel,
+        "fx": models.FxRateModel,
+        "commodity": models.CommodityPriceModel,
+        "interest_rate": models.InterestRateModel,
+    }
+    MARKET_CONTEXT_DATE_COLUMN: dict[str, str] = {
+        "equity_index": "trade_date",
+        "hk_index": "trade_date",
+        "fx": "rate_date",
+        "commodity": "trade_date",
+        "interest_rate": "rate_date",
+    }
+
+    def get_market_context_records(
+        self,
+        context_type: str,
+        identity: dict[str, Any],
+        start_date: str | date | None = None,
+        end_date: str | date | None = None,
+    ) -> list[dict[str, Any]]:
+        """Standard records of one market-context identity inside a date window.
+
+        ``identity`` holds business-key columns (e.g. ``{"index_code": "HSTECH"}`` or
+        ``{"base_currency": "HKD", "quote_currency": "CNY", "quote_basis": 100}``);
+        unknown keys are ignored so callers can pass the full identity dict.
+        """
+        model_cls = self.MARKET_CONTEXT_MODELS.get(str(context_type))
+        if model_cls is None:
+            raise ValueError(f"INVALID_REQUEST: unsupported context_type {context_type}")
+        date_column = getattr(model_cls, self.MARKET_CONTEXT_DATE_COLUMN[str(context_type)])
+        stmt = select(model_cls)
+        columns = set(model_cls.__table__.columns.keys())
+        for key, value in (identity or {}).items():
+            if key in columns and value is not None:
+                stmt = stmt.where(getattr(model_cls, key) == value)
+        if start_date is not None:
+            stmt = stmt.where(date_column >= normalize_trade_date(start_date))
+        if end_date is not None:
+            stmt = stmt.where(date_column <= normalize_trade_date(end_date))
+        stmt = stmt.order_by(date_column.asc())
+        rows = self.session.execute(stmt).scalars().all()
+        return [{col.name: getattr(row, col.name) for col in row.__table__.columns} for row in rows]
+
+    def get_fx_rates(self, base_currency: str, quote_currency: str, start_date: str | date, end_date: str | date, rate_type: str | None = None) -> pd.DataFrame:
+        identity = {"base_currency": base_currency.upper(), "quote_currency": quote_currency.upper(), "rate_type": rate_type}
+        return pd.DataFrame(self.get_market_context_records("fx", identity, start_date, end_date))
+
+    def get_commodity_prices(self, commodity: str, start_date: str | date, end_date: str | date, contract: str | None = None, frequency: str = "1d") -> pd.DataFrame:
+        identity = {"commodity": commodity, "contract": contract, "frequency": frequency}
+        return pd.DataFrame(self.get_market_context_records("commodity", identity, start_date, end_date))
+
+    def get_interest_rates(self, rate_type: str, market: str, tenor: str, start_date: str | date, end_date: str | date) -> pd.DataFrame:
+        identity = {"rate_type": rate_type, "market": market, "tenor": tenor}
+        return pd.DataFrame(self.get_market_context_records("interest_rate", identity, start_date, end_date))
+
+    def get_index_bars(self, index_code: str, start_date: str | date, end_date: str | date, frequency: str = "1d") -> pd.DataFrame:
+        identity = {"index_code": index_code.upper(), "frequency": frequency}
+        return pd.DataFrame(self.get_market_context_records("equity_index", identity, start_date, end_date))
+
     def get_raw_payload_index(self, raw_payload_id: str) -> pd.DataFrame:
         stmt = select(models.RawPayloadIndexModel).where(models.RawPayloadIndexModel.raw_payload_id == raw_payload_id)
         return self._rows_to_df(self.session.execute(stmt).scalars().all())
@@ -296,6 +360,9 @@ class QueryService:
             models.IndexBarModel,
             models.IndexConstituentModel,
             models.CorporateActionModel,
+            models.FxRateModel,
+            models.CommodityPriceModel,
+            models.InterestRateModel,
         ]:
             obj = self.session.execute(select(model_cls).where(model_cls.record_id == record_id)).scalar_one_or_none()
             if obj is not None:

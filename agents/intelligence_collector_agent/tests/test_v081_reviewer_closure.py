@@ -232,69 +232,20 @@ def test_hk_persistence_stores_completeness_and_eval_flags_low_ratio(tmp_path: P
 # ---------------------------------------------------------------------------
 
 
-class _FakeAkshareContext:
-    @staticmethod
-    def stock_zh_index_daily_em(symbol: str):
-        assert symbol == "000300"
-        rows = [{"日期": f"2026-06-{d:02d}", "收盘": 4000.0 + d} for d in range(1, 27)]
-        return _FakeDF(rows)
-
-    @staticmethod
-    def futures_zh_spot(symbol: str):
-        # Realtime endpoint: one row, no date column -> change_* stay null.
-        return _FakeDF([{"symbol": symbol, "最新价": 78120.0}])
+# Since V0.9 the adapter is a thin CLI layer over the stock tool; vendor-level behaviour is
+# covered in tools/stock_data_collector/tests/test_market_context.py. The agent-side chain
+# (fake CLI -> ToolResult -> persistence -> coverage) is covered in test_v09_market_context.py.
 
 
-def test_market_context_adapter_time_series(monkeypatch):
-    monkeypatch.setitem(sys.modules, "akshare", _FakeAkshareContext())
-    result = MarketContextAdapter().collect_snapshot(
-        context={
-            "context_id": "index_csi_300",
-            "context_type": "equity_index",
-            "name": "沪深300",
-            "symbol": "000300",
-            "akshare_func": "stock_zh_index_daily_em",
-            "date_column": "日期",
-            "value_column": "收盘",
-            "unit": "index_points",
-        },
-        as_of="2026-07-06T09:00:00+08:00",
-    )
-    assert result.status == "success"
-    data = result.result
-    assert data["value"] == 4026.0
-    assert data["change_1d"] == round((4026.0 / 4025.0 - 1) * 100, 4)
-    assert data["change_5d"] == round((4026.0 / 4021.0 - 1) * 100, 4)
-    assert data["change_20d"] == round((4026.0 / 4006.0 - 1) * 100, 4)
-    assert data["as_of"] == "2026-07-06"
-    assert result.quality["usable"] is True
-    assert result.quality["field_completeness"] == 1.0
-
-
-def test_market_context_adapter_realtime_single_row(monkeypatch):
-    monkeypatch.setitem(sys.modules, "akshare", _FakeAkshareContext())
-    result = MarketContextAdapter().collect_snapshot(
-        context={
-            "context_id": "commodity_copper",
-            "context_type": "commodity",
-            "akshare_func": "futures_zh_spot",
-            "akshare_args": {"symbol": "铜"},
-            "value_column": "最新价",
-        }
-    )
-    assert result.status == "success"
-    assert result.result["value"] == 78120.0
-    assert result.result["change_1d"] is None  # single realtime row: no history
-    assert result.quality["usable"] is True
-    assert set(result.quality["missing_fields"]) == {"change_1d", "change_5d", "change_20d"}
-
-
-def test_market_context_adapter_fails_cleanly_without_akshare(monkeypatch):
-    monkeypatch.setitem(sys.modules, "akshare", None)  # import akshare -> ImportError
-    result = MarketContextAdapter().collect_snapshot(context={"context_id": "index_csi_300"})
+def test_market_context_adapter_never_imports_a_vendor(monkeypatch):
+    """Boundary: even with akshare importable, the adapter only talks to the tool CLI."""
+    monkeypatch.setitem(sys.modules, "akshare", object())
+    adapter = MarketContextAdapter(python_executable="definitely-not-a-python")
+    result = adapter.collect_snapshot(context={"context_id": "index_csi_300", "context_type": "equity_index", "symbol": "000300"})
     assert result.status == "failed"
-    assert result.errors[0]["error_code"] == "AKSHARE_NOT_INSTALLED"
+    assert result.errors[0]["error_code"] == "MARKET_CONTEXT_CLI_UNAVAILABLE"
     assert result.errors[0]["retryable"] is False
+    assert "stock_data_ingestion" in result.errors[0]["suggested_action"]
 
 
 # ---------------------------------------------------------------------------

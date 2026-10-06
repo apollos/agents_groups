@@ -412,14 +412,18 @@ class ResultPersister:
         context_id = data.get("context_id") or target.get("context_id") or target.get("target_id")
         as_of = data.get("as_of") or str(task.get("as_of") or "")[:10]
         idem = make_idempotency_key("market_context_snapshot", context_id, as_of)
+        quality = result.quality if isinstance(result.quality, dict) else {}
+        is_fresh = quality.get("is_fresh")
         with self.store.session() as con:
             con.execute(
                 """
                 INSERT OR REPLACE INTO market_context_snapshots(
                   snapshot_id, context_id, context_type, name, symbol, as_of,
                   value, unit, change_1d, change_5d, change_20d,
-                  source_url, payload_json, idempotency_key
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  source_url, payload_json, idempotency_key,
+                  data_date, is_fresh, freshness_status, metric, change_kind,
+                  provider, source_api, tool_request_id, quality_json, provenance_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     new_id("mctx"),
@@ -436,6 +440,16 @@ class ResultPersister:
                     data.get("source_url"),
                     dumps_json({**data, "run_id": run_id}),
                     idem,
+                    data.get("data_date"),
+                    None if is_fresh is None else int(bool(is_fresh)),
+                    quality.get("status"),
+                    data.get("metric"),
+                    data.get("change_kind"),
+                    data.get("provider"),
+                    data.get("source_api"),
+                    data.get("tool_request_id"),
+                    dumps_json(quality),
+                    dumps_json(data.get("provenance") or {}),
                 ),
             )
         return 1

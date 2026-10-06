@@ -196,8 +196,9 @@ class CoverageEvaluator:
             )
             rows = con.execute(
                 """
-                SELECT context_id, context_type, name, symbol, value, unit,
-                       change_1d, change_5d, change_20d, source_url
+                SELECT context_id, context_type, name, symbol, value, unit, metric, change_kind,
+                       change_1d, change_5d, change_20d, source_url,
+                       data_date, is_fresh, freshness_status, provider, source_api, quality_json
                 FROM market_context_snapshots
                 WHERE as_of = ?
                 ORDER BY context_id
@@ -205,13 +206,36 @@ class CoverageEvaluator:
                 (trade_date,),
             ).fetchall()
         observed = {r["context_id"] for r in rows}
+        out_rows: list[dict[str, Any]] = []
+        fresh: list[str] = []
+        stale: list[str] = []
+        unknown: list[str] = []
+        for r in rows:
+            row = dict(r)
+            quality = loads_json(row.pop("quality_json", None), {}) or {}
+            row["staleness_days"] = quality.get("staleness_days")
+            row["warnings"] = quality.get("warnings") or []
+            # Legacy rows (agent-side AKShare era) have no data_date / freshness: unknown, not fresh.
+            if row.get("is_fresh") is None:
+                row["freshness_status"] = row.get("freshness_status") or "unknown"
+                unknown.append(row["context_id"])
+            elif row["is_fresh"]:
+                fresh.append(row["context_id"])
+            else:
+                stale.append(row["context_id"])
+            out_rows.append(row)
         return {
             "trade_date": trade_date,
             "expected_contexts": len(expected),
             "contexts_with_snapshot": len(rows),
+            # Current coverage counts only values whose data date satisfies the freshness tolerance.
+            "contexts_fresh": len(fresh),
+            "coverage_ratio": round(len(fresh) / len(expected), 4) if expected else None,
             "missing_snapshot": [c for c in expected if c not in observed],
             "missing_value": [r["context_id"] for r in rows if r["value"] is None],
-            "rows": [dict(r) for r in rows],
+            "stale_contexts": stale,
+            "unknown_freshness": unknown,
+            "rows": out_rows,
         }
 
     @staticmethod

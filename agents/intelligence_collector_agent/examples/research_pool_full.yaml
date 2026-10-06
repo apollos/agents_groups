@@ -406,51 +406,52 @@ stocks: []
 #     指数 / 汇率 / 商品等背景变量。akshare_func + 列名写在 YAML 里：AKShare 接口和
 #     列标签会漂移，改配置即可修，不用改代码。
 # ---------------------------------------------------------------------------
+# Market background (indices / FX / commodities / rates). Since V0.9 the Agent only states
+# the business need here; the stock tool (`stock_data_ingestion.cli fetch market-context`)
+# decides which vendor endpoint answers it. Vendor bindings, column names and units live in
+# tools/stock_data_collector/config/market_context_sources.yaml -- legacy fields
+# (akshare_func / akshare_args / date_column / value_column / unit) are ignored with a warning.
+#
+# Field ownership:
+#   context_id, name, context_type, symbol (+ market/contract/tenor/rate_type) -> target identity
+#   frequency (1d|realtime), priority, max_staleness_days, metrics              -> demand parameters
 market_contexts:
   - context_id: index_csi_300
     context_type: equity_index
     name: 沪深300
-    symbol: "000300"
-    akshare_func: stock_zh_index_daily_em
-    akshare_args: {symbol: "000300"}
-    date_column: 日期
-    value_column: 收盘
-    unit: index_points
+    symbol: "000300"          # standard index code; tool reuses index_data / IndexBarRecord
+    metrics: [close]
 
   - context_id: index_hang_seng_tech
     context_type: hk_index
     name: 恒生科技
-    symbol: HSTECH
-    akshare_func: stock_hk_index_daily_sina
-    akshare_args: {symbol: HSTECH}
-    date_column: 日期
-    value_column: 收盘
-    unit: index_points
+    symbol: HSTECH            # HK index code; tool records market=HK, currency=HKD, actual trade date
+    metrics: [close]
 
-  - context_id: fx_cny_hkd
+  - context_id: fx_hkd_cny
     context_type: fx
-    name: 人民币兑港币
-    symbol: CNYHKD
-    akshare_func: currency_boc_sina
-    akshare_args: {symbol: 港币}
-    date_column: 日期
-    value_column: 现汇卖出价
-    unit: CNY_per_100HKD
+    name: 港币兑人民币（中行牌价）
+    symbol: HKDCNY            # direction is explicit: value = CNY per 100 HKD (quote_basis=100)
+    metrics: [spot_sell]      # spot_buy | cash_buy | spot_sell | central_parity | boc_conversion
+    max_staleness_days: 3
 
   - context_id: commodity_copper
     context_type: commodity
-    name: 铜
-    symbol: CU0
-    akshare_func: futures_zh_spot
-    akshare_args: {symbol: 铜}
-    value_column: 最新价
-    unit: CNY/ton
+    name: 沪铜
+    symbol: CU0               # SHFE copper continuous contract (futures, CNY/ton)
+    instrument_type: futures
+    metrics: [close, settle]  # daily bar; use frequency: realtime for the intraday snapshot (metric latest)
 
   - context_id: commodity_lithium_carbonate
     context_type: commodity
     name: 碳酸锂
-    symbol: LC
-    akshare_func: futures_zh_spot
-    akshare_args: {symbol: 碳酸锂}
-    value_column: 最新价
-    unit: CNY/ton
+    symbol: LC0               # GFEX lithium carbonate continuous contract (futures, CNY/ton)
+    instrument_type: futures
+    metrics: [close, settle]
+
+  - context_id: rate_cn_cgb_10y
+    context_type: interest_rate
+    name: 中国10年期国债收益率
+    symbol: CN_CGB_10Y        # tenor 10Y, government_bond_yield, unit percent; changes in pp / bp
+    tenor: 10Y
+    metrics: [rate_value]

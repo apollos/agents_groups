@@ -11,11 +11,14 @@ from datetime import date, datetime, time, timedelta
 from typing import Any, Callable, Iterable, Iterator
 
 from stock_data_ingestion.adapters.base import BaseDataAdapter
+from stock_data_ingestion.config import MarketContextSourcesConfig, load_market_context_sources
 from stock_data_ingestion.normalization.datetime_utils import now_asia_shanghai, normalize_trade_date
 from stock_data_ingestion.normalization.ticker import is_hk_ticker, normalize_ticker, to_akshare_symbol
 from stock_data_ingestion.schemas.errors import ErrorCode
 from stock_data_ingestion.schemas.records import AdapterFetchStatus, ProviderFetchResult
 from stock_data_ingestion.schemas.requests import Frequency, StockDataRequest
+from stock_data_ingestion.utils.deadline import with_deadline
+from stock_data_ingestion.utils.network import apply_ipv4_preference_if_configured
 
 
 class AKShareAdapter(BaseDataAdapter):
@@ -29,7 +32,11 @@ class AKShareAdapter(BaseDataAdapter):
 
     provider_name = "akshare"
     source_site = "akshare"
-    adapter_version = "0.4.0"
+    adapter_version = "0.5.0"
+
+    def __init__(self, market_context_sources: MarketContextSourcesConfig | None = None) -> None:
+        super().__init__()
+        self._market_context_sources = market_context_sources
 
     def is_available(self) -> bool:
         return importlib.util.find_spec("akshare") is not None
@@ -44,6 +51,9 @@ class AKShareAdapter(BaseDataAdapter):
     def _import_ak(self, source_api: str, started: datetime):
         if not self.is_available():
             raise RuntimeError("akshare is not installed")
+        # Opt-in environment fix (STOCK_DATA_PREFER_IPV4) for networks where the AAAA
+        # records of Chinese data hosts are black-holed; no effect when unset.
+        apply_ipv4_preference_if_configured()
         import akshare as ak  # type: ignore
 
         return ak
@@ -1250,8 +1260,50 @@ class AKShareAdapter(BaseDataAdapter):
                     return self._error_result(fallback_source_api, started, fallback_exc, ErrorCode.UNKNOWN_ERROR, retryable=True)
             return self._error_result(source_api, started, exc, ErrorCode.UNKNOWN_ERROR, retryable=True)
 
+    def _index_daily_bars(self, ak: Any, symbol: str, request: StockDataRequest) -> tuple[list[dict[str, Any]], str]:
+        """Daily index bars with Eastmoney first and Sina as fallback.
+
+        Eastmoney (``stock_zh_index_daily_em``) is the richer source but is frequently
+        blocked for non-browser clients; Sina (``stock_zh_index_daily``) returns the full
+        history without a date filter, so the request window is applied here. Both are
+        bounded by a hard deadline because AKShare requests carry no timeout.
+        """
+        deadline = self._market_context_config().call_deadline_seconds
+        try:
+            rows = self._records(
+                with_deadline(
+                    lambda: self._call_ak(
+                        ak.stock_zh_index_daily_em,
+                        retry_on_transient=False,
+                        symbol=symbol,
+                        start_date=self._start_date(request),
+                        end_date=self._end_date(request),
+                    ),
+                    deadline,
+                    "akshare stock_zh_index_daily_em",
+                )
+            )
+            return rows, "stock_zh_index_daily_em"
+        except Exception as em_exc:  # noqa: BLE001 - fall back to Sina on any failure
+            try:
+                rows = self._records(
+                    with_deadline(
+                        lambda: self._call_ak(ak.stock_zh_index_daily, retry_on_transient=False, symbol=symbol),
+                        deadline,
+                        "akshare stock_zh_index_daily",
+                    )
+                )
+            except Exception as sina_exc:  # noqa: BLE001
+                raise RuntimeError(
+                    f"stock_zh_index_daily_em failed ({em_exc}); stock_zh_index_daily fallback failed ({sina_exc})"
+                ) from sina_exc
+            rows = [row for row in rows if self._date_in_request_range(self._value(row, "date", "日期"), request)]
+            for row in rows:
+                row["fallback_reason"] = f"stock_zh_index_daily_em failed: {em_exc}"
+            return rows, "stock_zh_index_daily"
+
     def fetch_index_data(self, request: StockDataRequest) -> ProviderFetchResult:
-        source_api = "stock_zh_index_daily_em+index_stock_cons_weight_csindex"
+        source_api = "stock_zh_index_daily_em|stock_zh_index_daily+index_stock_cons_weight_csindex"
         started = now_asia_shanghai()
         try:
             ak = self._import_ak(source_api, started)
@@ -1261,6 +1313,7 @@ class AKShareAdapter(BaseDataAdapter):
             include_bars = bool(request.extra_params.get("include_bars", True))
             include_constituents = bool(request.extra_params.get("include_constituents", True))
             records: list[dict[str, Any]] = []
+            bar_sources: list[str] = []
             for index_code_raw in index_codes:
                 index_code = str(index_code_raw).strip().upper().replace(".SH", "").replace(".SZ", "")
                 if not index_code:
@@ -1269,7 +1322,9 @@ class AKShareAdapter(BaseDataAdapter):
                     symbol = index_code.lower()
                     if not symbol.startswith(("sh", "sz", "bj")):
                         symbol = ("sh" if index_code.startswith("000") else "sz") + index_code
-                    for row in self._records(self._call_ak(ak.stock_zh_index_daily_em, symbol=symbol, start_date=self._start_date(request), end_date=self._end_date(request))):
+                    bar_rows, bar_source = self._index_daily_bars(ak, symbol, request)
+                    bar_sources.append(bar_source)
+                    for row in bar_rows:
                         row.update(
                             {
                                 "index_code": index_code,
@@ -1278,7 +1333,7 @@ class AKShareAdapter(BaseDataAdapter):
                                 "currency": "CNY",
                                 "market": "A_share",
                                 "asset_type": "index",
-                                "raw_source_api": "stock_zh_index_daily_em",
+                                "raw_source_api": bar_source,
                             }
                         )
                         records.append(row)
@@ -1306,11 +1361,328 @@ class AKShareAdapter(BaseDataAdapter):
                             }
                         )
                         records.append(row)
+            if bar_sources:
+                source_api = "+".join(dict.fromkeys(bar_sources)) + ("+index_stock_cons_weight_csindex" if include_constituents else "")
             return self._empty_result(source_api, records, started)
         except RuntimeError as exc:
-            return self._unavailable_result(source_api, ErrorCode.PROVIDER_UNAVAILABLE, str(exc))
+            if "akshare is not installed" in str(exc):
+                return self._unavailable_result(source_api, ErrorCode.PROVIDER_UNAVAILABLE, str(exc))
+            return self._error_result(source_api, started, exc, ErrorCode.UNKNOWN_ERROR, retryable=True)
         except Exception as exc:  # noqa: BLE001
             return self._error_result(source_api, started, exc, ErrorCode.UNKNOWN_ERROR, retryable=True)
+
+    # ------------------------------------------------------------------
+    # Market context (HK indices / FX / commodities / rates)
+    # ------------------------------------------------------------------
+    def _market_context_config(self) -> MarketContextSourcesConfig:
+        if self._market_context_sources is None:
+            self._market_context_sources = load_market_context_sources()
+        return self._market_context_sources
+
+    def fetch_market_context(self, request: StockDataRequest) -> ProviderFetchResult:
+        """Fetch one market-context symbol through the configured vendor bindings.
+
+        The request carries the business need in ``extra_params["market_context"]``;
+        which AKShare function answers it, with which arguments and column names, is
+        resolved from ``config/market_context_sources.yaml``. Sources are tried in
+        configured order; the first one returning rows inside the request window wins.
+        Every emitted row keeps the original vendor columns and adds standard aliases
+        plus the business identity so the runner can build typed records.
+        """
+        ctx = dict(request.extra_params.get("market_context") or {})
+        context_type = str(ctx.get("context_type") or "")
+        symbol = str(ctx.get("symbol") or "")
+        frequency = str(ctx.get("frequency") or "1d")
+        source_api = f"market_context:{context_type or 'unknown'}"
+        started = now_asia_shanghai()
+        try:
+            ak = self._import_ak(source_api, started)
+        except RuntimeError as exc:
+            return self._unavailable_result(source_api, ErrorCode.PROVIDER_UNAVAILABLE, str(exc))
+
+        config = self._market_context_config()
+        entry = config.symbol_entry(self.provider_name, context_type, symbol) if context_type and symbol else None
+        if entry is None:
+            return self._error_result(
+                source_api,
+                started,
+                ValueError(
+                    f"no market-context binding for {context_type or '?'}:{symbol or '?'} in config/market_context_sources.yaml "
+                    f"(provider={self.provider_name})"
+                ),
+                ErrorCode.INVALID_REQUEST,
+                retryable=False,
+            )
+        try:
+            sources = config.sources_for(self.provider_name, context_type, entry, frequency)
+        except ValueError as exc:
+            return self._error_result(source_api, started, exc, ErrorCode.INVALID_REQUEST, retryable=False)
+        if not sources:
+            return self._error_result(
+                source_api,
+                started,
+                ValueError(f"no {frequency} source configured for {context_type}:{symbol} (provider={self.provider_name})"),
+                ErrorCode.INVALID_REQUEST,
+                retryable=False,
+            )
+
+        failures: list[str] = []
+        empty_sources: list[str] = []
+        for source in sources:
+            func_name = str(source["func"])
+            func = getattr(ak, func_name, None)
+            if func is None:
+                failures.append(f"{func_name}: not available in installed akshare")
+                continue
+            try:
+                kwargs = self._render_market_context_args(source, entry, request)
+                frame = with_deadline(
+                    lambda: self._call_ak(func, retry_on_transient=False, **kwargs),
+                    config.call_deadline_seconds,
+                    f"akshare {func_name}",
+                )
+                rows = self._market_context_rows(source, entry, ctx, request, self._records(frame), fetched_at=now_asia_shanghai())
+            except Exception as exc:  # noqa: BLE001 - try the next configured source
+                failures.append(f"{func_name}: {type(exc).__name__}: {exc}")
+                continue
+            if rows:
+                if failures:
+                    for row in rows:
+                        row["fallback_reason"] = "; ".join(failures)
+                return self._success_result(func_name, rows, started)
+            empty_sources.append(func_name)
+
+        if failures:
+            return self._error_result(
+                source_api,
+                started,
+                RuntimeError("; ".join(failures + [f"{name}: no rows in requested window" for name in empty_sources])),
+                ErrorCode.PROVIDER_TIMEOUT if all("TimeoutError" in f for f in failures) else ErrorCode.UNKNOWN_ERROR,
+                retryable=True,
+            )
+        return self._success_result("+".join(empty_sources) or source_api, [], started)
+
+    def _render_market_context_args(self, source: dict[str, Any], entry: dict[str, Any], request: StockDataRequest) -> dict[str, Any]:
+        """Fill ``{placeholder}`` templates in the configured call arguments."""
+        variables: dict[str, Any] = {
+            **{k: v for k, v in entry.items() if isinstance(v, (str, int, float))},
+            **{k: v for k, v in source.items() if isinstance(v, (str, int, float))},
+            "start_yyyymmdd": self._start_date(request, (date.today() - timedelta(days=60)).strftime("%Y%m%d")),
+            "end_yyyymmdd": self._end_date(request, date.today().strftime("%Y%m%d")),
+            "as_of_yyyymmdd": self._end_date(request, date.today().strftime("%Y%m%d")),
+        }
+        rendered: dict[str, Any] = {}
+        for key, template in (source.get("args") or {}).items():
+            if isinstance(template, str):
+                try:
+                    rendered[key] = template.format(**variables)
+                except KeyError as exc:
+                    raise ValueError(
+                        f"market_context_sources.yaml: argument {key!r} of {source.get('func')} references unknown placeholder {exc}"
+                    ) from exc
+            else:
+                rendered[key] = template
+        return rendered
+
+    def _market_context_rows(
+        self,
+        source: dict[str, Any],
+        entry: dict[str, Any],
+        ctx: dict[str, Any],
+        request: StockDataRequest,
+        raw_rows: list[dict[str, Any]],
+        *,
+        fetched_at: datetime,
+    ) -> list[dict[str, Any]]:
+        layout = str(source.get("layout") or "ohlc")
+        context_type = str(ctx.get("context_type"))
+        base: dict[str, Any] = {
+            "context_type": context_type,
+            "context_symbol": str(ctx.get("symbol")),
+            "context_name": entry.get("name"),
+            "provider_symbol": entry.get("provider_symbol"),
+            "raw_source_api": str(source["func"]),
+            "raw_source_url": source.get("source_url"),
+        }
+        identity = self._market_context_identity(context_type, entry, ctx)
+        if layout == "ohlc":
+            return self._ctx_rows_ohlc(source, base, identity, request, raw_rows)
+        if layout == "snapshot":
+            return self._ctx_rows_snapshot(source, base, identity, raw_rows, fetched_at)
+        if layout == "quote_types":
+            return self._ctx_rows_quote_types(source, base, identity, request, raw_rows)
+        if layout == "wide_series":
+            return self._ctx_rows_series(source, base, identity, request, raw_rows, column=self._series_column(source))
+        if layout == "curve_tenors":
+            curve = source.get("curve")
+            curve_column = str(source.get("curve_column") or "曲线名称")
+            tenor_columns = source.get("tenor_columns") or {}
+            tenor = identity.get("tenor")
+            column = tenor_columns.get(tenor)
+            if column is None:
+                raise ValueError(f"market_context_sources.yaml: tenor {tenor!r} not in tenor_columns of {source.get('func')}")
+            filtered = [row for row in raw_rows if curve is None or str(self._value(row, curve_column, default="")).strip() == str(curve)]
+            return self._ctx_rows_series(source, base, {**identity, "curve_name": curve}, request, filtered, column=str(column))
+        if layout == "single_series":
+            return self._ctx_rows_series(source, base, identity, request, raw_rows, column=str(source.get("value_column") or "value"))
+        raise ValueError(f"unsupported market-context layout {layout!r}")
+
+    def _series_column(self, source: dict[str, Any]) -> str:
+        """``series_map`` (type level) maps keys to vendor columns; ``series`` (symbol binding) selects one."""
+        series_key = source.get("series")
+        series_map = source.get("series_map") or {}
+        if not series_key:
+            raise ValueError(f"market_context_sources.yaml: symbol must select a series for {source.get('func')}")
+        column = series_map.get(str(series_key))
+        if column is None:
+            raise ValueError(f"market_context_sources.yaml: series {series_key!r} not in series_map of {source.get('func')}")
+        return str(column)
+
+    def _market_context_identity(self, context_type: str, entry: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+        symbol = str(ctx.get("symbol"))
+        if context_type == "hk_index":
+            return {
+                "index_code": symbol.upper(),
+                "index_name": entry.get("name"),
+                "exchange": entry.get("exchange", "HKEX"),
+                "currency": entry.get("currency", "HKD"),
+                "market": entry.get("market", "HK"),
+                "asset_type": "index",
+            }
+        if context_type == "commodity":
+            return {
+                "commodity": entry.get("commodity", symbol.lower()),
+                "commodity_name": entry.get("name"),
+                "instrument_type": ctx.get("instrument_type") or entry.get("instrument_type", "futures"),
+                "market": ctx.get("market") or entry.get("market", "UNKNOWN"),
+                "contract": ctx.get("contract") or entry.get("contract", symbol.upper()),
+                "price_unit": entry.get("price_unit", "CNY"),
+                "currency": entry.get("currency", "CNY"),
+            }
+        if context_type == "fx":
+            return {
+                "base_currency": str(entry.get("base_currency", symbol[:3])).upper(),
+                "quote_currency": str(entry.get("quote_currency", symbol[3:6] or "CNY")).upper(),
+            }
+        if context_type == "interest_rate":
+            return {
+                "rate_type": ctx.get("rate_type") or entry.get("rate_type", "unknown"),
+                "market": ctx.get("market") or entry.get("market", "UNKNOWN"),
+                "tenor": ctx.get("tenor") or entry.get("tenor", "unknown"),
+                "currency": entry.get("currency"),
+                "rate_name": entry.get("name"),
+            }
+        return {}
+
+    def _ctx_rows_ohlc(self, source: dict[str, Any], base: dict[str, Any], identity: dict[str, Any], request: StockDataRequest, raw_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        date_column = str(source.get("date_column") or "date")
+        columns: dict[str, str] = source.get("columns") or {}
+        rows: list[dict[str, Any]] = []
+        for raw in raw_rows:
+            trade_date = self._date_text(self._value(raw, date_column))
+            if not trade_date or not self._date_in_request_range(trade_date, request):
+                continue
+            mapped = {std: self._numeric(self._value(raw, vendor)) for std, vendor in columns.items()}
+            rows.append({**raw, **base, **identity, **mapped, "trade_date": trade_date, "frequency": str(source.get("frequency") or "1d")})
+        return rows
+
+    def _ctx_rows_snapshot(self, source: dict[str, Any], base: dict[str, Any], identity: dict[str, Any], raw_rows: list[dict[str, Any]], fetched_at: datetime) -> list[dict[str, Any]]:
+        time_column = str(source.get("time_column") or "time")
+        columns: dict[str, str] = source.get("columns") or {}
+        rows: list[dict[str, Any]] = []
+        for raw in raw_rows:
+            observed_at, date_inferred = self._snapshot_observed_at(self._value(raw, time_column), fetched_at)
+            mapped = {std: self._numeric(self._value(raw, vendor)) for std, vendor in columns.items()}
+            rows.append(
+                {
+                    **raw,
+                    **base,
+                    **identity,
+                    **mapped,
+                    "frequency": "realtime",
+                    "observed_at": observed_at.isoformat(),
+                    "trade_date": observed_at.strftime("%Y%m%d"),
+                    # Vendor snapshots often carry HHMMSS only; the calendar date then comes
+                    # from the collection clock and the service must flag it.
+                    "observed_date_inferred_from_fetch": date_inferred,
+                }
+            )
+        return rows
+
+    def _snapshot_observed_at(self, value: Any, fetched_at: datetime) -> tuple[datetime, bool]:
+        if self._is_missing(value):
+            return fetched_at, True
+        text = str(value).strip()
+        if re.fullmatch(r"\d{6}", text):
+            parsed = time(int(text[:2]), int(text[2:4]), int(text[4:6]))
+            return datetime.combine(fetched_at.date(), parsed, tzinfo=fetched_at.tzinfo), True
+        if re.fullmatch(r"\d{2}:\d{2}(:\d{2})?", text):
+            parts = [int(p) for p in text.split(":")]
+            parsed = time(parts[0], parts[1], parts[2] if len(parts) > 2 else 0)
+            return datetime.combine(fetched_at.date(), parsed, tzinfo=fetched_at.tzinfo), True
+        try:
+            parsed_dt = datetime.fromisoformat(text.replace("/", "-").replace(" ", "T"))
+        except ValueError:
+            return fetched_at, True
+        if parsed_dt.tzinfo is None:
+            parsed_dt = parsed_dt.replace(tzinfo=fetched_at.tzinfo)
+        return parsed_dt, False
+
+    def _ctx_rows_quote_types(self, source: dict[str, Any], base: dict[str, Any], identity: dict[str, Any], request: StockDataRequest, raw_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        date_column = str(source.get("date_column") or "date")
+        rate_types: dict[str, str] = source.get("rate_types") or {}
+        quote_currency = str(source.get("quote_currency") or identity.get("quote_currency") or "CNY").upper()
+        quote_basis = float(source.get("quote_basis") or 1.0)
+        base_currency = identity["base_currency"]
+        rows: list[dict[str, Any]] = []
+        for raw in raw_rows:
+            rate_date = self._date_text(self._value(raw, date_column))
+            if not rate_date or not self._date_in_request_range(rate_date, request):
+                continue
+            for rate_type, column in rate_types.items():
+                rate = self._numeric(self._value(raw, column))
+                if rate is None:
+                    continue
+                rows.append(
+                    {
+                        **raw,
+                        **base,
+                        "base_currency": base_currency,
+                        "quote_currency": quote_currency,
+                        "quote_basis": quote_basis,
+                        "rate_type": str(rate_type),
+                        "rate_date": rate_date,
+                        "rate": rate,
+                        "pair": f"{base_currency}{quote_currency}",
+                        "market": source.get("market"),
+                        "source_methodology": f"{source['func']}:{column}",
+                    }
+                )
+        return rows
+
+    def _ctx_rows_series(self, source: dict[str, Any], base: dict[str, Any], identity: dict[str, Any], request: StockDataRequest, raw_rows: list[dict[str, Any]], *, column: str) -> list[dict[str, Any]]:
+        date_column = str(source.get("date_column") or "date")
+        rows: list[dict[str, Any]] = []
+        for raw in raw_rows:
+            rate_date = self._date_text(self._value(raw, date_column))
+            if not rate_date or not self._date_in_request_range(rate_date, request):
+                continue
+            value = self._numeric(self._value(raw, column))
+            if value is None:
+                # e.g. CN yields are NaN on US-only trading days: no observation, not zero.
+                continue
+            rows.append(
+                {
+                    **raw,
+                    **base,
+                    **identity,
+                    "rate_date": rate_date,
+                    "rate_value": value,
+                    "unit": str(source.get("unit") or "percent"),
+                    "source_methodology": f"{source['func']}:{column}",
+                }
+            )
+        return rows
 
     def fetch_corporate_action(self, request: StockDataRequest) -> ProviderFetchResult:
         source_api = "stock_history_dividend_detail+stock_dividend_cninfo+stock_repurchase_em"

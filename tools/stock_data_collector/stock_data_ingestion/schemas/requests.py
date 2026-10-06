@@ -25,6 +25,9 @@ class RequestType(StrEnum):
     money_flow = "money_flow"
     index_data = "index_data"
     corporate_action = "corporate_action"
+    # Non-stock market background (HK indices, FX, commodities, rates). A-share indices
+    # keep using index_data; see services/market_context_service.py for the dispatch.
+    market_context = "market_context"
     batch_refresh = "batch_refresh"
     cross_validation = "cross_validation"
 

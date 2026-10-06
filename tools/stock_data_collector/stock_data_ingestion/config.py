@@ -4,7 +4,7 @@ import os
 import re
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, ClassVar, Iterable
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
@@ -47,6 +47,7 @@ REQUEST_TYPE_ENV_SUFFIXES: dict[str, str] = {
     "money_flow": "MONEY_FLOW",
     "index_data": "INDEX_DATA",
     "corporate_action": "CORPORATE_ACTION",
+    "market_context": "MARKET_CONTEXT",
 }
 
 
@@ -233,10 +234,120 @@ class DataQualityConfig(BaseModel):
     supplement_field_whitelist: list[str] = Field(default_factory=list)
 
 
+class MarketContextSourcesConfig(BaseModel):
+    """Vendor bindings for market-context data (config/market_context_sources.yaml).
+
+    The structure is validated for the keys the adapters and the market-context service
+    depend on; everything else is passed through so new vendor arguments do not require
+    code changes.
+    """
+
+    schema_version: str = "market_context_sources.v1"
+    call_deadline_seconds: float = 60.0
+    latest_lookback_days: int = 60
+    providers: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+    SUPPORTED_LAYOUTS: ClassVar[set[str]] = {"ohlc", "snapshot", "quote_types", "wide_series", "curve_tenors", "single_series"}
+
+    @model_validator(mode="after")
+    def validate_bindings(self) -> "MarketContextSourcesConfig":
+        if self.call_deadline_seconds <= 0:
+            raise ValueError("INVALID_MARKET_CONTEXT_CONFIG: call_deadline_seconds must be positive")
+        if self.latest_lookback_days <= 0:
+            raise ValueError("INVALID_MARKET_CONTEXT_CONFIG: latest_lookback_days must be positive")
+        normalized: dict[str, dict[str, Any]] = {}
+        for provider, types in (self.providers or {}).items():
+            provider_name = normalize_provider_name(provider)
+            normalized[provider_name] = {}
+            for context_type, section in (types or {}).items():
+                section = dict(section or {})
+                for source in section.get("sources") or []:
+                    if not isinstance(source, dict) or not source.get("func"):
+                        raise ValueError(
+                            f"INVALID_MARKET_CONTEXT_CONFIG: {provider_name}.{context_type} source entries need a func"
+                        )
+                    layout = str(source.get("layout") or "ohlc")
+                    if layout not in self.SUPPORTED_LAYOUTS:
+                        raise ValueError(
+                            f"INVALID_MARKET_CONTEXT_CONFIG: unsupported layout {layout!r} for "
+                            f"{provider_name}.{context_type}.{source.get('func')}"
+                        )
+                    source.setdefault("layout", layout)
+                    source.setdefault("frequency", "1d")
+                    source.setdefault("args", {})
+                symbols = section.get("symbols") or {}
+                section["symbols"] = {str(key): dict(value or {}) for key, value in symbols.items()}
+                normalized[provider_name][str(context_type)] = section
+        self.providers = normalized
+        return self
+
+    def section(self, provider: str, context_type: str) -> dict[str, Any]:
+        return (self.providers.get(normalize_provider_name(provider)) or {}).get(str(context_type)) or {}
+
+    def symbol_entry(self, provider: str, context_type: str, symbol: str) -> dict[str, Any] | None:
+        section = self.section(provider, context_type)
+        symbols = section.get("symbols") or {}
+        entry = symbols.get(str(symbol))
+        if entry is None:
+            # Case-insensitive match for letter symbols (HSTECH vs hstech); numeric codes
+            # must match exactly.
+            for key, value in symbols.items():
+                if key.upper() == str(symbol).upper():
+                    entry = value
+                    break
+        if entry is None and str(context_type) == "fx":
+            entry = self._derive_fx_symbol(section, symbol)
+        return dict(entry) if entry is not None else None
+
+    @staticmethod
+    def _derive_fx_symbol(section: dict[str, Any], symbol: str) -> dict[str, Any] | None:
+        """Accept any <CCY>CNY pair whose foreign-currency vendor name is configured."""
+        text = str(symbol).upper().replace("/", "")
+        if len(text) != 6 or not text.endswith("CNY"):
+            return None
+        names = section.get("currency_names") or {}
+        base = text[:3]
+        if base not in names:
+            return None
+        return {
+            "name": f"{base}兑人民币（中行牌价，CNY/100{base}）",
+            "base_currency": base,
+            "quote_currency": "CNY",
+            "provider_symbol": names[base],
+        }
+
+    def sources_for(self, provider: str, context_type: str, symbol_entry: dict[str, Any], frequency: str) -> list[dict[str, Any]]:
+        """Resolve the ordered vendor sources for one symbol.
+
+        A symbol may bind to specific sources (``sources: [{func, ...}]``) with extra
+        per-symbol parameters; otherwise all type-level sources matching the requested
+        frequency apply.
+        """
+        section = self.section(provider, context_type)
+        type_sources = {str(src["func"]): src for src in section.get("sources") or []}
+        bindings = symbol_entry.get("sources")
+        resolved: list[dict[str, Any]] = []
+        if bindings:
+            for binding in bindings:
+                binding = dict(binding or {})
+                func = str(binding.get("func") or "")
+                base = type_sources.get(func)
+                if base is None:
+                    raise ValueError(
+                        f"INVALID_MARKET_CONTEXT_CONFIG: symbol binds to unknown source {func!r} in {provider}.{context_type}"
+                    )
+                merged = {**base, **{k: v for k, v in binding.items() if k != "func"}, "func": func}
+                resolved.append(merged)
+        else:
+            resolved = [dict(src) for src in type_sources.values()]
+        return [src for src in resolved if str(src.get("frequency") or "1d") == str(frequency)]
+
+
 class AppConfig(BaseModel):
     data_sources: DataSourcesConfig
     storage: StorageConfig
     data_quality: DataQualityConfig
+    market_context: MarketContextSourcesConfig = Field(default_factory=MarketContextSourcesConfig)
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -356,4 +467,18 @@ def load_config(config_dir: str | Path | None = None) -> AppConfig:
         storage_data["sqlite_path"] = os.getenv("STOCK_DATA_SQLITE_PATH")
     storage = StorageConfig.model_validate(storage_data)
     data_quality = DataQualityConfig.model_validate(_load_yaml(root / "data_quality.yaml"))
-    return AppConfig(data_sources=data_sources, storage=storage, data_quality=data_quality)
+    market_context = load_market_context_sources(root)
+    return AppConfig(data_sources=data_sources, storage=storage, data_quality=data_quality, market_context=market_context)
+
+
+def load_market_context_sources(config_dir: str | Path | None = None) -> MarketContextSourcesConfig:
+    """Load config/market_context_sources.yaml, falling back to the packaged default.
+
+    A deployment config dir that predates market-context support (no such file) keeps
+    working: the packaged default file is used so vendor bindings are still available.
+    """
+    root = find_config_dir(config_dir)
+    path = root / "market_context_sources.yaml"
+    if not path.exists():
+        path = Path(__file__).resolve().parents[1] / "config" / "market_context_sources.yaml"
+    return MarketContextSourcesConfig.model_validate(_load_yaml(path))

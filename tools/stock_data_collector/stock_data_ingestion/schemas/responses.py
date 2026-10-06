@@ -36,6 +36,9 @@ class StockDataResponseData(BaseModel):
     index_bars: list[dict[str, Any]] = Field(default_factory=list)
     index_constituents: list[dict[str, Any]] = Field(default_factory=list)
     corporate_actions: list[dict[str, Any]] = Field(default_factory=list)
+    fx_rates: list[dict[str, Any]] = Field(default_factory=list)
+    commodity_prices: list[dict[str, Any]] = Field(default_factory=list)
+    interest_rates: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class PersistenceReport(BaseModel):

@@ -457,6 +457,103 @@ class CorporateActionRecord(StandardRecord, StockIdentityMixin, CurrencyMixin):
     rights_issue_price: Optional[float] = None
 
 
+class FxRateRecord(StandardRecord):
+    """One FX quote of one quote type on one date.
+
+    Direction is explicit: ``rate`` is how many ``quote_currency`` units buy
+    ``quote_basis`` units of ``base_currency`` (BOC publishes CNY per 100 foreign
+    units, so HKD/CNY from BOC is ``base=HKD quote=CNY basis=100``). Each quote type
+    (spot buy / spot sell / central parity ...) is a separate record; they are never
+    averaged or merged into one "the rate".
+    """
+
+    record_type: str = "fx_rate"
+    base_currency: str
+    quote_currency: str
+    quote_basis: float = 1.0
+    rate_type: str
+    rate_date: date
+    rate: float
+    pair: Optional[str] = None
+    market: Optional[str] = None
+    source_methodology: Optional[str] = None
+
+    @model_validator(mode="after")
+    def validate_rate(self) -> "FxRateRecord":
+        if self.rate <= 0:
+            raise ValueError("NORMALIZATION_FAILED: fx rate must be positive")
+        if self.quote_basis <= 0:
+            raise ValueError("NORMALIZATION_FAILED: quote_basis must be positive")
+        if self.base_currency == self.quote_currency:
+            raise ValueError("NORMALIZATION_FAILED: base_currency and quote_currency must differ")
+        return self
+
+
+class CommodityPriceRecord(StandardRecord, CurrencyMixin, TimezoneMixin):
+    """One observation of one commodity instrument.
+
+    Spot and futures, and daily bars versus realtime snapshots, are different records
+    (``instrument_type`` / ``frequency``). Within a record close, settle and latest are
+    separate fields so a settlement price is never reported as a close or a spot price.
+    """
+
+    record_type: str = "commodity_price"
+    commodity: str
+    commodity_name: Optional[str] = None
+    instrument_type: str  # futures | spot
+    market: str  # exchange or spot market, e.g. SHFE, GFEX, SMM
+    contract: Optional[str] = None  # e.g. CU0 (continuous), CU2611, or None for spot
+    frequency: str = "1d"  # 1d | realtime
+    trade_date: date
+    observed_at: Optional[datetime] = None  # realtime snapshot time; None for daily bars
+    price_unit: str  # e.g. CNY/ton
+    open: Optional[float] = None
+    high: Optional[float] = None
+    low: Optional[float] = None
+    close: Optional[float] = None
+    settle: Optional[float] = None
+    latest: Optional[float] = None
+    pre_close: Optional[float] = None
+    pre_settle: Optional[float] = None
+    volume: Optional[float] = None
+    open_interest: Optional[float] = None
+
+    @model_validator(mode="after")
+    def validate_commodity(self) -> "CommodityPriceRecord":
+        if self.instrument_type not in {"futures", "spot"}:
+            raise ValueError("NORMALIZATION_FAILED: instrument_type must be futures or spot")
+        if self.close is None and self.settle is None and self.latest is None:
+            raise ValueError("NORMALIZATION_FAILED: commodity record needs close, settle or latest")
+        for name in ("open", "high", "low", "close", "settle", "latest"):
+            value = getattr(self, name)
+            if value is not None and value <= 0:
+                raise ValueError(f"NORMALIZATION_FAILED: commodity {name} must be positive")
+        if self.frequency == "realtime" and self.observed_at is None:
+            raise ValueError("NORMALIZATION_FAILED: realtime commodity record needs observed_at")
+        return self
+
+
+class InterestRateRecord(StandardRecord):
+    """One rate / yield observation for one tenor on one date.
+
+    ``tenor`` and ``rate_type`` stay on the record so a 2Y and a 10Y yield from the
+    same curve are different records and are never merged. ``unit`` is ``percent``
+    for every supported source; differences are therefore percentage points.
+    """
+
+    record_type: str = "interest_rate"
+    rate_type: str  # government_bond_yield | interbank_offered_rate | policy_rate | ...
+    market: str  # CN | US | CN_INTERBANK ...
+    tenor: str  # 10Y | 3M | O/N ...
+    rate_date: date
+    rate_value: float
+    unit: str = "percent"
+    curve_name: Optional[str] = None
+    rate_name: Optional[str] = None
+    currency: Optional[str] = None
+    source_methodology: Optional[str] = None
+
+
 class RawPayloadIndexRecord(BaseModel):
     raw_payload_id: str
     raw_payload_ref: str
@@ -506,6 +603,9 @@ __all__ = [
     "IndexBarRecord",
     "IndexConstituentRecord",
     "CorporateActionRecord",
+    "FxRateRecord",
+    "CommodityPriceRecord",
+    "InterestRateRecord",
     "RawPayloadIndexRecord",
     "DataQualityConflict",
     "ErrorRecord",

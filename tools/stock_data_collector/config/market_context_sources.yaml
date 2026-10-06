@@ -1,0 +1,261 @@
+# Market-context data-source configuration (indices / FX / commodities / rates).
+#
+# This file is the only place where vendor function names, call arguments and column
+# mappings for market background data live. Callers (the intelligence collector agent)
+# send business requests such as "HSTECH daily close as of 2026-10-06" or
+# "HKD/CNY BOC spot-sell quote"; the tool resolves them here. When an AKShare endpoint
+# drifts (renamed function, relabelled column), fix it in this file - not in an agent.
+#
+# Layout of a source entry (per provider / context_type):
+#   func          vendor function name (AKShare)
+#   args          keyword-argument template; "{name}" placeholders are filled from the
+#                 symbol entry, the symbol-level source item and the request window
+#                 ({start_yyyymmdd}, {end_yyyymmdd}, {as_of_yyyymmdd})
+#   layout        how rows are read:
+#                   ohlc          one row per date; `columns` maps standard -> vendor column
+#                   snapshot      one realtime row; `time_column` gives HHMMSS or a timestamp
+#                   quote_types   one row per date; `rate_types` maps quote type -> column
+#                   wide_series   one row per date; `series_map` maps series key -> column and
+#                                 the symbol binding selects one with `series: <key>`
+#                   curve_tenors  one row per (curve, date); `tenor_columns` maps tenor -> column
+#                   single_series one row per date; `value_column` is the value
+#   frequency     1d (default) or realtime; sources are filtered by requested frequency
+#   source_url    human-readable origin shown in results
+#
+# Symbol entries carry the business identity returned to callers (name, market, unit,
+# currency direction, tenor ...) plus provider_symbol and any per-symbol source bindings.
+#
+# Former agent-side fields map here as follows:
+#   akshare_func / akshare_args -> sources[].func / sources[].args
+#   date_column / value_column  -> sources[].date_column / columns / rate_types / ...
+#   unit                        -> symbols.<symbol>.price_unit (commodity) or implied by the
+#                                  record type (index points, percent, quote currency per basis)
+
+schema_version: market_context_sources.v1
+
+# Hard wall-clock deadline for one vendor call. AKShare requests carry no timeout and
+# IPv6 black-holes / WAF stalls have been observed, so every call is bounded.
+call_deadline_seconds: 60
+# Calendar days fetched before as_of in latest-value mode so 1/5/20-observation changes
+# can be computed (60 calendar days cover roughly 40 trading days).
+latest_lookback_days: 60
+
+providers:
+  akshare:
+    # ------------------------------------------------------------------------
+    # A-share indices reuse request_type=index_data (AKShareAdapter.fetch_index_data,
+    # IndexBarRecord). Only the symbol registry lives here; the fetch implementation
+    # is the existing index path.
+    # ------------------------------------------------------------------------
+    equity_index:
+      symbols:
+        "000300": {name: 沪深300, exchange: SSE, provider_symbol: sh000300}
+        "000016": {name: 上证50, exchange: SSE, provider_symbol: sh000016}
+        "000001": {name: 上证指数, exchange: SSE, provider_symbol: sh000001}
+        "000905": {name: 中证500, exchange: SSE, provider_symbol: sh000905}
+        "000852": {name: 中证1000, exchange: SSE, provider_symbol: sh000852}
+        "399001": {name: 深证成指, exchange: SZSE, provider_symbol: sz399001}
+        "399006": {name: 创业板指, exchange: SZSE, provider_symbol: sz399006}
+        "000688": {name: 科创50, exchange: SSE, provider_symbol: sh000688}
+
+    # ------------------------------------------------------------------------
+    # Hong Kong indices -> IndexBarRecord with market=HK, currency=HKD.
+    # ------------------------------------------------------------------------
+    hk_index:
+      sources:
+        - func: stock_hk_index_daily_sina
+          layout: ohlc
+          args: {symbol: "{provider_symbol}"}
+          date_column: date
+          columns: {open: open, high: high, low: low, close: close, volume: volume, amount: amount}
+          source_url: https://stock.finance.sina.com.cn/hkstock/
+        - func: stock_hk_index_daily_em
+          layout: ohlc
+          args: {symbol: "{provider_symbol}"}
+          date_column: 日期
+          columns: {open: 开盘, high: 最高, low: 最低, close: 最新}
+          source_url: https://quote.eastmoney.com/center/hszs.html
+      symbols:
+        HSTECH: {name: 恒生科技指数, exchange: HKEX, currency: HKD, provider_symbol: HSTECH}
+        HSI: {name: 恒生指数, exchange: HKEX, currency: HKD, provider_symbol: HSI}
+        HSCEI: {name: 恒生中国企业指数, exchange: HKEX, currency: HKD, provider_symbol: HSCEI}
+
+    # ------------------------------------------------------------------------
+    # FX -> FxRateRecord. BOC quotes are CNY per 100 units of the foreign currency, so
+    # every pair here is base=<foreign> quote=CNY basis=100. One record per quote type.
+    # ------------------------------------------------------------------------
+    fx:
+      sources:
+        - func: currency_boc_sina
+          layout: quote_types
+          args: {symbol: "{provider_symbol}", start_date: "{start_yyyymmdd}", end_date: "{end_yyyymmdd}"}
+          date_column: 日期
+          quote_currency: CNY
+          quote_basis: 100
+          market: BOC
+          rate_types:
+            spot_buy: 中行汇买价
+            cash_buy: 中行钞买价
+            spot_sell: 中行钞卖价/汇卖价
+            central_parity: 央行中间价
+            boc_conversion: 中行折算价
+          source_url: https://biz.finance.sina.com.cn/forex/forex.php
+      # Vendor names for the foreign currency; any <CCY>CNY symbol with a mapped CCY works.
+      currency_names:
+        HKD: 港币
+        USD: 美元
+        EUR: 欧元
+        JPY: 日元
+        GBP: 英镑
+        AUD: 澳大利亚元
+        CAD: 加拿大元
+        SGD: 新加坡元
+        CHF: 瑞士法郎
+      symbols:
+        HKDCNY: {name: 港币兑人民币（中行牌价，CNY/100HKD）, base_currency: HKD, quote_currency: CNY, provider_symbol: 港币}
+        USDCNY: {name: 美元兑人民币（中行牌价，CNY/100USD）, base_currency: USD, quote_currency: CNY, provider_symbol: 美元}
+
+    # ------------------------------------------------------------------------
+    # Commodities -> CommodityPriceRecord. Daily bars (close / settle) and realtime
+    # snapshots (latest) are different frequencies and never share a record.
+    # ------------------------------------------------------------------------
+    commodity:
+      sources:
+        - func: futures_zh_daily_sina
+          layout: ohlc
+          frequency: 1d
+          args: {symbol: "{provider_symbol}"}
+          date_column: date
+          columns: {open: open, high: high, low: low, close: close, settle: settle, volume: volume, open_interest: hold}
+          source_url: https://finance.sina.com.cn/futuremarket/
+        - func: futures_zh_spot
+          layout: snapshot
+          frequency: realtime
+          args: {symbol: "{provider_symbol}", market: "{sina_market}", adjust: "0"}
+          time_column: time
+          columns: {latest: current_price, open: open, high: high, low: low, pre_close: last_close, pre_settle: last_settle_price, volume: volume, open_interest: hold}
+          source_url: https://finance.sina.com.cn/futuremarket/
+      symbols:
+        CU0:
+          name: 沪铜连续合约
+          commodity: copper
+          instrument_type: futures
+          market: SHFE
+          contract: CU0
+          price_unit: CNY/ton
+          currency: CNY
+          provider_symbol: CU0
+          sina_market: CF
+        LC0:
+          name: 碳酸锂连续合约
+          commodity: lithium_carbonate
+          instrument_type: futures
+          market: GFEX
+          contract: LC0
+          price_unit: CNY/ton
+          currency: CNY
+          provider_symbol: LC0
+          sina_market: CF
+        AU0:
+          name: 沪金连续合约
+          commodity: gold
+          instrument_type: futures
+          market: SHFE
+          contract: AU0
+          price_unit: CNY/gram
+          currency: CNY
+          provider_symbol: AU0
+          sina_market: CF
+
+    # ------------------------------------------------------------------------
+    # Rates and bond yields -> InterestRateRecord (unit percent). Each symbol binds to one
+    # or more sources in priority order; tenor/curve/series are selected per symbol.
+    # ------------------------------------------------------------------------
+    interest_rate:
+      sources:
+        - func: bond_china_yield
+          layout: curve_tenors
+          args: {start_date: "{start_yyyymmdd}", end_date: "{end_yyyymmdd}"}
+          date_column: 日期
+          curve_column: 曲线名称
+          tenor_columns: {3M: 3月, 6M: 6月, 1Y: 1年, 3Y: 3年, 5Y: 5年, 7Y: 7年, 10Y: 10年, 30Y: 30年}
+          source_url: https://yield.chinabond.com.cn/
+        - func: bond_zh_us_rate
+          layout: wide_series
+          args: {start_date: "{start_yyyymmdd}"}
+          date_column: 日期
+          series_map:
+            CN_CGB_2Y: 中国国债收益率2年
+            CN_CGB_5Y: 中国国债收益率5年
+            CN_CGB_10Y: 中国国债收益率10年
+            CN_CGB_30Y: 中国国债收益率30年
+            US_CGB_2Y: 美国国债收益率2年
+            US_CGB_5Y: 美国国债收益率5年
+            US_CGB_10Y: 美国国债收益率10年
+            US_CGB_30Y: 美国国债收益率30年
+          source_url: https://data.eastmoney.com/cjsj/zmgzsyl.html
+        - func: rate_interbank
+          layout: single_series
+          args: {market: 上海银行同业拆借市场, symbol: Shibor人民币, indicator: "{tenor_label}"}
+          date_column: 报告日
+          value_column: 利率
+          source_url: https://www.shibor.org/
+      symbols:
+        CN_CGB_10Y:
+          name: 中国10年期国债收益率
+          rate_type: government_bond_yield
+          market: CN
+          tenor: 10Y
+          currency: CNY
+          sources:
+            - {func: bond_china_yield, curve: 中债国债收益率曲线}
+            - {func: bond_zh_us_rate, series: CN_CGB_10Y}
+        CN_CGB_2Y:
+          name: 中国2年期国债收益率
+          rate_type: government_bond_yield
+          market: CN
+          tenor: 2Y
+          currency: CNY
+          sources:
+            - {func: bond_zh_us_rate, series: CN_CGB_2Y}
+        CN_CGB_30Y:
+          name: 中国30年期国债收益率
+          rate_type: government_bond_yield
+          market: CN
+          tenor: 30Y
+          currency: CNY
+          sources:
+            - {func: bond_china_yield, curve: 中债国债收益率曲线}
+            - {func: bond_zh_us_rate, series: CN_CGB_30Y}
+        US_CGB_10Y:
+          name: 美国10年期国债收益率
+          rate_type: government_bond_yield
+          market: US
+          tenor: 10Y
+          currency: USD
+          sources:
+            - {func: bond_zh_us_rate, series: US_CGB_10Y}
+        US_CGB_2Y:
+          name: 美国2年期国债收益率
+          rate_type: government_bond_yield
+          market: US
+          tenor: 2Y
+          currency: USD
+          sources:
+            - {func: bond_zh_us_rate, series: US_CGB_2Y}
+        SHIBOR_3M:
+          name: Shibor 3个月
+          rate_type: interbank_offered_rate
+          market: CN_INTERBANK
+          tenor: 3M
+          currency: CNY
+          sources:
+            - {func: rate_interbank, tenor_label: 3月}
+        SHIBOR_ON:
+          name: Shibor 隔夜
+          rate_type: interbank_offered_rate
+          market: CN_INTERBANK
+          tenor: O/N
+          currency: CNY
+          sources:
+            - {func: rate_interbank, tenor_label: 隔夜}

@@ -52,6 +52,9 @@ STANDARD_MODEL_BY_RECORD_TYPE: dict[str, Type[Base]] = {
     "index_bar": models.IndexBarModel,
     "index_constituent": models.IndexConstituentModel,
     "corporate_action": models.CorporateActionModel,
+    "fx_rate": models.FxRateModel,
+    "commodity_price": models.CommodityPriceModel,
+    "interest_rate": models.InterestRateModel,
 }
 
 

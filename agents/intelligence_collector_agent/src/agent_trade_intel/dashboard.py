@@ -652,15 +652,22 @@ function renderMarketContext(mc){
   $("marketContext").innerHTML =
     `<div class="chips" style="margin-bottom:8px">
       <span class="chip">contexts <b>${mc.contexts_with_snapshot||0}/${mc.expected_contexts||0}</b></span>
+      <span class="chip">当日有效 <b>${mc.contexts_fresh??"-"}</b></span>
+      <span class="chip">过期 <b>${(mc.stale_contexts||[]).length}</b></span>
       <span class="chip">缺快照 <b>${(mc.missing_snapshot||[]).length}</b></span>
       <span class="chip">缺取值 <b>${(mc.missing_value||[]).length}</b></span>
+      ${(mc.unknown_freshness||[]).length?`<span class="chip">新鲜度未知(旧数据) <b>${mc.unknown_freshness.length}</b></span>`:""}
       ${(mc.missing_snapshot||[]).slice(0,12).map(t=>`<span class="chip">缺 ${esc(t)}</span>`).join("")}
     </div>`+
-    table(["context","类型","取值","单位","1d","5d","20d"], (mc.rows||[]).map(r=>`
+    table(["context","类型","取值","单位","数据日期","新鲜度","1p","5p","20p","变动口径","来源"], (mc.rows||[]).map(r=>`
       <tr><td>${esc(r.name||r.context_id)}</td><td class="mono">${esc(r.context_type)}</td>
       <td class="num">${r.value??"-"}</td><td class="mut">${esc(r.unit||"-")}</td>
+      <td class="mut">${esc(r.data_date||"未知")}</td>
+      <td>${r.is_fresh===1?'<span class="ok">fresh</span>':r.is_fresh===0?`<span class="no">stale ${r.staleness_days??""}d</span>`:'<span class="mut">未知</span>'}</td>
       <td class="num">${r.change_1d??"-"}</td><td class="num">${r.change_5d??"-"}</td>
-      <td class="num">${r.change_20d??"-"}</td></tr>`));
+      <td class="num">${r.change_20d??"-"}</td>
+      <td class="mut">${esc(r.change_kind||"-")}</td>
+      <td class="mono">${esc(r.provider||"-")}${r.source_api?"/"+esc(r.source_api):""}</td></tr>`));
 }
 
 function renderResearchCards(cards){

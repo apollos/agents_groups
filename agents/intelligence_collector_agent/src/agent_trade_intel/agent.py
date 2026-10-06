@@ -121,7 +121,14 @@ class IntelligenceCollectorAgent:
             working_dir=config.tools.stock_working_dir,
             timeout_seconds=int(config.get("tools.hk_connect_collector.timeout_seconds", 300)),
         )
-        self.market_context = MarketContextAdapter(provider=str(config.get("tools.market_context_collector.provider", "akshare")))
+        # Market background (indices / FX / commodities / rates) is collected by the stock
+        # tool too; the agent only issues business requests over the same CLI boundary.
+        self.market_context = MarketContextAdapter(
+            config_dir=config.tools.stock_config_dir,
+            python_executable=config.tools.python_executable,
+            working_dir=config.tools.stock_working_dir,
+            timeout_seconds=int(config.get("tools.market_context_collector.timeout_seconds", 180)),
+        )
         self.capabilities = ToolCapabilityVerifier(self.state_store, self.stock, config.raw)
         self.heartbeats = HeartbeatRecorder(self.state_store, config.runtime.agent_id)
         self.breaker = CircuitBreaker(self.state_store, config.raw)
@@ -785,23 +792,48 @@ class IntelligenceCollectorAgent:
             )
         self._keepalive()
         result = self.market_context.collect_snapshot(context=target, as_of=task.get("as_of"))
-        self._record_breaker(self.market_context.tool_name, result.status)
+        # A tool answer that is "usable but stale" or "no binding configured" is not a tool
+        # outage: only transport/tool failures count towards the circuit breaker.
+        breaker_status = result.status if not result.errors or any(e.get("retryable") for e in result.errors) else "success"
+        self._record_breaker(self.market_context.tool_name, breaker_status)
         run_id = self.persister.save_run(task=task, ticket_id=ticket["ticket_id"], result=result, demand_id=task.get("demand_id"))
         if result.status == "success":
             self.persister.save_market_context_snapshot(task=task, result=result, run_id=run_id)
+            is_fresh = result.quality.get("is_fresh")
+            if is_fresh is False:
+                # Real value with its real (older) data date: research material, but not
+                # today's coverage. Keep it visible in the daily report / dashboard.
+                self._emit_data_quality(
+                    severity="P3",
+                    issue_type="market_context_stale",
+                    summary_cn=(
+                        f"{context_id} 最新数据日期 {result.quality.get('data_date')}，"
+                        f"距请求日 {result.quality.get('staleness_days')} 天，超出容忍 {result.quality.get('max_staleness_days')} 天；已保存但不计入当日覆盖。"
+                    ),
+                    payload={"run_id": run_id, "quality": result.quality, "data_date": result.quality.get("data_date")},
+                    target_id=context_id,
+                    parent_ticket_id=ticket["ticket_id"],
+                    correlation_id=ticket.get("correlation_id"),
+                )
+                self.tickets.update_status(ticket["ticket_id"], "done", "market context snapshot saved (stale)", {"quality": result.quality})
+                self._publish_collection_result(ticket, status="stale", run_ids=[run_id], usable=False)
+                return {"status": "stale", "run_id": run_id, "quality": result.quality}
             self.tickets.update_status(ticket["ticket_id"], "done", "market context snapshot saved")
             self._publish_collection_result(ticket, status="success", run_ids=[run_id], usable=True)
-            return {"status": "success", "run_id": run_id}
+            return {"status": "success", "run_id": run_id, "quality": result.quality}
+        retryable = any(err.get("retryable") for err in result.errors)
+        hint = next((e.get("suggested_action") for e in result.errors if e.get("suggested_action")), None)
         self._emit_data_quality(
             severity="P2",
             issue_type="market_context_collect_failed",
-            summary_cn=f"{context_id} 的市场背景快照采集失败。",
-            payload={"errors": result.errors, "run_id": run_id},
+            summary_cn=(
+                f"{context_id} 的市场背景快照采集失败。" + ("" if retryable else f" 需人工处理：{hint or '检查配置/依赖/权限'}")
+            ),
+            payload={"errors": result.errors, "run_id": run_id, "quality": result.quality, "manual_action": None if retryable else hint},
             target_id=context_id,
             parent_ticket_id=ticket["ticket_id"],
             correlation_id=ticket.get("correlation_id"),
         )
-        retryable = any(err.get("retryable") for err in result.errors)
         if retryable:
             self.tickets.update_status(ticket["ticket_id"], "open", "market context snapshot scheduled for retry", result.errors)
             return {
@@ -810,9 +842,9 @@ class IntelligenceCollectorAgent:
                 "_message_action": "retry",
                 "_retry_error": (result.errors or [{}])[0],
             }
-        self.tickets.update_status(ticket["ticket_id"], "failed", "market context snapshot failed")
+        self.tickets.update_status(ticket["ticket_id"], "failed", "market context snapshot failed (manual action required)", result.errors)
         self._publish_collection_result(ticket, status="failed", run_ids=[run_id], usable=False)
-        return {"status": "failed", "run_id": run_id}
+        return {"status": "failed", "run_id": run_id, "manual_action": hint}
 
     def _feature_enrichment_queries(
         self, *, ticker: str, task: dict[str, Any], intraday_frequency: str | None

@@ -43,6 +43,11 @@ INDUSTRY_DEMAND_ID = "demand_industry_research_daily"
 COMPANY_DEMAND_ID = "demand_company_research_daily"
 STOCK_DEMAND_ID = "demand_stock_eod_daily"
 MARKET_CONTEXT_DEMAND_ID = "demand_market_context_daily"
+# Mirrors stock_data_ingestion.schemas.market_context.ContextType (kept here so the request
+# center validates YAML without importing the tool across the CLI boundary).
+MARKET_CONTEXT_TYPES = {"equity_index", "hk_index", "fx", "commodity", "interest_rate"}
+# Fields that moved to the stock tool's market_context_sources.yaml in V0.9.
+MARKET_CONTEXT_LEGACY_FIELDS = ("akshare_func", "akshare_args", "date_column", "value_column", "unit", "provider", "source_url")
 
 _MIC_PROFILES_HEADER = (
     "# Target profiles for MIC collection.\n"
@@ -358,15 +363,15 @@ class RequestCenter:
             summary["stocks"] += 1
         # Structured market-context targets (index / FX / commodity / rate, V0.8.1). They go
         # to a dedicated market_context_daily demand and never touch MIC or the stock pool.
+        extra_warnings: list[str] = []
         for item in spec.get("market_contexts") or []:
             item = dict(item)
-            target = self._market_context_entry(item)
+            target = self._market_context_entry(item, warnings=extra_warnings)
             add(item.get("demand_id") or MARKET_CONTEXT_DEMAND_ID, "market_context", target, item)
             summary["market_contexts"] += 1
 
         profile_path = self._upsert_mic_profiles(profiles) if profiles else None
         demand_results = []
-        extra_warnings: list[str] = []
         for demand_id, group in groups.items():
             demand_results.append(
                 self._merge_targets_into_demand(
@@ -625,24 +630,63 @@ class RequestCenter:
             pool_op = {"pool_layer": pool_layer, "ticker": str(ticker), "target_id": tid, "company_name": name}
         return tid, profile, target, pool_op
 
-    def _market_context_entry(self, item: dict[str, Any]) -> dict[str, Any]:
+    def _market_context_entry(self, item: dict[str, Any], *, warnings: list[str] | None = None) -> dict[str, Any]:
+        """Agent-side market-context target: business identity + demand parameters only.
+
+        Field ownership after V0.9:
+        * context_id / name / context_type / symbol / category params -> this target (Agent);
+        * frequency / priority / max_staleness_days / metrics          -> this target (Agent demand);
+        * akshare_func / akshare_args / date_column / value_column /
+          unit / provider                                              -> stock tool
+          ``config/market_context_sources.yaml`` (dropped here with a warning so a legacy
+          YAML never silently steers collection).
+        """
         if not item.get("context_id"):
             raise ValueError("market_context entry missing context_id")
+        context_id = str(item["context_id"])
+        context_type = str(item.get("context_type") or "")
+        if context_type not in MARKET_CONTEXT_TYPES:
+            raise ValueError(
+                f"market_context entry {context_id}: context_type must be one of {sorted(MARKET_CONTEXT_TYPES)} (got {context_type or 'none'})"
+            )
+        if not item.get("symbol"):
+            raise ValueError(f"market_context entry {context_id}: symbol is required (business code such as 000300, HSTECH, HKDCNY, CU0, CN_CGB_10Y)")
+        legacy = [k for k in MARKET_CONTEXT_LEGACY_FIELDS if item.get(k) not in (None, "", {}, [])]
+        if legacy and warnings is not None:
+            warnings.append(
+                f"market_context {context_id}: vendor fields {legacy} are ignored since V0.9; "
+                "configure the binding in tools/stock_data_collector/config/market_context_sources.yaml"
+            )
+        if context_type == "fx" and warnings is not None:
+            symbol = str(item["symbol"]).upper().replace("/", "")
+            if symbol.startswith("CNY") and len(symbol) == 6:
+                warnings.append(
+                    f"market_context {context_id}: symbol {symbol} reads as '{symbol[3:]} per CNY'; BOC quotes are CNY per 100 foreign units, "
+                    f"so the intended business symbol is probably {symbol[3:]}CNY"
+                )
+        frequency = str(item.get("frequency") or "1d")
+        if frequency not in {"1d", "realtime"}:
+            raise ValueError(f"market_context entry {context_id}: frequency must be 1d or realtime")
+        metrics = item.get("metrics")
+        if isinstance(metrics, str):
+            metrics = [metrics]
         return _clean(
             {
                 "target_type": "market_context",
-                "target_id": item.get("target_id") or item["context_id"],
-                "context_id": item["context_id"],
-                "context_type": item.get("context_type") or "market_context",
-                "name": item.get("name") or item["context_id"],
-                "symbol": item.get("symbol"),
-                # AKShare call spec stays in config so endpoint drift is a YAML edit, not code.
-                "akshare_func": item.get("akshare_func"),
-                "akshare_args": item.get("akshare_args"),
-                "date_column": item.get("date_column"),
-                "value_column": item.get("value_column"),
-                "unit": item.get("unit"),
-                "source_url": item.get("source_url"),
+                "target_id": item.get("target_id") or context_id,
+                "context_id": context_id,
+                "context_type": context_type,
+                "name": item.get("name") or context_id,
+                "symbol": str(item["symbol"]),
+                "frequency": frequency,
+                "metrics": list(metrics) if metrics else None,
+                "market": item.get("market"),
+                "contract": item.get("contract"),
+                "instrument_type": item.get("instrument_type"),
+                "tenor": item.get("tenor"),
+                "rate_type": item.get("rate_type"),
+                "max_staleness_days": item.get("max_staleness_days"),
+                "priority": item.get("priority"),
                 # No MIC profile / stock data for a context row.
                 "collect_mic": False,
                 "collect_stock": False,

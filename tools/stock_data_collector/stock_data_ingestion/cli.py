@@ -188,6 +188,50 @@ def cmd_fetch_trading_status(args: argparse.Namespace) -> None:
     print(resp.model_dump_json(indent=2))
 
 
+def cmd_fetch_market_context(args: argparse.Namespace) -> None:
+    collector = _build_collector(args.config_dir)
+    resp = collector.fetch_market_context(
+        args.context_id or f"{args.context_type}:{args.symbol}",
+        args.context_type,
+        args.symbol,
+        as_of=args.as_of,
+        start_date=args.start_date,
+        end_date=args.end_date,
+        frequency=args.frequency,
+        metrics=args.metrics or None,
+        market=args.market,
+        contract=args.contract,
+        instrument_type=args.instrument_type,
+        tenor=args.tenor,
+        rate_type=args.rate_type,
+        max_staleness_days=args.max_staleness_days,
+        cross_validate=bool(args.cross_validate),
+        save_raw=not args.no_save,
+        save_cleaned=not args.no_save,
+        export_parquet=not args.no_save and not args.no_parquet,
+        requested_by=args.requested_by,
+        **_provider_args(args),
+    )
+    if args.compact:
+        resp = resp.model_copy(update={"stock_data_response": {k: resp.stock_data_response.get(k) for k in ("request_id", "status", "records_returned")}})
+    print(resp.model_dump_json(indent=2))
+
+
+def cmd_query_market_context(args: argparse.Namespace) -> None:
+    config = load_config(args.config_dir)
+    db = _build_database(config)
+    from stock_data_ingestion.services.query_service import QueryService
+
+    identity: dict[str, Any] = {}
+    for key in ("index_code", "base_currency", "quote_currency", "rate_type", "commodity", "contract", "instrument_type", "market", "tenor", "frequency"):
+        value = getattr(args, key, None)
+        if value is not None:
+            identity[key] = value
+    with db.session() as session:
+        rows = QueryService(session).get_market_context_records(args.context_type, identity, args.start_date, args.end_date)
+    print(json.dumps(rows, ensure_ascii=False, indent=2, default=_json_default))
+
+
 def cmd_fetch_corporate_action(args: argparse.Namespace) -> None:
     collector = _build_collector(args.config_dir)
     action_types = args.action_types or None
@@ -578,6 +622,32 @@ def build_parser() -> argparse.ArgumentParser:
     hk.add_argument("--as-of", required=False, help="Snapshot date (YYYY-MM-DD). Defaults to today; holding stats fall back to the latest published session.")
     hk.set_defaults(func=cmd_fetch_hk_connect)
 
+    mctx = fetch_sub.add_parser(
+        "market-context",
+        help="Market background by business request: A-share/HK indices, FX, commodities, rates/yields. Vendor bindings: config/market_context_sources.yaml.",
+    )
+    _add_provider_args(mctx)
+    mctx.add_argument("--context-type", required=True, choices=["equity_index", "hk_index", "fx", "commodity", "interest_rate"])
+    mctx.add_argument("--symbol", required=True, help="Business symbol, e.g. 000300, HSTECH, HKDCNY, CU0, CN_CGB_10Y")
+    mctx.add_argument("--context-id", default=None, help="Caller's context id (defaults to <type>:<symbol>)")
+    mctx.add_argument("--as-of", default=None, help="Latest-value mode: data available as of this day (default today)")
+    mctx.add_argument("--start-date", default=None, help="History mode (with --end-date): return the series in range")
+    mctx.add_argument("--end-date", default=None)
+    mctx.add_argument("--frequency", default="1d", choices=["1d", "realtime"])
+    mctx.add_argument("--metrics", nargs="*", default=None, help="Requested metrics; first is the headline (e.g. close, spot_sell, settle, rate_value)")
+    mctx.add_argument("--market", default=None)
+    mctx.add_argument("--contract", default=None)
+    mctx.add_argument("--instrument-type", default=None, choices=["futures", "spot"])
+    mctx.add_argument("--tenor", default=None)
+    mctx.add_argument("--rate-type", default=None)
+    mctx.add_argument("--max-staleness-days", type=int, default=None)
+    mctx.add_argument("--cross-validate", action="store_true")
+    mctx.add_argument("--no-save", action="store_true", help="Dry run: do not persist raw/standard records")
+    mctx.add_argument("--no-parquet", action="store_true")
+    mctx.add_argument("--compact", action="store_true", help="Omit the embedded stock_data_response details")
+    mctx.add_argument("--requested-by", default="manual")
+    mctx.set_defaults(func=cmd_fetch_market_context)
+
     status = fetch_sub.add_parser("trading-status")
     _add_provider_args(status)
     status.add_argument("--tickers", nargs="+", required=True)
@@ -610,6 +680,14 @@ def build_parser() -> argparse.ArgumentParser:
     qconf = query_sub.add_parser("conflicts")
     qconf.add_argument("--ticker", required=False)
     qconf.set_defaults(func=cmd_query_conflicts)
+
+    qmctx = query_sub.add_parser("market-context", help="Stored market-context records (index_bars / fx_rates / commodity_prices / interest_rates)")
+    qmctx.add_argument("--context-type", required=True, choices=["equity_index", "hk_index", "fx", "commodity", "interest_rate"])
+    qmctx.add_argument("--start-date", default=None)
+    qmctx.add_argument("--end-date", default=None)
+    for name in ("index-code", "base-currency", "quote-currency", "rate-type", "commodity", "contract", "instrument-type", "market", "tenor", "frequency"):
+        qmctx.add_argument(f"--{name}", default=None)
+    qmctx.set_defaults(func=cmd_query_market_context)
 
     qmeta = query_sub.add_parser("meta-summary")
     qmeta.add_argument("--ticker", required=False, help="Optional ticker used for company count and daily-bar range checks.")

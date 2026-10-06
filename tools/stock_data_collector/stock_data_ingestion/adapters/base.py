@@ -148,6 +148,15 @@ class BaseDataAdapter(ABC):
     def fetch_corporate_action(self, request: StockDataRequest) -> ProviderFetchResult:
         return self._unavailable_result("corporate_action", ErrorCode.PROVIDER_UNAVAILABLE, "not implemented")
 
+    def fetch_market_context(self, request: StockDataRequest) -> ProviderFetchResult:
+        """Non-stock market background (HK indices / FX / commodities / rates).
+
+        The business request lives in ``request.extra_params["market_context"]``
+        (context_type, symbol, frequency, ...); vendor bindings come from
+        ``config/market_context_sources.yaml``.
+        """
+        return self._unavailable_result("market_context", ErrorCode.PROVIDER_UNAVAILABLE, "not implemented")
+
     @abstractmethod
     def normalize_raw_data(self, result: ProviderFetchResult, request: StockDataRequest) -> list[Any]:
         raise NotImplementedError

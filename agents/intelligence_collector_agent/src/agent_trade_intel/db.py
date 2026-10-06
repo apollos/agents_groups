@@ -97,6 +97,26 @@ def _apply_migrations(con: sqlite3.Connection) -> None:
     # Index after the column exists (SCHEMA_SQL runs before migrations on legacy databases).
     con.execute("CREATE INDEX IF NOT EXISTS idx_structured_events_business ON structured_events(target_id, business_key)")
     con.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (9)")
+    # v10 (V0.9): market_context_snapshots record the *actual* data date, freshness verdict,
+    # tool provider/API and the tool's quality + provenance (request/run/record/raw ids).
+    # Legacy rows keep NULLs = "unknown": they were collected by the agent directly from
+    # AKShare before the stock tool owned market-context collection.
+    mc_cols = {row["name"] for row in con.execute("PRAGMA table_info(market_context_snapshots)")}
+    for column, ddl in (
+        ("data_date", "TEXT"),
+        ("is_fresh", "INTEGER"),
+        ("freshness_status", "TEXT"),
+        ("metric", "TEXT"),
+        ("change_kind", "TEXT"),
+        ("provider", "TEXT"),
+        ("source_api", "TEXT"),
+        ("tool_request_id", "TEXT"),
+        ("quality_json", "TEXT NOT NULL DEFAULT '{}'"),
+        ("provenance_json", "TEXT NOT NULL DEFAULT '{}'"),
+    ):
+        if column not in mc_cols:
+            con.execute(f"ALTER TABLE market_context_snapshots ADD COLUMN {column} {ddl}")
+    con.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (10)")
 
 
 def dumps_json(value: Any) -> str:
@@ -520,6 +540,17 @@ CREATE TABLE IF NOT EXISTS market_context_snapshots (
   source_url TEXT,
   payload_json TEXT NOT NULL DEFAULT '{}',
   idempotency_key TEXT UNIQUE,
+  -- V0.9: actual data date / freshness / tool provenance (NULL on legacy rows = unknown)
+  data_date TEXT,
+  is_fresh INTEGER,
+  freshness_status TEXT,
+  metric TEXT,
+  change_kind TEXT,
+  provider TEXT,
+  source_api TEXT,
+  tool_request_id TEXT,
+  quality_json TEXT NOT NULL DEFAULT '{}',
+  provenance_json TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_market_context_snapshots ON market_context_snapshots(context_id, as_of);

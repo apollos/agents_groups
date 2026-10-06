@@ -383,6 +383,84 @@ class CorporateActionModel(StandardColumnsMixin, StockColumnsMixin, Base):
     currency: Mapped[str] = mapped_column(String(8), nullable=False, default="CNY")
 
 
+class FxRateModel(StandardColumnsMixin, Base):
+    __tablename__ = "fx_rates"
+    __table_args__ = (
+        # Direction, basis and quote type are part of the business identity: BOC spot-sell
+        # and central parity for the same pair/day are different records, not duplicates.
+        UniqueConstraint(
+            "base_currency", "quote_currency", "quote_basis", "rate_type", "rate_date", "effective_provider",
+            name="uq_fx_rate",
+        ),
+        Index("ix_fx_rates_pair_date", "base_currency", "quote_currency", "rate_date"),
+    )
+    base_currency: Mapped[str] = mapped_column(String(8), nullable=False, index=True)
+    quote_currency: Mapped[str] = mapped_column(String(8), nullable=False, index=True)
+    quote_basis: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    rate_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    rate_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    rate: Mapped[float] = mapped_column(Float, nullable=False)
+    pair: Mapped[Optional[str]] = mapped_column(String(16), index=True)
+    market: Mapped[Optional[str]] = mapped_column(String(32))
+    source_methodology: Mapped[Optional[str]] = mapped_column(Text)
+
+
+class CommodityPriceModel(StandardColumnsMixin, Base):
+    __tablename__ = "commodity_prices"
+    __table_args__ = (
+        # Spot vs futures, contract, frequency and observation time distinguish records;
+        # a realtime snapshot never collides with the daily bar of the same contract.
+        UniqueConstraint(
+            "commodity", "instrument_type", "market", "contract", "frequency", "trade_date", "observed_at", "effective_provider",
+            name="uq_commodity_price",
+        ),
+        Index("ix_commodity_prices_contract_date", "commodity", "contract", "trade_date"),
+    )
+    commodity: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    commodity_name: Mapped[Optional[str]] = mapped_column(String(128))
+    instrument_type: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    market: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    contract: Mapped[Optional[str]] = mapped_column(String(32), index=True)
+    frequency: Mapped[str] = mapped_column(String(16), nullable=False, default="1d", index=True)
+    trade_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    observed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    price_unit: Mapped[str] = mapped_column(String(32), nullable=False)
+    currency: Mapped[str] = mapped_column(String(8), nullable=False, default="CNY")
+    timezone: Mapped[str] = mapped_column(String(64), nullable=False, default="Asia/Shanghai")
+    open: Mapped[Optional[float]] = mapped_column(Float)
+    high: Mapped[Optional[float]] = mapped_column(Float)
+    low: Mapped[Optional[float]] = mapped_column(Float)
+    close: Mapped[Optional[float]] = mapped_column(Float)
+    settle: Mapped[Optional[float]] = mapped_column(Float)
+    latest: Mapped[Optional[float]] = mapped_column(Float)
+    pre_close: Mapped[Optional[float]] = mapped_column(Float)
+    pre_settle: Mapped[Optional[float]] = mapped_column(Float)
+    volume: Mapped[Optional[float]] = mapped_column(Float)
+    open_interest: Mapped[Optional[float]] = mapped_column(Float)
+
+
+class InterestRateModel(StandardColumnsMixin, Base):
+    __tablename__ = "interest_rates"
+    __table_args__ = (
+        # Tenor and curve are identity: 2Y and 10Y of the same curve/day are distinct rows.
+        UniqueConstraint(
+            "rate_type", "market", "curve_name", "tenor", "rate_date", "effective_provider",
+            name="uq_interest_rate",
+        ),
+        Index("ix_interest_rates_tenor_date", "market", "rate_type", "tenor", "rate_date"),
+    )
+    rate_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    market: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    tenor: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    rate_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    rate_value: Mapped[float] = mapped_column(Float, nullable=False)
+    unit: Mapped[str] = mapped_column(String(32), nullable=False, default="percent")
+    curve_name: Mapped[Optional[str]] = mapped_column(String(128))
+    rate_name: Mapped[Optional[str]] = mapped_column(String(128))
+    currency: Mapped[Optional[str]] = mapped_column(String(8))
+    source_methodology: Mapped[Optional[str]] = mapped_column(Text)
+
+
 class SourceFetchLogModel(AuditMixin, Base):
     __tablename__ = "source_fetch_logs"
     provider: Mapped[str] = mapped_column(String(32), nullable=False, index=True)

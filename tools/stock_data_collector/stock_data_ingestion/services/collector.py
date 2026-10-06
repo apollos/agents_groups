@@ -4,6 +4,7 @@ from datetime import date, timedelta
 from uuid import uuid4
 
 from stock_data_ingestion.config import parse_provider_list
+from stock_data_ingestion.schemas.market_context import MarketContextRequest, MarketContextResponse
 from stock_data_ingestion.schemas.requests import Adjust, Frequency, RequestType, StockDataRequest
 from stock_data_ingestion.schemas.responses import StockDataResponse
 from stock_data_ingestion.services.ingestion_runner import IngestionRunner
@@ -247,6 +248,65 @@ class StockDataCollector:
             **self._provider_request_kwargs(providers, canonical_provider),
         )
         return self.runner.run(req)
+
+    def fetch_market_context(
+        self,
+        context_id: str,
+        context_type: str,
+        symbol: str,
+        *,
+        as_of: str | date | None = None,
+        start_date: str | date | None = None,
+        end_date: str | date | None = None,
+        frequency: str = "1d",
+        metrics: list[str] | None = None,
+        market: str | None = None,
+        contract: str | None = None,
+        instrument_type: str | None = None,
+        tenor: str | None = None,
+        rate_type: str | None = None,
+        max_staleness_days: int | None = None,
+        cross_validate: bool = False,
+        providers: list[str] | None = None,
+        canonical_provider: str | None = None,
+        save_raw: bool = True,
+        save_cleaned: bool = True,
+        export_parquet: bool = True,
+        requested_by: str = "manual",
+    ) -> MarketContextResponse:
+        """Market background data (A-share/HK indices, FX, commodities, rates) by business request.
+
+        Callers name *what* they need (context type, business symbol, as-of day or range,
+        category parameters); vendor functions and column mappings are resolved from
+        ``config/market_context_sources.yaml``. See ``MarketContextService`` for the
+        freshness / history / change-metric semantics of the response.
+        """
+        from stock_data_ingestion.services.market_context_service import MarketContextService
+
+        request = MarketContextRequest(
+            context_id=context_id,
+            context_type=context_type,
+            symbol=symbol,
+            as_of=as_of,
+            start_date=start_date,
+            end_date=end_date,
+            frequency=frequency,
+            metrics=list(metrics or []),
+            market=market,
+            contract=contract,
+            instrument_type=instrument_type,
+            tenor=tenor,
+            rate_type=rate_type,
+            max_staleness_days=max_staleness_days,
+            cross_validate=cross_validate,
+            providers=parse_provider_list(providers) if providers else None,
+            canonical_provider=parse_provider_list([canonical_provider])[0] if canonical_provider else None,
+            save_raw=save_raw,
+            save_cleaned=save_cleaned,
+            export_parquet=export_parquet,
+            requested_by=requested_by,
+        )
+        return MarketContextService(self.runner).fetch(request)
 
     def fetch_corporate_action(
         self,

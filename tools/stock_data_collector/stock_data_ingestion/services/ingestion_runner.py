@@ -28,14 +28,17 @@ from stock_data_ingestion.schemas.records import (
     AdjFactorRecord,
     AdapterFetchStatus,
     BarRecord,
+    CommodityPriceRecord,
     ConceptMembershipRecord,
     CorporateActionRecord,
     FinancialIndicatorRecord,
     FinancialStatementRecord,
+    FxRateRecord,
     IndexBarRecord,
     IndexConstituentRecord,
     IndexRecord,
     IndustryMembershipRecord,
+    InterestRateRecord,
     MoneyFlowRecord,
     ProviderComparisonResult,
     ProviderFetchResult,
@@ -142,6 +145,9 @@ COMPARISON_FIELDS_BY_RECORD_TYPE: dict[str, list[str]] = {
         "rights_issue_ratio",
         "rights_issue_price",
     ],
+    "fx_rate": ["rate"],
+    "commodity_price": ["open", "high", "low", "close", "settle", "latest", "pre_close", "pre_settle", "volume", "open_interest"],
+    "interest_rate": ["rate_value"],
 }
 
 REQUIRED_FIELDS_BY_RECORD_TYPE: dict[str, list[str]] = {
@@ -161,6 +167,9 @@ REQUIRED_FIELDS_BY_RECORD_TYPE: dict[str, list[str]] = {
     "index_bar": ["index_code", "trade_date", "open", "high", "low", "close"],
     "index_constituent": ["index_code", "normalized_ticker", "effective_date"],
     "corporate_action": ["normalized_ticker", "action_type"],
+    "fx_rate": ["base_currency", "quote_currency", "quote_basis", "rate_type", "rate_date", "rate"],
+    "commodity_price": ["commodity", "instrument_type", "market", "frequency", "trade_date", "price_unit"],
+    "interest_rate": ["rate_type", "market", "tenor", "rate_date", "rate_value", "unit"],
 }
 
 RESPONSE_BUCKET_BY_RECORD_TYPE: dict[str, str] = {
@@ -180,6 +189,9 @@ RESPONSE_BUCKET_BY_RECORD_TYPE: dict[str, str] = {
     "index_bar": "index_bars",
     "index_constituent": "index_constituents",
     "corporate_action": "corporate_actions",
+    "fx_rate": "fx_rates",
+    "commodity_price": "commodity_prices",
+    "interest_rate": "interest_rates",
 }
 
 PARQUET_DATA_TYPE_BY_RECORD_TYPE: dict[str, str] = {
@@ -199,6 +211,9 @@ PARQUET_DATA_TYPE_BY_RECORD_TYPE: dict[str, str] = {
     "index_bar": "index_bars",
     "index_constituent": "index_constituents",
     "corporate_action": "corporate_actions",
+    "fx_rate": "fx_rates",
+    "commodity_price": "commodity_prices",
+    "interest_rate": "interest_rates",
 }
 
 PARQUET_DEDUPE_KEYS_BY_RECORD_TYPE: dict[str, list[str]] = {
@@ -218,6 +233,9 @@ PARQUET_DEDUPE_KEYS_BY_RECORD_TYPE: dict[str, list[str]] = {
     "index_bar": ["index_code", "trade_date", "frequency", "effective_provider"],
     "index_constituent": ["index_code", "normalized_ticker", "effective_date", "effective_provider"],
     "corporate_action": ["normalized_ticker", "action_type", "announcement_date", "ex_date", "effective_provider"],
+    "fx_rate": ["base_currency", "quote_currency", "quote_basis", "rate_type", "rate_date", "effective_provider"],
+    "commodity_price": ["commodity", "instrument_type", "market", "contract", "frequency", "trade_date", "observed_at", "effective_provider"],
+    "interest_rate": ["rate_type", "market", "curve_name", "tenor", "rate_date", "effective_provider"],
 }
 
 
@@ -238,6 +256,9 @@ PARQUET_BUSINESS_KEY_BY_DATA_TYPE: dict[str, list[str]] = {
     "index_bars": ["index_code", "trade_date", "effective_provider"],
     "index_constituents": ["index_code", "normalized_ticker", "effective_date", "effective_provider"],
     "corporate_actions": ["normalized_ticker", "action_type", "announcement_date", "ex_date", "effective_provider"],
+    "fx_rates": ["base_currency", "quote_currency", "quote_basis", "rate_type", "rate_date", "effective_provider"],
+    "commodity_prices": ["commodity", "instrument_type", "market", "contract", "frequency", "trade_date", "observed_at", "effective_provider"],
+    "interest_rates": ["rate_type", "market", "curve_name", "tenor", "rate_date", "effective_provider"],
 }
 
 def _value(raw: dict[str, Any], *names: str, default: Any = None) -> Any:
@@ -307,7 +328,7 @@ class IngestionRunner:
         tushare_provider = config.data_sources.providers.get("tushare")
         self.adapters = adapters or {
             "tushare": TushareAdapter(rate_limit=tushare_provider.rate_limit if tushare_provider else None),
-            "akshare": AKShareAdapter(),
+            "akshare": AKShareAdapter(market_context_sources=config.market_context),
             "baostock": BaoStockAdapter(),
             "joinquant": JoinQuantAdapter(),
         }
@@ -555,6 +576,7 @@ class IngestionRunner:
                 RequestType.money_flow: adapter.fetch_money_flow,
                 RequestType.index_data: adapter.fetch_index_data,
                 RequestType.corporate_action: adapter.fetch_corporate_action,
+                RequestType.market_context: adapter.fetch_market_context,
             }
             request_type = RequestType(str(request.request_type))
             return dispatch.get(request_type, adapter.fetch_historical_bars)(request)
@@ -756,8 +778,12 @@ class IngestionRunner:
         record_type = row.get("record_type")
         if record_type == "bar":
             return ["frequency", "trade_date", "effective_provider"]
+        if record_type == "commodity_price":
+            return ["frequency", "trade_date", "effective_provider"]
         if "trade_date" in row:
             return ["trade_date", "effective_provider"]
+        if "rate_date" in row:
+            return ["rate_date", "effective_provider"]
         if "report_period" in row:
             return ["report_period", "effective_provider"]
         if "effective_date" in row:
@@ -855,6 +881,7 @@ class IngestionRunner:
             RequestType.money_flow: self._normalize_money_flow,
             RequestType.index_data: self._normalize_index_data,
             RequestType.corporate_action: self._normalize_corporate_action,
+            RequestType.market_context: self._normalize_market_context,
         }
         request_type = RequestType(str(request.request_type))
         return dispatch[request_type](result, raw, raw_row_index, request, ingestion_run_id)
@@ -1263,6 +1290,80 @@ class IngestionRunner:
             "index_provider": _value(raw, "index_provider", default=result.provider),
         }
         return [IndexRecord(**self._common_record_kwargs(result=result, request=request, ingestion_run_id=run_id, raw_row_index=idx, domain_values=domain, record_type="index"))]
+
+    def _normalize_market_context(self, result: ProviderFetchResult, raw: dict[str, Any], idx: int, request: StockDataRequest, run_id: str) -> list[StandardRecord]:
+        """Typed records for market background rows emitted by ``fetch_market_context``.
+
+        The adapter annotates every row with ``context_type``; HK index rows reuse the
+        index-bar normalizer (same IndexBarRecord as A-share indices), the other types map
+        to their dedicated records. Dates and values come from the row only.
+        """
+        context_type = str(_value(raw, "context_type", default=(request.extra_params.get("market_context") or {}).get("context_type") or ""))
+        if context_type in {"hk_index", "equity_index"}:
+            return self._normalize_index_data(result, raw, idx, request, run_id)
+        if context_type == "fx":
+            rate_date = _date(raw, "rate_date")
+            if rate_date is None:
+                raise ValueError("fx row has no rate_date")
+            domain = {
+                "base_currency": str(_value(raw, "base_currency")).upper(),
+                "quote_currency": str(_value(raw, "quote_currency")).upper(),
+                "quote_basis": _float(raw, "quote_basis", default=1.0),
+                "rate_type": str(_value(raw, "rate_type")),
+                "rate_date": rate_date,
+                "rate": _float(raw, "rate"),
+                "pair": _value(raw, "pair"),
+                "market": _value(raw, "market"),
+                "source_methodology": _value(raw, "source_methodology"),
+            }
+            return [FxRateRecord(**self._common_record_kwargs(result=result, request=request, ingestion_run_id=run_id, raw_row_index=idx, domain_values=domain, record_type="fx_rate"))]
+        if context_type == "commodity":
+            trade_date = _date(raw, "trade_date")
+            if trade_date is None:
+                raise ValueError("commodity row has no trade_date")
+            frequency = str(_value(raw, "frequency", default="1d"))
+            domain = {
+                "currency": normalize_currency(_value(raw, "currency", default="CNY")),
+                "timezone": _value(raw, "timezone", default=self.config.storage.timezone),
+                "commodity": str(_value(raw, "commodity")),
+                "commodity_name": _value(raw, "commodity_name", "context_name"),
+                "instrument_type": str(_value(raw, "instrument_type", default="futures")),
+                "market": str(_value(raw, "market", default="UNKNOWN")),
+                "contract": _value(raw, "contract"),
+                "frequency": frequency,
+                "trade_date": trade_date,
+                "observed_at": _dt(raw, "observed_at") if frequency == "realtime" else None,
+                "price_unit": str(_value(raw, "price_unit", default="CNY")),
+                "open": _float(raw, "open"),
+                "high": _float(raw, "high"),
+                "low": _float(raw, "low"),
+                "close": _float(raw, "close") if frequency != "realtime" else None,
+                "settle": _float(raw, "settle") if frequency != "realtime" else None,
+                "latest": _float(raw, "latest") if frequency == "realtime" else None,
+                "pre_close": _float(raw, "pre_close"),
+                "pre_settle": _float(raw, "pre_settle"),
+                "volume": _float(raw, "volume"),
+                "open_interest": _float(raw, "open_interest"),
+            }
+            return [CommodityPriceRecord(**self._common_record_kwargs(result=result, request=request, ingestion_run_id=run_id, raw_row_index=idx, domain_values=domain, record_type="commodity_price"))]
+        if context_type == "interest_rate":
+            rate_date = _date(raw, "rate_date")
+            if rate_date is None:
+                raise ValueError("interest-rate row has no rate_date")
+            domain = {
+                "rate_type": str(_value(raw, "rate_type", default="unknown")),
+                "market": str(_value(raw, "market", default="UNKNOWN")),
+                "tenor": str(_value(raw, "tenor", default="unknown")),
+                "rate_date": rate_date,
+                "rate_value": _float(raw, "rate_value"),
+                "unit": str(_value(raw, "unit", default="percent")),
+                "curve_name": _value(raw, "curve_name"),
+                "rate_name": _value(raw, "rate_name", "context_name"),
+                "currency": _value(raw, "currency"),
+                "source_methodology": _value(raw, "source_methodology"),
+            }
+            return [InterestRateRecord(**self._common_record_kwargs(result=result, request=request, ingestion_run_id=run_id, raw_row_index=idx, domain_values=domain, record_type="interest_rate"))]
+        raise ValueError(f"unsupported market context_type {context_type!r}")
 
     def _normalize_corporate_action(self, result: ProviderFetchResult, raw: dict[str, Any], idx: int, request: StockDataRequest, run_id: str) -> list[StandardRecord]:
         identity = self._stock_identity(raw, request)

@@ -76,9 +76,15 @@ request_provider_overrides:
   industry_concept:
     - akshare
     - baostock
+  # Index bars come from AKShare (Eastmoney with Sina fallback inside the adapter);
+  # BaoStock only supplies constituents. Tushare has no index implementation here.
   index_data:
-    - tushare
+    - akshare
     - baostock
+  # Market background (HK indices / FX / commodities / rates) - vendor bindings in
+  # config/market_context_sources.yaml.
+  market_context:
+    - akshare
 
 validator_providers:
   - akshare
