@@ -446,23 +446,31 @@ class IngestionRunner:
 
         if request.save_cleaned and request.save_raw:
             normalized_records = self._normalize_results(provider_results, request, ingestion_run_id, errors)
+            # Realtime commodity snapshots: settle the calendar date *before* merge/storage so
+            # no record with a guessed date is ever written or re-interpreted on read-back.
+            normalized_records = self._confirm_snapshot_dates(normalized_records, request, errors, warnings)
             merged_records, comparisons, conflicts, merge_warnings = self._merge_records(normalized_records, request)
             warnings.extend(merge_warnings)
             merged_records = [self._rescore_record(record, conflicts) for record in merged_records]
 
         if self.database is not None:
-            persisted_tables.extend(
-                self._persist(
-                    request=request,
-                    ingestion_run_id=ingestion_run_id,
-                    raw_indices=raw_indices,
-                    provider_results=provider_results,
-                    comparisons=comparisons,
-                    conflicts=conflicts,
-                    records=merged_records if request.save_cleaned else [],
-                    errors=errors,
-                )
+            tables, retained = self._persist(
+                request=request,
+                ingestion_run_id=ingestion_run_id,
+                raw_indices=raw_indices,
+                provider_results=provider_results,
+                comparisons=comparisons,
+                conflicts=conflicts,
+                records=merged_records if request.save_cleaned else [],
+                errors=errors,
+                warnings=warnings,
             )
+            persisted_tables.extend(tables)
+            if request.save_cleaned:
+                # The response and Parquet export describe what the store actually holds:
+                # a newer same-key record replaces, an older one is rejected in favour of the
+                # stored row (so callers never receive a value the database refused).
+                merged_records = retained
 
         if request.export_parquet and request.save_cleaned and merged_records:
             parquet_refs.extend(self._export_parquet(merged_records, errors))
@@ -730,12 +738,21 @@ class IngestionRunner:
         conflicts: Sequence[Any],
         records: Sequence[StandardRecord],
         errors: list[ErrorRecord],
-    ) -> list[str]:
+        warnings: list[str] | None = None,
+    ) -> tuple[list[str], list[StandardRecord]]:
+        """Write run artefacts; return ``(tables_written, records_as_stored)``.
+
+        Market-context record types (fx_rate / interest_rate / index_bar / commodity_price)
+        keep one current row per business key: a newer record replaces it (previous row
+        archived in ``market_context_record_revisions``), an older one is rejected and the
+        stored record is returned instead. Other record types keep insert-or-skip semantics.
+        """
         if self.database is None:
-            return []
+            return [], list(records)
         tables: list[str] = []
+        retained: list[StandardRecord] = []
         try:
-            from stock_data_ingestion.storage.repositories import Repository
+            from stock_data_ingestion.storage.repositories import MARKET_CONTEXT_BUSINESS_KEYS, Repository
 
             with self.database.session() as session:
                 repo = Repository(session)
@@ -751,10 +768,227 @@ class IngestionRunner:
                 for conflict in conflicts:
                     if repo.insert_conflict(conflict):
                         tables.append("data_quality_conflicts")
-                tables.extend(repo.insert_standard_records(records))
+                rejected: dict[str, list[tuple[str, str]]] = {}
+                for record in records:
+                    if record.record_type in MARKET_CONTEXT_BUSINESS_KEYS:
+                        kept, table, action = repo.upsert_market_context_record(record)
+                        retained.append(kept)  # type: ignore[arg-type]
+                        if action in {"inserted", "replaced"}:
+                            tables.append(table)
+                        if action == "replaced":
+                            tables.append("market_context_record_revisions")
+                        elif action == "kept_existing":
+                            rejected.setdefault(str(record.record_type), []).append((record.record_id, getattr(kept, "record_id", "?")))
+                    else:
+                        inserted, table = repo.insert_standard_record(record)
+                        retained.append(record)
+                        if inserted:
+                            tables.append(table)
+                if warnings is not None:
+                    for record_type, pairs in rejected.items():
+                        incoming, stored = pairs[0]
+                        warnings.append(
+                            f"stale_update_rejected: {len(pairs)} incoming {record_type} record(s) not newer than the stored ones; "
+                            f"stored records kept (e.g. incoming {incoming} vs stored {stored})"
+                        )
         except Exception as exc:  # noqa: BLE001
             errors.append(self._error_from_exception(exc, ErrorCode.STORAGE_FAILED, "sqlite_persistence"))
-        return tables
+            return tables, list(records)
+        return tables, retained
+
+    # ------------------------------------------------------------------
+    # Realtime commodity snapshot: confirm the session date before storage
+    # ------------------------------------------------------------------
+    def _confirm_snapshot_dates(
+        self,
+        records: list[StandardRecord],
+        request: StockDataRequest,
+        errors: list[ErrorRecord],
+        warnings: list[str],
+    ) -> list[StandardRecord]:
+        """Fix the calendar date of realtime commodity snapshots, or drop them as unknown.
+
+        Rules (no other branch exists):
+
+        * vendor supplied a full date+time  -> keep it (``date_confidence=vendor_timestamp``);
+        * vendor supplied a time of day only and the snapshot matches the previous session's
+          daily bar (``latest == bar.close`` and ``pre_settle == previous bar.settle``)
+          -> that bar's date (``confirmed_last_session``);
+        * anything else -> date unknown: the record is *not* written (raw payload stays),
+          ``SNAPSHOT_DATE_UNCONFIRMED`` (retryable) is reported.
+
+        Neither the collection clock nor the request's as_of is ever accepted as a confirmed
+        data date. Daily bars come from this runner's own daily collection path; daily
+        requests never enter this step, so there is no recursion.
+        """
+        pending = [
+            r for r in records
+            if isinstance(r, CommodityPriceRecord) and r.frequency == "realtime" and r.date_confidence != "vendor_timestamp"
+        ]
+        if not pending:
+            return records
+        ctx = dict(request.extra_params.get("market_context") or {})
+        if str(ctx.get("frequency") or request.frequency or "") != "realtime":
+            return records
+
+        pending_ids = {id(r) for r in pending}
+        bars_cache: dict[tuple[Any, ...], tuple[list[dict[str, Any]], str | None, str | None]] = {}
+        out: list[StandardRecord] = []
+        for record in records:
+            if id(record) not in pending_ids:
+                out.append(record)
+                continue
+            snapshot: CommodityPriceRecord = record  # type: ignore[assignment]
+            key = (snapshot.commodity, snapshot.instrument_type, snapshot.market, snapshot.contract)
+            if key not in bars_cache:
+                bars_cache[key] = self._daily_bars_for_snapshot(snapshot, request, ctx)
+            bars, daily_request_id, daily_note = bars_cache[key]
+            details = dict(snapshot.date_resolution_details)
+            details.update({"daily_request_id": daily_request_id, "daily_bars_available": len(bars)})
+            if daily_note:
+                details["daily_collection_note"] = daily_note
+
+            match = self._match_snapshot_to_last_session(snapshot, bars)
+            if match is None:
+                reason = self._unconfirmed_reason(snapshot, bars)
+                details["confirmation_reason"] = reason
+                errors.append(
+                    ErrorRecord(
+                        provider=snapshot.provider,
+                        source_api=snapshot.source_api,
+                        source_site=snapshot.source_site,
+                        error_code=ErrorCode.SNAPSHOT_DATE_UNCONFIRMED,
+                        error_message=(
+                            f"realtime snapshot of {snapshot.commodity}/{snapshot.contract or 'spot'} has no confirmable data date: {reason}. "
+                            f"Raw payload {snapshot.raw_payload_id} retained; no standard record written. details={details}"
+                        ),
+                        retryable=True,
+                        suggested_action="Retry after the next session's daily bar is published, or use frequency=1d.",
+                    )
+                )
+                continue
+            confirmed_date, last_bar, prev_bar = match
+            observed_at = snapshot.observed_at
+            assert observed_at is not None
+            details.update(
+                {
+                    "confirmation_bar_record_ids": [str(last_bar.get("record_id")), str(prev_bar.get("record_id"))],
+                    "confirmation_bar_dates": [str(last_bar.get("trade_date")), str(prev_bar.get("trade_date"))],
+                    "confirmation_reason": (
+                        f"latest {snapshot.latest} == close of {last_bar.get('trade_date')} daily bar and "
+                        f"pre_settle {snapshot.pre_settle} == settle of {prev_bar.get('trade_date')} daily bar"
+                    ),
+                }
+            )
+            if confirmed_date != snapshot.trade_date:
+                warnings.append(
+                    f"snapshot_belongs_to_previous_session: {snapshot.commodity}/{snapshot.contract or 'spot'} snapshot matches the "
+                    f"{confirmed_date.isoformat()} daily bar; data_date corrected from provisional {snapshot.trade_date.isoformat()}"
+                )
+            out.append(
+                snapshot.model_copy(
+                    update={
+                        "trade_date": confirmed_date,
+                        "observed_at": datetime.combine(confirmed_date, observed_at.timetz()),
+                        "date_confidence": "confirmed_last_session",
+                        "date_resolution_details": details,
+                    },
+                    deep=True,
+                )
+            )
+        return out
+
+    def _daily_bars_for_snapshot(
+        self, snapshot: CommodityPriceRecord, request: StockDataRequest, ctx: dict[str, Any]
+    ) -> tuple[list[dict[str, Any]], str | None, str | None]:
+        """Daily bars of the same instrument through the regular daily collection path."""
+        from stock_data_ingestion.schemas.market_context import ContextFrequency, MarketContextRequest
+        from stock_data_ingestion.services.market_context_requests import build_market_context_stock_request
+
+        try:
+            daily = MarketContextRequest(
+                context_id=str(ctx.get("context_id") or f"commodity:{ctx.get('symbol')}"),
+                context_type="commodity",
+                symbol=str(ctx.get("symbol")),
+                as_of=ctx.get("as_of"),
+                frequency=ContextFrequency.d1,
+                providers=list(request.provider_priority),
+                canonical_provider=request.canonical_provider,
+                save_raw=request.save_raw,
+                save_cleaned=request.save_cleaned,
+                export_parquet=request.export_parquet,
+                requested_by=request.requested_by,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return [], None, f"daily request could not be built: {exc}"
+        identity = {
+            "market": snapshot.market,
+            "contract": snapshot.contract,
+            "instrument_type": snapshot.instrument_type,
+            "frequency": "1d",
+        }
+        daily_request = build_market_context_stock_request(self.config, daily, identity, list(request.provider_priority), request.canonical_provider)
+        response = self.run(daily_request)
+        bars = list(response.data.commodity_prices)
+        note = None
+        if response.errors:
+            note = "; ".join(f"{e.error_code}: {e.error_message[:160]}" for e in response.errors[:3])
+        if not bars and self.database is not None:
+            # Idempotent skip (bars already collected this hour) or stored by an earlier run.
+            try:
+                from stock_data_ingestion.services.query_service import QueryService
+
+                with self.database.session() as session:
+                    bars = QueryService(session).get_market_context_records(
+                        "commodity",
+                        {"commodity": snapshot.commodity, "instrument_type": snapshot.instrument_type, "market": snapshot.market, "contract": snapshot.contract, "frequency": "1d"},
+                        daily_request.start_date,
+                        daily_request.end_date,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                note = f"{note + '; ' if note else ''}daily bars read-back failed: {exc}"
+        # One bar per session: databases written before the current-row/revision rule may hold
+        # duplicate rows for a date (NULL observed_at bypasses the UNIQUE constraint); keep the
+        # most recently fetched one so "last" and "previous" are really different sessions.
+        by_date: dict[str, dict[str, Any]] = {}
+        for bar in bars:
+            key = str(bar.get("trade_date"))
+            current = by_date.get(key)
+            if current is None or str(bar.get("fetch_time") or "") >= str(current.get("fetch_time") or ""):
+                by_date[key] = bar
+        bars = [by_date[key] for key in sorted(by_date)]
+        return bars, daily_request.request_id, note
+
+    @staticmethod
+    def _match_snapshot_to_last_session(
+        snapshot: CommodityPriceRecord, bars: list[dict[str, Any]]
+    ) -> tuple[date, dict[str, Any], dict[str, Any]] | None:
+        if len(bars) < 2 or snapshot.latest is None or snapshot.pre_settle is None:
+            return None
+        last, prev = bars[-1], bars[-2]
+        last_close = _float(last, "close")
+        prev_settle = _float(prev, "settle")
+        last_date = _date(last, "trade_date")
+        if last_close is None or prev_settle is None or last_date is None:
+            return None
+        if abs(snapshot.latest - last_close) < 1e-6 and abs(snapshot.pre_settle - prev_settle) < 1e-6:
+            return last_date, last, prev
+        return None
+
+    @staticmethod
+    def _unconfirmed_reason(snapshot: CommodityPriceRecord, bars: list[dict[str, Any]]) -> str:
+        if not bars:
+            return "vendor supplied a time of day only and no daily bars were available to confirm the session date"
+        if len(bars) < 2:
+            return "vendor supplied a time of day only and fewer than two daily bars were available"
+        if snapshot.latest is None or snapshot.pre_settle is None:
+            return "vendor supplied a time of day only and the snapshot lacks latest/pre_settle needed to match a session"
+        last, prev = bars[-1], bars[-2]
+        return (
+            f"vendor supplied a time of day only and the snapshot (latest={snapshot.latest}, pre_settle={snapshot.pre_settle}) "
+            f"does not match the last daily bar {last.get('trade_date')} (close={_float(last, 'close')}) with previous settle "
+            f"{_float(prev, 'settle')} ({prev.get('trade_date')}); a live session cannot be dated from the collection clock"
+        )
 
     def _export_parquet(self, records: Sequence[StandardRecord], errors: list[ErrorRecord]) -> list[str]:
         refs: list[str] = []
@@ -1345,7 +1579,20 @@ class IngestionRunner:
                 "volume": _float(raw, "volume"),
                 "open_interest": _float(raw, "open_interest"),
             }
-            return [CommodityPriceRecord(**self._common_record_kwargs(result=result, request=request, ingestion_run_id=run_id, raw_row_index=idx, domain_values=domain, record_type="commodity_price"))]
+            kwargs = self._common_record_kwargs(result=result, request=request, ingestion_run_id=run_id, raw_row_index=idx, domain_values=domain, record_type="commodity_price")
+            if frequency == "realtime":
+                # Snapshot date evidence from the adapter must survive standardization: the
+                # runner confirms the session date against daily bars before anything is stored.
+                inferred = _bool(raw, "observed_date_inferred_from_fetch", default=False)
+                kwargs["date_confidence"] = "unknown" if inferred else "vendor_timestamp"
+                kwargs["date_resolution_details"] = {
+                    "vendor_time_value": _value(raw, "vendor_time_value"),
+                    "observed_date_inferred_from_fetch": inferred,
+                    "collection_time": _value(raw, "collection_time"),
+                    "provisional_trade_date": trade_date.isoformat() if inferred else None,
+                    "confirmation_reason": None if inferred else "vendor supplied a full date and time",
+                }
+            return [CommodityPriceRecord(**kwargs)]
         if context_type == "interest_rate":
             rate_date = _date(raw, "rate_date")
             if rate_date is None:

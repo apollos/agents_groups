@@ -20,9 +20,8 @@ categories use ``request_type=market_context`` whose vendor bindings live in
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterable
-from uuid import uuid4
 
 from stock_data_ingestion.normalization.datetime_utils import now_asia_shanghai
 from stock_data_ingestion.schemas.errors import ErrorCode, ErrorRecord
@@ -41,9 +40,11 @@ from stock_data_ingestion.schemas.market_context import (
     MarketContextResult,
     MarketContextSource,
 )
-from stock_data_ingestion.schemas.requests import Frequency, RequestType, StockDataRequest
+from stock_data_ingestion.schemas.requests import StockDataRequest
+from stock_data_ingestion.schemas.quality import ValidationStatus
 from stock_data_ingestion.schemas.responses import StockDataResponse
 from stock_data_ingestion.services.ingestion_runner import IngestionRunner
+from stock_data_ingestion.services.market_context_requests import build_market_context_stock_request
 
 # Record bucket and date column per context type.
 _BUCKET_BY_TYPE: dict[str, str] = {
@@ -90,6 +91,15 @@ _PERIOD_UNIT_BY_TYPE: dict[str, str] = {
     ContextType.interest_rate: "observation",
 }
 
+# These are decisions already made by the ingestion pipeline. The market-context
+# summary must not turn an isolated or failed record into an automatically usable value.
+_BLOCKING_VALIDATION_STATUSES = frozenset({
+    ValidationStatus.quarantined,
+    ValidationStatus.manual_review_required,
+    ValidationStatus.conflicted_high,
+    ValidationStatus.failed,
+})
+
 
 def _f(value: Any) -> float | None:
     if value is None:
@@ -118,14 +128,22 @@ def _d(value: Any) -> date | None:
 
 
 def _dt(value: Any) -> datetime | None:
+    """Parse a stored/returned timestamp; naive values are Asia/Shanghai (SQLite drops tzinfo).
+
+    First responses and store read-backs must expose identical ``observed_at`` values.
+    """
     if value is None:
         return None
     if isinstance(value, datetime):
-        return value
-    try:
-        return datetime.fromisoformat(str(value))
-    except ValueError:
-        return None
+        parsed = value
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(value))
+        except ValueError:
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone(timedelta(hours=8)))
+    return parsed
 
 
 class MarketContextService:
@@ -158,9 +176,15 @@ class MarketContextService:
             )
             return self._failed(request, created_at, errors, warnings, entry={})
         entry = entry or {"name": request.symbol}
+        # The symbol decides what is fetched; extra business parameters may only confirm the
+        # identity bound to it. A mismatch is rejected before any vendor call or write.
+        mismatch = self._validate_business_params(request, entry)
+        if mismatch is not None:
+            errors.append(mismatch)
+            return self._failed(request, created_at, errors, warnings, entry=entry)
         identity = self._identity(request, entry)
 
-        stock_request = self._build_stock_request(request, identity, provider_priority, canonical)
+        stock_request = build_market_context_stock_request(self.config, request, identity, provider_priority, canonical)
         stock_response = self.runner.run(stock_request)
         errors.extend(stock_response.errors)
         # Runner warnings are per record (e.g. one "canonical_only_not_validated" per row);
@@ -180,19 +204,20 @@ class MarketContextService:
         for reason in sorted(fallback_reasons):
             warnings.append(f"source_fallback: {reason[:300]}")
         idempotent_skip = any("idempotency_key already succeeded" in w for w in stock_response.quality_report.warnings)
-        if not records and self.runner.database is not None:
-            # Idempotent skip or rows already stored by an earlier run: read the standard
-            # records back so callers always get data plus provenance.
-            records = self._records_from_database(request, context_type, identity, stock_request)
-            if records and idempotent_skip:
+        if idempotent_skip and self.runner.database is not None:
+            # Explicit idempotent hit only: read back the records of the run that originally
+            # succeeded under this key (following revision chains if a newer same-key record
+            # replaced them). A failed collection never silently reuses older rows.
+            records = self._records_from_database(context_type, stock_request)
+            if records:
                 warnings.append("served_from_store: identical request already collected; records read back from SQLite")
+            else:
+                warnings.append("served_from_store: identical request already collected but its records could not be located")
 
         observations = self._observations(records, context_type)
-        snapshot_fix = None
-        if str(request.frequency) == ContextFrequency.realtime and context_type == ContextType.commodity and observations:
-            snapshot_fix = self._resolve_snapshot_date(request, identity, observations, provider_priority, canonical, stock_response, warnings)
+        unknown_date = self._unknown_date_observations(records, context_type, observations, errors, warnings)
 
-        result = self._build_result(request, entry, identity, observations, stock_response, records, warnings, snapshot_fix)
+        result = self._build_result(request, entry, identity, observations, stock_response, records, warnings, unknown_date)
         status = self._status(result, errors)
         return MarketContextResponse(
             request_id=request.request_id,
@@ -230,150 +255,117 @@ class MarketContextService:
                 return entry
         return None
 
-    def _identity(self, request: MarketContextRequest, entry: dict[str, Any]) -> dict[str, Any]:
-        """Business identity used for DB look-ups, idempotency and the result."""
-        context_type = str(request.context_type)
-        symbol = request.symbol
+    def _configured_identity(self, context_type: str, entry: dict[str, Any]) -> dict[str, Any]:
+        """Business identity bound to the symbol by the tool's configuration (no request input).
+
+        Missing keys stay ``None``: the tool then cannot vouch for that part of the identity.
+        """
         if context_type in {ContextType.equity_index, ContextType.hk_index}:
-            code = symbol.upper().replace(".SH", "").replace(".SZ", "")
-            return {
-                "index_code": code,
-                "name": entry.get("name"),
-                "exchange": entry.get("exchange"),
-                "market": entry.get("market", "A_share" if context_type == ContextType.equity_index else "HK"),
-                "currency": entry.get("currency", "CNY" if context_type == ContextType.equity_index else "HKD"),
-                "frequency": "1d",
-            }
+            return {"market": entry.get("market"), "exchange": entry.get("exchange"), "currency": entry.get("currency")}
         if context_type == ContextType.fx:
-            base = str(entry.get("base_currency") or symbol[:3]).upper()
-            quote = str(entry.get("quote_currency") or (symbol[3:6] if len(symbol) >= 6 else "CNY")).upper()
-            basis = _f(entry.get("quote_basis")) or self._fx_source_basis(entry) or 100.0
+            source = self._fx_source()
             return {
-                "base_currency": base,
-                "quote_currency": quote,
-                "quote_basis": basis,
-                "pair": f"{base}{quote}",
-                "direction": f"{quote} per {basis:g} {base}",
-                "name": entry.get("name"),
-                "market": entry.get("market", "BOC"),
+                "base_currency": (str(entry["base_currency"]).upper() if entry.get("base_currency") else None),
+                "quote_currency": (str(entry["quote_currency"]).upper() if entry.get("quote_currency") else None),
+                "quote_basis": _f(entry.get("quote_basis")) or _f(source.get("quote_basis")),
+                "market": entry.get("market") or source.get("market"),
             }
         if context_type == ContextType.commodity:
-            frequency = str(request.frequency)
             return {
-                "commodity": entry.get("commodity", symbol.lower()),
-                "name": entry.get("name"),
-                "instrument_type": request.instrument_type or entry.get("instrument_type", "futures"),
-                "market": request.market or entry.get("market", "UNKNOWN"),
-                "contract": request.contract or entry.get("contract", symbol.upper()),
-                "frequency": frequency,
-                "price_unit": entry.get("price_unit", "CNY"),
-                "currency": entry.get("currency", "CNY"),
+                "commodity": entry.get("commodity"),
+                "instrument_type": entry.get("instrument_type"),
+                "market": entry.get("market"),
+                "contract": entry.get("contract"),
+                "price_unit": entry.get("price_unit"),
+                "currency": entry.get("currency"),
             }
         if context_type == ContextType.interest_rate:
             return {
-                "rate_type": request.rate_type or entry.get("rate_type", "unknown"),
-                "market": request.market or entry.get("market", "UNKNOWN"),
-                "tenor": request.tenor or entry.get("tenor", "unknown"),
-                "name": entry.get("name"),
+                "rate_type": entry.get("rate_type"),
+                "market": entry.get("market"),
+                "tenor": entry.get("tenor"),
                 "currency": entry.get("currency"),
-                "unit": "percent",
             }
+        return {}
+
+    def _validate_business_params(self, request: MarketContextRequest, entry: dict[str, Any]) -> ErrorRecord | None:
+        """Request parameters may only agree with the identity bound to the symbol.
+
+        * not provided            -> configured value is used;
+        * provided and identical  -> allowed;
+        * provided but different  -> INVALID_REQUEST (not retryable);
+        * provided but the configuration does not define it -> INVALID_REQUEST.
+        """
+        context_type = str(request.context_type)
+        configured = self._configured_identity(context_type, entry)
+        if context_type in {ContextType.equity_index, ContextType.hk_index}:
+            fields = ("market",)
+        elif context_type == ContextType.fx:
+            fields = ("market",)
+        elif context_type == ContextType.commodity:
+            fields = ("market", "contract", "instrument_type")
+        elif context_type == ContextType.interest_rate:
+            fields = ("market", "tenor", "rate_type")
+        else:
+            fields = ()
+        problems: list[str] = []
+        for field in fields:
+            requested = getattr(request, field, None)
+            if requested is None or str(requested).strip() == "":
+                continue
+            requested = str(requested).strip()
+            bound = configured.get(field)
+            if bound is None:
+                problems.append(
+                    f"symbol={request.symbol} 的 {field} 未在 market_context_sources.yaml 中声明，"
+                    f"无法校验请求 {field}={requested}。请补充配置或去掉该参数。"
+                )
+            elif str(bound).strip().lower() != requested.lower():
+                problems.append(
+                    f"symbol={request.symbol} 的 {field} 配置为 {bound}，请求 {field}={requested}，与 symbol 绑定不一致。"
+                    f"请使用已注册的 {requested} symbol。"
+                )
+        if not problems:
+            return None
+        return ErrorRecord(
+            error_code=ErrorCode.INVALID_REQUEST,
+            error_message=" ".join(problems),
+            retryable=False,
+            suggested_action=(
+                "symbol 决定取数对象；market/contract/instrument_type/tenor/rate_type 只能与配置一致。"
+                "如需其他合约或期限，先在 config/market_context_sources.yaml 注册对应 symbol，再请求该 symbol。"
+            ),
+        )
+
+    def _identity(self, request: MarketContextRequest, entry: dict[str, Any]) -> dict[str, Any]:
+        """Business identity used for DB look-ups, idempotency and the result (configuration only)."""
+        context_type = str(request.context_type)
+        symbol = request.symbol
+        configured = self._configured_identity(context_type, entry)
+        if context_type in {ContextType.equity_index, ContextType.hk_index}:
+            code = symbol.upper().replace(".SH", "").replace(".SZ", "")
+            return {"index_code": code, "name": entry.get("name"), **configured, "frequency": "1d"}
+        if context_type == ContextType.fx:
+            base, quote, basis = configured["base_currency"], configured["quote_currency"], configured["quote_basis"]
+            return {
+                **configured,
+                "pair": f"{base}{quote}" if base and quote else None,
+                "direction": f"{quote} per {basis:g} {base}" if base and quote and basis else None,
+                "name": entry.get("name"),
+            }
+        if context_type == ContextType.commodity:
+            return {**configured, "name": entry.get("name"), "frequency": str(request.frequency)}
+        if context_type == ContextType.interest_rate:
+            return {**configured, "name": entry.get("name"), "unit": "percent"}
         return {"name": entry.get("name")}
 
-    def _fx_source_basis(self, entry: dict[str, Any]) -> float | None:
-        """Quote basis is a property of the vendor table (BOC: CNY per 100 units)."""
+    def _fx_source(self) -> dict[str, Any]:
+        """Quote basis and market are properties of the vendor table (BOC: CNY per 100 units)."""
         for provider in self.config.market_context.providers:
             for source in self.config.market_context.section(provider, ContextType.fx).get("sources") or []:
-                basis = _f(source.get("quote_basis"))
-                if basis:
-                    return basis
-        return None
-
-    def _window(self, request: MarketContextRequest) -> tuple[date | None, date | None]:
-        if request.mode == "history":
-            return request.start_date, request.end_date
-        if str(request.frequency) == ContextFrequency.realtime:
-            return None, None
-        as_of = request.effective_as_of()
-        return as_of - timedelta(days=self.config.market_context.latest_lookback_days), as_of
-
-    def _idempotency_key(self, request: MarketContextRequest, identity: dict[str, Any], providers: list[str], start: date | None, end: date | None) -> str:
-        parts = [
-            "market_context",
-            str(request.context_type),
-            request.symbol.upper(),
-            str(identity.get("market") or ""),
-            str(identity.get("contract") or ""),
-            str(identity.get("instrument_type") or ""),
-            str(identity.get("tenor") or ""),
-            str(identity.get("rate_type") or ""),
-            str(request.frequency),
-            start.isoformat() if start else "",
-            end.isoformat() if end else "",
-            "+".join(providers),
-            request.mode,
-        ]
-        now = now_asia_shanghai()
-        if str(request.frequency) == ContextFrequency.realtime:
-            # Snapshots change continuously; identical requests inside one minute are the same run.
-            parts.append(now.strftime("%Y%m%d%H%M"))
-        elif request.mode == "latest" and request.effective_as_of() >= now.date():
-            # Today's value may not be published yet at the first attempt: allow one
-            # re-collection per hour instead of skipping forever. Older as_of windows are
-            # closed and stay fully deterministic. Storage dedupes rows by business key.
-            parts.append(now.strftime("%Y%m%d%H"))
-        return ":".join(parts)
-
-    def _build_stock_request(
-        self, request: MarketContextRequest, identity: dict[str, Any], providers: list[str], canonical: str
-    ) -> StockDataRequest:
-        context_type = str(request.context_type)
-        start, end = self._window(request)
-        ctx = {
-            "context_id": request.context_id,
-            "context_type": context_type,
-            "symbol": request.symbol,
-            "frequency": str(request.frequency),
-            "mode": request.mode,
-            "as_of": request.effective_as_of().isoformat(),
-            "market": identity.get("market"),
-            "contract": identity.get("contract"),
-            "instrument_type": identity.get("instrument_type"),
-            "tenor": identity.get("tenor"),
-            "rate_type": identity.get("rate_type"),
-            "metrics": list(request.metrics),
-        }
-        if context_type == ContextType.equity_index:
-            request_type = RequestType.index_data
-            extra = {
-                "index_codes": [identity["index_code"]],
-                "include_bars": True,
-                "include_constituents": False,
-                "market_context": ctx,
-            }
-            frequency: Frequency | None = Frequency.d1
-        else:
-            request_type = RequestType.market_context
-            extra = {"market_context": ctx}
-            frequency = Frequency.realtime if str(request.frequency) == ContextFrequency.realtime else Frequency.d1
-        return StockDataRequest(
-            request_id=f"req_{uuid4().hex[:16]}",
-            request_type=request_type,
-            universe_id=f"market_context:{context_type}:{request.symbol.upper()}",
-            market=str(identity.get("market") or "A_share"),
-            start_date=start,
-            end_date=end,
-            frequency=frequency,
-            provider_priority=providers,
-            canonical_provider=canonical,
-            cross_validate=bool(request.cross_validate and len(providers) > 1),
-            save_raw=request.save_raw,
-            save_cleaned=request.save_cleaned,
-            export_parquet=request.export_parquet,
-            idempotency_key=self._idempotency_key(request, identity, providers, start, end),
-            requested_by=request.requested_by,
-            extra_params=extra,
-        )
+                if source.get("quote_basis") or source.get("market"):
+                    return source
+        return {}
 
     # ------------------------------------------------------------------
     # Records -> observations
@@ -393,24 +385,63 @@ class MarketContextService:
             return {k: identity[k] for k in ("rate_type", "market", "tenor")}
         return {}
 
-    def _records_from_database(
-        self, request: MarketContextRequest, context_type: str, identity: dict[str, Any], stock_request: StockDataRequest
-    ) -> list[dict[str, Any]]:
+    def _records_from_database(self, context_type: str, stock_request: StockDataRequest) -> list[dict[str, Any]]:
+        """Records of the run that originally succeeded under this idempotency key.
+
+        The association is by request id (via the stored ingestion request for the key);
+        when a newer same-key record has since replaced one of those rows, the revision
+        chain leads to the current row. Nothing is re-interpreted or re-dated here.
+        """
         from stock_data_ingestion.services.query_service import QueryService
+        from stock_data_ingestion.storage.repositories import Repository
 
         try:
             with self.runner.database.session() as session:  # type: ignore[union-attr]
-                rows = QueryService(session).get_market_context_records(
-                    context_type, self._db_identity(context_type, identity), stock_request.start_date, stock_request.end_date
-                )
+                original = Repository(session).get_successful_request_by_idempotency_key(stock_request.idempotency_key or "")
+                if original is None:
+                    return []
+                return QueryService(session).get_market_context_records_for_request(context_type, str(original.request_id))
         except Exception:  # noqa: BLE001 - read-back is best effort; the run errors are already reported
             return []
-        if str(request.frequency) == ContextFrequency.realtime:
-            # Only the latest snapshot of today is meaningful for a realtime request.
-            rows = [r for r in rows if _d(r.get("trade_date")) == request.effective_as_of()]
-            rows.sort(key=lambda r: str(r.get("observed_at") or ""))
-            rows = rows[-1:]
-        return rows
+
+    def _unknown_date_observations(
+        self,
+        records: list[dict[str, Any]],
+        context_type: str,
+        observations: list[MarketContextObservation],
+        errors: list[ErrorRecord],
+        warnings: list[str],
+    ) -> bool:
+        """Realtime commodity rows whose date was never confirmed are not dated observations.
+
+        Fresh collections never store such rows (the runner reports
+        ``SNAPSHOT_DATE_UNCONFIRMED``); legacy rows read back from SQLite without a
+        ``date_confidence`` are treated the same way rather than trusted as vendor dates.
+        """
+        if context_type != ContextType.commodity:
+            return False
+        unconfirmed = [
+            r for r in records
+            if str(r.get("frequency")) == ContextFrequency.realtime and r.get("date_confidence") not in {"vendor_timestamp", "confirmed_last_session"}
+        ]
+        if unconfirmed:
+            ids = {str(r.get("record_id")) for r in unconfirmed}
+            observations[:] = [o for o in observations if o.record_id not in ids]
+            warnings.append(
+                f"snapshot_date_unconfirmed: {len(unconfirmed)} stored realtime record(s) carry no date confirmation "
+                f"(date_confidence={sorted({str(r.get('date_confidence')) for r in unconfirmed})}); treated as unknown date"
+            )
+            if not any(e.error_code == ErrorCode.SNAPSHOT_DATE_UNCONFIRMED for e in errors):
+                errors.append(
+                    ErrorRecord(
+                        error_code=ErrorCode.SNAPSHOT_DATE_UNCONFIRMED,
+                        error_message="stored realtime snapshot has no confirmed data date (legacy record without date_confidence)",
+                        retryable=True,
+                        suggested_action="Re-collect the snapshot; the runner confirms the session date against daily bars before storing.",
+                    )
+                )
+            return True
+        return any(e.error_code == ErrorCode.SNAPSHOT_DATE_UNCONFIRMED for e in errors)
 
     def _observations(self, records: Iterable[dict[str, Any]], context_type: str) -> list[MarketContextObservation]:
         date_field = _DATE_FIELD_BY_TYPE[context_type]
@@ -475,97 +506,13 @@ class MarketContextService:
                     raw_payload_ref=sorted(obs["raw_payload_refs"])[0] if obs["raw_payload_refs"] else None,
                     raw_row_index=obs["raw_row_index"],
                     data_quality=(sum(obs["quality"]) / len(obs["quality"])) if obs["quality"] else None,
-                    validation_status=sorted(obs["validation_status"])[0] if obs["validation_status"] else None,
+                    # An observation may combine multiple FX quote records. A blocking
+                    # status must survive aggregation, regardless of alphabetical order.
+                    validation_status=next(iter(sorted(obs["validation_status"] & _BLOCKING_VALIDATION_STATUSES)), None)
+                    or next(iter(sorted(obs["validation_status"])), None),
                 )
             )
         return observations
-
-    # ------------------------------------------------------------------
-    # Realtime snapshot date resolution
-    # ------------------------------------------------------------------
-    def _resolve_snapshot_date(
-        self,
-        request: MarketContextRequest,
-        identity: dict[str, Any],
-        observations: list[MarketContextObservation],
-        providers: list[str],
-        canonical: str,
-        stock_response: StockDataResponse,
-        warnings: list[str],
-    ) -> dict[str, Any] | None:
-        """Decide which session a vendor snapshot belongs to.
-
-        Futures snapshots carry a time of day only, so the adapter stamps the collection
-        date and flags it (``observed_date_inferred_from_fetch``). On holidays the vendor
-        keeps serving the last session's closing snapshot, which must not be reported as
-        today's price. The daily bars of the same contract settle the question:
-
-        * last bar dated today                         -> snapshot is today's;
-        * snapshot.pre_settle == last bar settle        -> live session after that bar: today;
-        * snapshot.pre_settle == second-last bar settle and snapshot.latest == last bar close
-                                                        -> snapshot *is* the last bar's session (stale);
-        * otherwise                                     -> keep the inferred date, warn.
-        """
-        inferred = any(
-            bool(row.get("observed_date_inferred_from_fetch"))
-            for result in stock_response.provider_results
-            for row in (result.raw_records or [])
-        )
-        snapshot = observations[-1]
-        if not inferred:
-            return {"data_date": snapshot.data_date, "confidence": "vendor_timestamp", "bars": []}
-
-        daily_request = MarketContextRequest(
-            context_id=request.context_id,
-            context_type=request.context_type,
-            symbol=request.symbol,
-            as_of=request.effective_as_of(),
-            frequency=ContextFrequency.d1,
-            market=request.market,
-            contract=request.contract,
-            instrument_type=request.instrument_type,
-            providers=providers,
-            canonical_provider=canonical,
-            save_raw=request.save_raw,
-            save_cleaned=request.save_cleaned,
-            export_parquet=request.export_parquet,
-            requested_by=request.requested_by,
-        )
-        daily_identity = {**identity, "frequency": "1d"}
-        daily_stock_request = self._build_stock_request(daily_request, daily_identity, providers, canonical)
-        daily_response = self.runner.run(daily_stock_request)
-        bars = self._records_from_response(daily_response, ContextType.commodity)
-        if not bars and self.runner.database is not None:
-            bars = self._records_from_database(daily_request, ContextType.commodity, daily_identity, daily_stock_request)
-        bar_obs = [o for o in self._observations(bars, ContextType.commodity) if o.data_date <= request.effective_as_of()]
-        today = snapshot.data_date
-        if not bar_obs:
-            warnings.append("snapshot_date_inferred: vendor supplies time-of-day only and no daily bars were available to confirm the session date")
-            return {"data_date": today, "confidence": "inferred_from_collection_clock", "bars": []}
-        last = bar_obs[-1]
-        pre_settle = snapshot.values.get("pre_settle")
-        latest = snapshot.values.get("latest")
-        if last.data_date == today:
-            return {"data_date": today, "confidence": "confirmed_by_daily_bar", "bars": bar_obs}
-        if pre_settle is not None and last.values.get("settle") is not None and abs(pre_settle - last.values["settle"]) < 1e-6:
-            return {"data_date": today, "confidence": "confirmed_live_session", "bars": bar_obs}
-        if len(bar_obs) >= 2:
-            prev = bar_obs[-2]
-            if (
-                pre_settle is not None
-                and prev.values.get("settle") is not None
-                and abs(pre_settle - prev.values["settle"]) < 1e-6
-                and latest is not None
-                and last.values.get("close") is not None
-                and abs(latest - last.values["close"]) < 1e-6
-            ):
-                warnings.append(
-                    f"snapshot_belongs_to_previous_session: vendor snapshot matches the {last.data_date.isoformat()} daily bar "
-                    f"(latest == close, pre_settle == previous settle); data_date corrected from {today.isoformat()}"
-                )
-                return {"data_date": last.data_date, "confidence": "corrected_to_last_session", "bars": bar_obs}
-        warnings.append("snapshot_date_inferred: could not reconcile snapshot with daily bars; data_date taken from collection clock")
-        return {"data_date": today, "confidence": "inferred_from_collection_clock", "bars": bar_obs}
 
     # ------------------------------------------------------------------
     # Result assembly
@@ -593,7 +540,7 @@ class MarketContextService:
         stock_response: StockDataResponse,
         records: list[dict[str, Any]],
         warnings: list[str],
-        snapshot_fix: dict[str, Any] | None,
+        unknown_date: bool,
     ) -> MarketContextResult:
         context_type = str(request.context_type)
         as_of = request.effective_as_of()
@@ -611,15 +558,14 @@ class MarketContextService:
             quality.warnings.append(f"{len(later)} observation(s) dated after as_of={as_of.isoformat()} were excluded")
 
         head = eligible[-1] if eligible else None
+        # Dates come from the stored standard records as confirmed by the runner; the
+        # service never re-derives them.
         data_date = head.data_date if head else None
         observed_at = head.observed_at if head else None
-        if head is not None and snapshot_fix is not None:
-            corrected = snapshot_fix["data_date"]
-            if corrected != head.data_date:
-                data_date = corrected
-                if observed_at is not None:
-                    observed_at = datetime.combine(corrected, observed_at.timetz())
-            quality.warnings.append(f"snapshot_date_confidence={snapshot_fix['confidence']}")
+        if head is not None and realtime and context_type == ContextType.commodity:
+            confidence = next((r.get("date_confidence") for r in records if r.get("record_id") == head.record_id), None)
+            if confidence:
+                quality.warnings.append(f"snapshot_date_confidence={confidence}")
 
         values = dict(head.values) if head else {}
         value = values.get(metric) if head else None
@@ -635,8 +581,18 @@ class MarketContextService:
         anomalies = self._anomalies(context_type, head, eligible, realtime)
         critical = [a for a in anomalies if a.get("severity") == "critical"]
         quality.anomalies = anomalies
-        quality.usable = head is not None and value is not None and not critical
-        if head is None:
+        blocked = head is not None and head.validation_status in _BLOCKING_VALIDATION_STATUSES
+        if blocked:
+            quality.warnings.append(f"upstream_validation_blocked: {head.validation_status}; value retained for inspection only")
+        quality.usable = head is not None and value is not None and not critical and not blocked
+        if head is None and unknown_date:
+            # Snapshot exists in raw form but its calendar date could not be confirmed:
+            # no data date, no freshness verdict, not usable.
+            quality.status = "unknown_date"
+            quality.is_fresh = None
+            quality.staleness_days = None
+            quality.data_date_matches_as_of = None
+        elif head is None:
             quality.status = "missing" if stock_response.status != "failed" or records else "failed"
         elif not quality.usable:
             quality.status = "failed"
@@ -659,7 +615,8 @@ class MarketContextService:
         scores = [float(r["data_quality"]) for r in records if r.get("data_quality") is not None]
         quality.data_quality_score = sum(scores) / len(scores) if scores else None
 
-        changes = self._changes(context_type, metric, eligible, head, realtime, snapshot_fix)
+        daily_bars = self._daily_bars_for_realtime(request, identity, head) if (realtime and head is not None and context_type == ContextType.commodity) else []
+        changes = self._changes(context_type, metric, eligible, head, realtime, daily_bars)
 
         source = self._source(stock_response, head, context_type, entry)
         if head is not None and (source.source_site is None or source.adapter_version is None):
@@ -708,6 +665,31 @@ class MarketContextService:
             provenance=provenance,
         )
 
+    def _daily_bars_for_realtime(
+        self, request: MarketContextRequest, identity: dict[str, Any], head: MarketContextObservation
+    ) -> list[MarketContextObservation]:
+        """Stored daily bars of the same instrument, for N-session changes of a snapshot.
+
+        Read-only: the bars were collected (and the snapshot date confirmed against them) by
+        the runner. No vendor call, no re-dating.
+        """
+        if self.runner.database is None:
+            return []
+        from stock_data_ingestion.services.query_service import QueryService
+
+        as_of = request.effective_as_of()
+        try:
+            with self.runner.database.session() as session:
+                rows = QueryService(session).get_market_context_records(
+                    ContextType.commodity,
+                    {**self._db_identity(ContextType.commodity, identity), "frequency": "1d"},
+                    as_of - timedelta(days=self.config.market_context.latest_lookback_days),
+                    as_of,
+                )
+        except Exception:  # noqa: BLE001
+            return []
+        return self._observations(rows, ContextType.commodity)
+
     def _anomalies(self, context_type: str, head: MarketContextObservation | None, eligible: list[MarketContextObservation], realtime: bool) -> list[dict[str, Any]]:
         if head is None:
             return []
@@ -749,7 +731,7 @@ class MarketContextService:
         eligible: list[MarketContextObservation],
         head: MarketContextObservation | None,
         realtime: bool,
-        snapshot_fix: dict[str, Any] | None,
+        daily_bars: list[MarketContextObservation],
     ) -> dict[str, ChangeMetric]:
         kind = "percentage_point" if context_type == ContextType.interest_rate else "percent"
         unit = _PERIOD_UNIT_BY_TYPE[context_type]
@@ -758,6 +740,11 @@ class MarketContextService:
             return changes
 
         def _make(periods: int, from_obs: MarketContextObservation | None, to_obs: MarketContextObservation, from_value: float | None, to_value: float | None, period_unit: str, reason: str | None = None) -> ChangeMetric:
+            blocked_endpoints = [o for o in (from_obs, to_obs) if o is not None and o.validation_status in _BLOCKING_VALIDATION_STATUSES]
+            if blocked_endpoints:
+                reason = "upstream_validation_blocked: " + ", ".join(
+                    f"{o.data_date.isoformat()}={o.validation_status}" for o in blocked_endpoints
+                )
             cm = ChangeMetric(periods=periods, period_unit=period_unit, kind=kind, from_date=from_obs.data_date if from_obs else None, to_date=to_obs.data_date, from_value=from_value, to_value=to_value, reason=reason)
             if reason is None and from_value is not None and to_value is not None:
                 if kind == "percentage_point":
@@ -777,17 +764,21 @@ class MarketContextService:
                 cm = _make(1, None, head, prev, cur, f"snapshot_vs_{prev_key}")
                 cm.from_date = None
                 changes[f"snapshot_vs_{prev_key}"] = cm
+            # Snapshot change over N sessions needs stored daily bars dated on/before the
+            # snapshot's confirmed data date; otherwise the horizon is explicitly missing.
+            bars = [b for b in daily_bars if b.data_date <= head.data_date]
             for n in CHANGE_PERIODS:
-                bars = (snapshot_fix or {}).get("bars") or []
-                # Snapshot change over N sessions needs confirmed daily bars; otherwise explicit missing.
-                confidence = (snapshot_fix or {}).get("confidence")
-                if bars and len(bars) >= n and confidence in {"confirmed_live_session", "confirmed_by_daily_bar", "corrected_to_last_session"}:
-                    # Live session: the last bar is the previous session (n sessions back = bars[-n]).
-                    # Snapshot equal to the last bar: n sessions back = bars[-(n+1)].
-                    ref = bars[-n] if confidence == "confirmed_live_session" else (bars[-(n + 1)] if len(bars) > n else None)
-                    if ref is not None and ref.values.get("close") is not None and cur is not None:
-                        changes[f"{n}p"] = _make(n, ref, head, ref.values.get("close"), cur, "trading_day")
-                        continue
+                ref: MarketContextObservation | None = None
+                if bars:
+                    if bars[-1].data_date == head.data_date:
+                        # Snapshot belongs to the last bar's session: n sessions back = bars[-(n+1)].
+                        ref = bars[-(n + 1)] if len(bars) > n else None
+                    else:
+                        # Vendor-dated snapshot after the last bar: the last bar is one session back.
+                        ref = bars[-n] if len(bars) >= n else None
+                if ref is not None and ref.values.get("close") is not None and cur is not None:
+                    changes[f"{n}p"] = _make(n, ref, head, ref.values.get("close"), cur, "trading_day")
+                    continue
                 changes[f"{n}p"] = _make(n, None, head, None, cur, "trading_day", reason="realtime_only_snapshot: no confirmed daily history for this horizon")
             return changes
 

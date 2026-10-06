@@ -27,6 +27,10 @@ class ErrorCode(StrEnum):
     RAW_SAVE_FAILED = "RAW_SAVE_FAILED"
     STORAGE_FAILED = "STORAGE_FAILED"
     IDEMPOTENCY_CONFLICT = "IDEMPOTENCY_CONFLICT"
+    # Realtime commodity snapshot whose calendar date could not be confirmed (vendor gave a
+    # time of day only and no daily bar matched). Retryable: the next session's bars may
+    # settle it. The raw payload is kept; no standard record with a guessed date is written.
+    SNAPSHOT_DATE_UNCONFIRMED = "SNAPSHOT_DATE_UNCONFIRMED"
     UNKNOWN_ERROR = "UNKNOWN_ERROR"
 
 

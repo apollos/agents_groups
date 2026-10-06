@@ -437,6 +437,30 @@ class CommodityPriceModel(StandardColumnsMixin, Base):
     pre_settle: Mapped[Optional[float]] = mapped_column(Float)
     volume: Mapped[Optional[float]] = mapped_column(Float)
     open_interest: Mapped[Optional[float]] = mapped_column(Float)
+    # Snapshot date confirmation: vendor_timestamp | confirmed_last_session | unknown | NULL (legacy).
+    date_confidence: Mapped[Optional[str]] = mapped_column(String(32), index=True)
+    date_resolution_details: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
+
+
+class MarketContextRecordRevisionModel(AuditMixin, Base):
+    """Archive of market-context standard records replaced by a newer same-key record.
+
+    The current tables (fx_rates / interest_rates / index_bars / commodity_prices) hold one
+    row per business key; when a newer record for the same key arrives, the full previous
+    row (values *and* provenance) is copied here before being replaced, so record ids cited
+    by older reports stay resolvable.
+    """
+
+    __tablename__ = "market_context_record_revisions"
+    record_id: Mapped[str] = mapped_column(String(80), unique=True, nullable=False, index=True)
+    record_type: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    table_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    business_key: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    record_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    superseded_by_record_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    request_id: Mapped[Optional[str]] = mapped_column(String(80), index=True)
+    ingestion_run_id: Mapped[Optional[str]] = mapped_column(String(80), index=True)
+    archived_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=now_asia_shanghai)
 
 
 class InterestRateModel(StandardColumnsMixin, Base):

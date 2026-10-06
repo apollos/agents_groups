@@ -1539,36 +1539,43 @@ class AKShareAdapter(BaseDataAdapter):
         return str(column)
 
     def _market_context_identity(self, context_type: str, entry: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+        """Business identity of the rows, taken from the symbol's configuration only.
+
+        The request (``ctx``) selects the symbol; it never overrides market / contract /
+        instrument_type / tenor / rate_type bound to that symbol. Consistency between the
+        request's parameters and the configuration is checked by the service before any
+        vendor call.
+        """
         symbol = str(ctx.get("symbol"))
         if context_type == "hk_index":
             return {
                 "index_code": symbol.upper(),
                 "index_name": entry.get("name"),
-                "exchange": entry.get("exchange", "HKEX"),
-                "currency": entry.get("currency", "HKD"),
-                "market": entry.get("market", "HK"),
+                "exchange": entry.get("exchange"),
+                "currency": entry.get("currency"),
+                "market": entry.get("market"),
                 "asset_type": "index",
             }
         if context_type == "commodity":
             return {
-                "commodity": entry.get("commodity", symbol.lower()),
+                "commodity": entry.get("commodity"),
                 "commodity_name": entry.get("name"),
-                "instrument_type": ctx.get("instrument_type") or entry.get("instrument_type", "futures"),
-                "market": ctx.get("market") or entry.get("market", "UNKNOWN"),
-                "contract": ctx.get("contract") or entry.get("contract", symbol.upper()),
-                "price_unit": entry.get("price_unit", "CNY"),
-                "currency": entry.get("currency", "CNY"),
+                "instrument_type": entry.get("instrument_type"),
+                "market": entry.get("market"),
+                "contract": entry.get("contract"),
+                "price_unit": entry.get("price_unit"),
+                "currency": entry.get("currency"),
             }
         if context_type == "fx":
             return {
-                "base_currency": str(entry.get("base_currency", symbol[:3])).upper(),
-                "quote_currency": str(entry.get("quote_currency", symbol[3:6] or "CNY")).upper(),
+                "base_currency": str(entry.get("base_currency") or "").upper() or None,
+                "quote_currency": str(entry.get("quote_currency") or "").upper() or None,
             }
         if context_type == "interest_rate":
             return {
-                "rate_type": ctx.get("rate_type") or entry.get("rate_type", "unknown"),
-                "market": ctx.get("market") or entry.get("market", "UNKNOWN"),
-                "tenor": ctx.get("tenor") or entry.get("tenor", "unknown"),
+                "rate_type": entry.get("rate_type"),
+                "market": entry.get("market"),
+                "tenor": entry.get("tenor"),
                 "currency": entry.get("currency"),
                 "rate_name": entry.get("name"),
             }
@@ -1591,7 +1598,8 @@ class AKShareAdapter(BaseDataAdapter):
         columns: dict[str, str] = source.get("columns") or {}
         rows: list[dict[str, Any]] = []
         for raw in raw_rows:
-            observed_at, date_inferred = self._snapshot_observed_at(self._value(raw, time_column), fetched_at)
+            vendor_time = self._value(raw, time_column)
+            observed_at, date_inferred = self._snapshot_observed_at(vendor_time, fetched_at)
             mapped = {std: self._numeric(self._value(raw, vendor)) for std, vendor in columns.items()}
             rows.append(
                 {
@@ -1602,9 +1610,13 @@ class AKShareAdapter(BaseDataAdapter):
                     "frequency": "realtime",
                     "observed_at": observed_at.isoformat(),
                     "trade_date": observed_at.strftime("%Y%m%d"),
-                    # Vendor snapshots often carry HHMMSS only; the calendar date then comes
-                    # from the collection clock and the service must flag it.
+                    # Vendor snapshots often carry HHMMSS only. The calendar date above is then
+                    # provisional (collection clock) and the runner must confirm it against daily
+                    # bars before any standard record is stored; the flag and the vendor's original
+                    # time value travel with the row so that step has the evidence.
                     "observed_date_inferred_from_fetch": date_inferred,
+                    "vendor_time_value": None if self._is_missing(vendor_time) else str(vendor_time),
+                    "collection_time": fetched_at.isoformat(),
                 }
             )
         return rows

@@ -320,6 +320,53 @@ class QueryService:
         rows = self.session.execute(stmt).scalars().all()
         return [{col.name: getattr(row, col.name) for col in row.__table__.columns} for row in rows]
 
+    def get_market_context_records_for_request(self, context_type: str, request_id: str) -> list[dict[str, Any]]:
+        """Current standard records produced by one ingestion request.
+
+        Rows that a newer same-key record has since replaced are archived in
+        ``market_context_record_revisions``; their ``superseded_by_record_id`` chain is
+        followed to the row that currently represents that business key, so an idempotent
+        re-read stays tied to the original successful run instead of picking any row.
+        """
+        model_cls = self.MARKET_CONTEXT_MODELS.get(str(context_type))
+        if model_cls is None:
+            raise ValueError(f"INVALID_REQUEST: unsupported context_type {context_type}")
+        date_column = getattr(model_cls, self.MARKET_CONTEXT_DATE_COLUMN[str(context_type)])
+        current = self.session.execute(select(model_cls).where(model_cls.request_id == request_id).order_by(date_column.asc())).scalars().all()
+        rows = [{col.name: getattr(row, col.name) for col in row.__table__.columns} for row in current]
+        seen = {r["record_id"] for r in rows}
+
+        revision_model = models.MarketContextRecordRevisionModel
+        archived = self.session.execute(
+            select(revision_model).where(revision_model.request_id == request_id, revision_model.table_name == model_cls.__tablename__)
+        ).scalars().all()
+        for revision in archived:
+            successor_id = revision.superseded_by_record_id
+            hops = 0
+            while successor_id and hops < 64:
+                obj = self.session.execute(select(model_cls).where(model_cls.record_id == successor_id)).scalar_one_or_none()
+                if obj is not None:
+                    if obj.record_id not in seen:
+                        rows.append({col.name: getattr(obj, col.name) for col in obj.__table__.columns})
+                        seen.add(obj.record_id)
+                    break
+                nxt = self.session.execute(select(revision_model).where(revision_model.record_id == successor_id)).scalar_one_or_none()
+                successor_id = nxt.superseded_by_record_id if nxt is not None else None
+                hops += 1
+        rows.sort(key=lambda r: (str(r.get(self.MARKET_CONTEXT_DATE_COLUMN[str(context_type)])), str(r.get("observed_at") or "")))
+        return rows
+
+    def get_market_context_revisions(self, record_id: str | None = None, *, superseded_by_record_id: str | None = None) -> list[dict[str, Any]]:
+        """Archived (replaced) market-context records, newest archive first."""
+        stmt = select(models.MarketContextRecordRevisionModel)
+        if record_id:
+            stmt = stmt.where(models.MarketContextRecordRevisionModel.record_id == record_id)
+        if superseded_by_record_id:
+            stmt = stmt.where(models.MarketContextRecordRevisionModel.superseded_by_record_id == superseded_by_record_id)
+        stmt = stmt.order_by(models.MarketContextRecordRevisionModel.archived_at.desc())
+        rows = self.session.execute(stmt).scalars().all()
+        return [{col.name: getattr(row, col.name) for col in row.__table__.columns} for row in rows]
+
     def get_fx_rates(self, base_currency: str, quote_currency: str, start_date: str | date, end_date: str | date, rate_type: str | None = None) -> pd.DataFrame:
         identity = {"base_currency": base_currency.upper(), "quote_currency": quote_currency.upper(), "rate_type": rate_type}
         return pd.DataFrame(self.get_market_context_records("fx", identity, start_date, end_date))
@@ -372,6 +419,22 @@ class QueryService:
                     "raw_payload_ref": obj.raw_payload_ref,
                     "raw_row_index": obj.raw_row_index,
                 }
+        # Replaced market-context records keep their provenance in the revision archive, so
+        # record ids cited by older reports remain traceable to their raw payload.
+        revision = self.session.execute(
+            select(models.MarketContextRecordRevisionModel).where(models.MarketContextRecordRevisionModel.record_id == record_id)
+        ).scalar_one_or_none()
+        if revision is not None:
+            archived = revision.record_json or {}
+            return {
+                "record_id": record_id,
+                "raw_payload_id": archived.get("raw_payload_id"),
+                "raw_payload_ref": archived.get("raw_payload_ref"),
+                "raw_row_index": archived.get("raw_row_index"),
+                "archived": True,
+                "superseded_by_record_id": revision.superseded_by_record_id,
+                "archived_at": revision.archived_at,
+            }
         return None
 
     def get_conflicts(self, ticker: str | None = None) -> pd.DataFrame:

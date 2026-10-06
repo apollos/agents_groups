@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterable, Type
 
 from pydantic import BaseModel
@@ -13,11 +13,14 @@ from stock_data_ingestion.schemas.errors import ErrorRecord
 from stock_data_ingestion.schemas.records import (
     AdjFactorRecord,
     BarRecord,
+    CommodityPriceRecord,
     ConceptMembershipRecord,
     CorporateActionRecord,
     FinancialIndicatorRecord,
     FinancialStatementRecord,
+    FxRateRecord,
     IndexBarRecord,
+    InterestRateRecord,
     IndexConstituentRecord,
     IndexRecord,
     IndustryMembershipRecord,
@@ -56,6 +59,45 @@ STANDARD_MODEL_BY_RECORD_TYPE: dict[str, Type[Base]] = {
     "commodity_price": models.CommodityPriceModel,
     "interest_rate": models.InterestRateModel,
 }
+
+# Market-context records: one current row per business key (the table's unique constraint),
+# newer same-key records replace it and the previous row is archived in full.
+MARKET_CONTEXT_RECORD_CLASS_BY_TYPE: dict[str, Type[BaseModel]] = {
+    "fx_rate": FxRateRecord,
+    "interest_rate": InterestRateRecord,
+    "index_bar": IndexBarRecord,
+    "commodity_price": CommodityPriceRecord,
+}
+MARKET_CONTEXT_BUSINESS_KEYS: dict[str, tuple[str, ...]] = {
+    "fx_rate": ("base_currency", "quote_currency", "quote_basis", "rate_type", "rate_date", "effective_provider"),
+    "interest_rate": ("rate_type", "market", "curve_name", "tenor", "rate_date", "effective_provider"),
+    "index_bar": ("index_code", "frequency", "trade_date", "timestamp", "effective_provider"),
+    "commodity_price": ("commodity", "instrument_type", "market", "contract", "frequency", "trade_date", "observed_at", "effective_provider"),
+}
+_MODEL_AUDIT_COLUMNS = {"id", "created_at", "updated_at"}
+
+
+def _as_aware(value: Any) -> datetime:
+    """SQLite returns naive datetimes; compare everything in Asia/Shanghai."""
+    if value is None:
+        return datetime.min.replace(tzinfo=timezone(timedelta(hours=8)))
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value)
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone(timedelta(hours=8)))
+    return value
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json")
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_json_safe(v) for v in value]
+    return value
 
 
 class Repository:
@@ -143,6 +185,95 @@ class Repository:
             if inserted:
                 tables.append(table)
         return tables
+
+    # ------------------------------------------------------------------
+    # Market-context records: current row per business key + revision archive
+    # ------------------------------------------------------------------
+    def _row_to_record(self, record_type: str, row: Base) -> BaseModel:
+        record_cls = MARKET_CONTEXT_RECORD_CLASS_BY_TYPE[record_type]
+        data = {col.name: getattr(row, col.name) for col in row.__table__.columns if col.name not in _MODEL_AUDIT_COLUMNS}
+        return record_cls.model_validate(data)
+
+    def _find_market_context_rows(self, model_cls: Type[Base], record_type: str, values: dict[str, Any]) -> list[Base]:
+        """All current rows for the business key, newest first.
+
+        Normally at most one row exists; databases written before the current-row rule may hold
+        duplicates (NULL business-key parts bypass the SQLite UNIQUE constraint).
+        """
+        stmt = select(model_cls)
+        for key in MARKET_CONTEXT_BUSINESS_KEYS[record_type]:
+            column = getattr(model_cls, key)
+            value = values.get(key)
+            stmt = stmt.where(column.is_(None) if value is None else column == value)
+        rows = list(self.session.execute(stmt).scalars().all())
+        rows.sort(key=lambda row: (_as_aware(getattr(row, "fetch_time", None)) or datetime.min.replace(tzinfo=timezone.utc), row.id), reverse=True)
+        return rows
+
+    def _find_current_market_context_row(self, model_cls: Type[Base], record_type: str, values: dict[str, Any]) -> Base | None:
+        rows = self._find_market_context_rows(model_cls, record_type, values)
+        return rows[0] if rows else None
+
+    @staticmethod
+    def _is_newer(incoming: dict[str, Any], existing: Base) -> bool:
+        """Compare provider_update_time when both sides have it, otherwise fetch_time."""
+        inc_put, cur_put = incoming.get("provider_update_time"), getattr(existing, "provider_update_time", None)
+        if inc_put is not None and cur_put is not None:
+            return _as_aware(inc_put) > _as_aware(cur_put)
+        return _as_aware(incoming.get("fetch_time")) > _as_aware(getattr(existing, "fetch_time", None))
+
+    def upsert_market_context_record(self, record: BaseModel) -> tuple[BaseModel, str, str]:
+        """Save one fx_rate / interest_rate / index_bar / commodity_price record.
+
+        * no row for the business key            -> insert;
+        * existing row and the incoming is newer  -> archive the full existing row in
+          ``market_context_record_revisions`` and replace every column (values, record_id,
+          quality, request/run ids, raw refs, provenance, fetch/provider times) atomically;
+        * incoming is older or same age           -> keep the existing row untouched.
+
+        Returns ``(retained_record, table_name, action)`` with action in
+        ``inserted | replaced | kept_existing``; callers must report *this* record.
+        """
+        record_type = str(getattr(record, "record_type", ""))
+        if record_type not in MARKET_CONTEXT_BUSINESS_KEYS:
+            raise ValueError(f"INVALID_REQUEST: {record_type!r} is not a market-context record type")
+        model_cls = STANDARD_MODEL_BY_RECORD_TYPE[record_type]
+        kwargs = self._to_model_kwargs(model_cls, record)
+        table = model_cls.__tablename__
+        with self.session.begin_nested():
+            rows = self._find_market_context_rows(model_cls, record_type, kwargs)
+            if not rows:
+                self.session.add(model_cls(**kwargs))
+                self.session.flush()
+                return record, table, "inserted"
+            existing = rows[0]
+            if not self._is_newer(kwargs, existing):
+                return self._row_to_record(record_type, existing), table, "kept_existing"
+            archived_at = now_asia_shanghai()
+            for row in rows:
+                # Every replaced row (including legacy duplicates of the key) is archived in full.
+                archived = {col.name: getattr(row, col.name) for col in row.__table__.columns if col.name not in _MODEL_AUDIT_COLUMNS}
+                self.session.add(
+                    models.MarketContextRecordRevisionModel(
+                        record_id=archived["record_id"],
+                        record_type=record_type,
+                        table_name=table,
+                        business_key={key: _json_safe(archived.get(key)) for key in MARKET_CONTEXT_BUSINESS_KEYS[record_type]},
+                        record_json={k: _json_safe(v) for k, v in archived.items()},
+                        superseded_by_record_id=kwargs["record_id"],
+                        request_id=archived.get("request_id"),
+                        ingestion_run_id=archived.get("ingestion_run_id"),
+                        archived_at=archived_at,
+                    )
+                )
+            for duplicate in rows[1:]:
+                self.session.delete(duplicate)
+            self.session.execute(update(model_cls).where(model_cls.id == existing.id).values(**kwargs, updated_at=archived_at))
+            self.session.flush()
+            return record, table, "replaced"
+
+    def get_market_context_revision(self, record_id: str) -> models.MarketContextRecordRevisionModel | None:
+        stmt = select(models.MarketContextRecordRevisionModel).where(models.MarketContextRecordRevisionModel.record_id == record_id)
+        return self.session.execute(stmt).scalar_one_or_none()
 
     def insert_ingestion_request(self, request: BaseModel, status: str = "created") -> bool:
         data = request.model_dump(mode="python")

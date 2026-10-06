@@ -337,6 +337,74 @@ def test_agent_fresh_snapshot_counts_as_coverage(tmp_path, monkeypatch):
     assert _issues(agent, "market_context_stale") == [] and _issues(agent, "market_context_collect_failed") == []
 
 
+def test_agent_upstream_quarantined_value_does_not_count_as_coverage(tmp_path, monkeypatch):
+    agent = _agent(tmp_path / "a")
+    payload = tool_payload(value=4026.0, data_date=AS_OF, status="failed", quality={
+        "usable": False, "status": "failed", "is_fresh": True,
+        "warnings": ["upstream_validation_blocked: quarantined; value retained for inspection only"],
+    })
+    cli = FakeCLI(payload)
+    monkeypatch.setattr(MarketContextAdapter, "_run_cli", lambda self, cmd: cli(cmd))
+    ticket_id = _dispatch(agent, "quarantined")
+    assert agent.tickets.get(ticket_id)["status"] == "failed"
+    cov = CoverageEvaluator(agent.data_store).market_context_coverage(trade_date=AS_OF)
+    assert cov["contexts_with_snapshot"] == 0 and cov["contexts_fresh"] == 0
+    assert _issues(agent, "market_context_collect_failed")
+
+
+def test_agent_unknown_snapshot_date_is_not_saved_and_is_retried(tmp_path, monkeypatch):
+    """Tool could not confirm the data date of a realtime snapshot (SNAPSHOT_DATE_UNCONFIRMED).
+
+    The agent must not store it as a valid snapshot, must not report it as 'today, fresh',
+    and must requeue the ticket because the error is retryable.
+    """
+    agent = _agent(tmp_path / "a")
+    payload = tool_payload(
+        value=None, data_date=None, status="failed", metric="latest", unit="CNY/ton",
+        context_id="commodity_cu0", context_type="commodity", symbol="CU0",
+        quality={"usable": False, "status": "unknown_date", "is_fresh": None, "staleness_days": None, "data_date_matches_as_of": None,
+                 "warnings": ["snapshot_date_unconfirmed: copper/CU0 realtime snapshot has no confirmed data date"]},
+        errors=[{"error_code": "SNAPSHOT_DATE_UNCONFIRMED", "retryable": True,
+                 "error_message": "realtime snapshot of copper/CU0 has no confirmable data date",
+                 "suggested_action": "Retry after the next session's daily bar is published, or use frequency=1d."}],
+    )
+    payload["result"]["observed_at"] = None
+    cli = FakeCLI(payload)
+    monkeypatch.setattr(MarketContextAdapter, "_run_cli", lambda self, cmd: cli(cmd))
+    target = {**_target("commodity_cu0", "CU0", "commodity"), "frequency": "realtime"}
+    ticket_id = _dispatch(agent, "unknown-date", target=target)
+    assert agent.tickets.get(ticket_id)["status"] == "open", "retryable: scheduled for retry, not failed/done"
+    with agent.data_store.session() as con:
+        assert con.execute("SELECT COUNT(*) FROM market_context_snapshots").fetchone()[0] == 0
+    cov = CoverageEvaluator(agent.data_store).market_context_coverage(trade_date=AS_OF)
+    assert cov["contexts_with_snapshot"] == 0 and cov["contexts_fresh"] == 0
+    issues = _issues(agent, "market_context_collect_failed")
+    assert issues and "SNAPSHOT_DATE_UNCONFIRMED" in issues[0]["payload_json"]
+    mapped = adapter_with(monkeypatch, FakeCLI(payload)).collect_snapshot(context=target, as_of=AS_OF)
+    assert mapped.status == "failed" and mapped.quality["status"] == "unknown_date" and mapped.quality["is_fresh"] is None
+    assert mapped.result["data_date"] is None and mapped.result["observed_at"] is None and mapped.result["value"] is None
+    assert mapped.errors[0]["error_code"] == "SNAPSHOT_DATE_UNCONFIRMED" and mapped.errors[0]["retryable"] is True
+
+
+def test_agent_business_param_mismatch_is_manual_not_retried(tmp_path, monkeypatch):
+    """Tool rejected contract/instrument_type/tenor inconsistent with the symbol (INVALID_REQUEST)."""
+    agent = _agent(tmp_path / "a")
+    message = "symbol=CU0 的 contract 配置为 CU0，请求 contract=CU2612，与 symbol 绑定不一致。请使用已注册的 CU2612 symbol。"
+    payload = tool_payload(value=None, data_date=None, status="failed", context_id="commodity_cu0", context_type="commodity", symbol="CU0",
+                           quality={"usable": False, "status": "failed", "is_fresh": None},
+                           errors=[{"error_code": "INVALID_REQUEST", "error_message": message, "retryable": False}])
+    cli = FakeCLI(payload)
+    monkeypatch.setattr(MarketContextAdapter, "_run_cli", lambda self, cmd: cli(cmd))
+    target = {**_target("commodity_cu0", "CU0", "commodity"), "contract": "CU2612"}
+    ticket_id = _dispatch(agent, "param-mismatch", target=target)
+    assert "--contract" in cli.cmds[0] and cli.cmds[0][cli.cmds[0].index("--contract") + 1] == "CU2612"
+    assert agent.tickets.get(ticket_id)["status"] == "failed"
+    with agent.data_store.session() as con:
+        assert con.execute("SELECT COUNT(*) FROM market_context_snapshots").fetchone()[0] == 0
+    issues = _issues(agent, "market_context_collect_failed")
+    assert issues and "需人工处理" in issues[0]["summary_cn"] and message in issues[0]["payload_json"]
+
+
 def test_agent_stale_snapshot_is_saved_but_flagged(tmp_path, monkeypatch):
     agent = _agent(tmp_path / "a")
     payload = tool_payload(value=4357.6, data_date="2026-06-30", status="partial_success",

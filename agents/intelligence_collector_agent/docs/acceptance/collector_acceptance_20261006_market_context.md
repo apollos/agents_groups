@@ -21,6 +21,7 @@
 | 失败处理 | **通过**（离线测试 + 真实东财失败样本）。东财被 WAF 拒绝自动回退新浪并在 `warnings` 留 `source_fallback:`；未知 symbol 不重试并提示修 `market_context_sources.yaml`；超时可重试 |
 | 回归 | **通过**。Agent 239 passed（含既有 MIC / 股票 / 港股通 / 日报 / 看板），工具 145 passed（126 既有 + 19 新增） |
 | 未验证 | 东财 `stock_zh_index_daily_em`、`stock_hk_index_daily_em`（本机被 WAF `RemoteDisconnected`，未配置 `EASTMONEY_COOKIE`）；`bond_zh_us_rate` 兜底、`futures_zh_spot` 盘中时段快照（验收时为休市，仅验证了休市快照归属日校正）；BaoStock 对 `index_data` 的第二源交叉校验 |
+| 评审四项修改（同日晚） | 见 **§6**：快照日期入库前确认 / 业务参数只校验 / 同日更新 + 历史表 / 隔离数据，逐项区分"模拟数据回归通过"与"真实供应商采集通过"。回归：工具 179 passed，Agent 242 passed |
 
 ## 1. 工具侧真实样本（CLI 直接调用，2026-10-06）
 
@@ -31,7 +32,7 @@
 | 1.1 | `fx` HKDCNY（`spot_sell`） | `currency_boc_sina`（中行牌价） | 2026-10-06 | 85.59 | CNY per 100 HKD | fresh, 0d | percent, period_unit=observation |
 | 1.2 | `hk_index` HSTECH | `stock_hk_index_daily_sina` | 2026-10-05 | 4183.68018 | index_points | fresh, 1d | percent, trading_day |
 | 1.3 | `commodity` CU0 futures 1d | `futures_zh_daily_sina` | 2026-09-30 | close 109680 / settle 109570 | CNY/ton | stale, 6d（tolerance 3d）→ `partial_success` | percent, trading_day |
-| 1.4 | `commodity` CU0 realtime | `futures_zh_spot` | 2026-09-30（由同合约日线确认，`snapshot_date_confidence=corrected_to_last_session`，warning `snapshot_belongs_to_previous_session`） | latest 109680 | CNY/ton | stale | `snapshot_vs_pre_settle` +0.3477%；1/5/20p 来自已确认日线 |
+| 1.4 | `commodity` CU0 realtime | `futures_zh_spot` | 2026-09-30（由同合约日线在入库前确认，`date_confidence=confirmed_last_session`，warning `snapshot_belongs_to_previous_session`；评审后口径见 §6.1） | latest 109680 | CNY/ton | stale | `snapshot_vs_pre_settle` +0.3477%；1/5/20p 来自已确认日线 |
 | 1.5 | `interest_rate` CN_CGB_10Y | `bond_china_yield`（中债曲线 10Y 列） | 2026-09-30 | 1.6822 | percent | stale, 6d | percentage_point + basis_points |
 | 1.6 | `interest_rate` SHIBOR_3M | `rate_interbank`（指标"3月"） | 2026-09-30 | 1.43 | percent | stale | percentage_point |
 | 1.7 | `equity_index` 000300 | `stock_zh_index_daily`（新浪，东财 `stock_zh_index_daily_em` 失败后回退） | 2026-09-30 | 4357.616 | index_points | stale, 6d | percent, trading_day |
@@ -118,4 +119,72 @@ source_api / tool_request_id / quality_json / provenance_json`（`provenance.ing
    stale 并不计入覆盖。这是如实反映，但若希望"休市期间最近一个交易日算 fresh"，可由 Agent 侧按 `market_calendar`
    把 `max_staleness_days` 动态放大到"上一交易日距今天数 + 容忍"，再传给工具；本轮未改。
 2. 东财接口在本机不可达，A 股指数当前只有新浪单源，`single_source` warning 常驻；配置 `EASTMONEY_COOKIE` 后可恢复双源。
-3. 盘中 `futures_zh_spot` 实时快照的"当日归属 + 确认中"路径（`confirmed_live_session`）仅有离线测试覆盖，需在交易时段补一次真实验证。
+3. 盘中 `futures_zh_spot` 实时快照（供应商只给时分秒、与上一交易日日线不匹配）按评审规则必须返回 `unknown_date`
+   （§6.1），本轮只有模拟数据回归覆盖；交易时段的真实供应商采集未验证（验收日休市）。
+
+## 6. 评审四项修改验收（2026-10-06 23:18–23:24 本机）
+
+依据：用户 2026-10-06 评审 comments（商品快照日期 / 业务参数 / 同日更新 / 隔离数据）。每一项分别标注
+**模拟数据回归通过**（`tests/test_market_context.py`、`tests/test_v09_market_context.py`，假 AKShare / 假 CLI）与
+**真实供应商采集通过**（`python -m stock_data_ingestion.cli fetch market-context` 直连新浪 / 中行 / 中债，
+`STOCK_DATA_PREFER_IPV4=true`，工具库 `tools/stock_data_collector/data/stock_data.db`）。
+
+### 6.1 商品快照日期：入库前确认一次，重复读取不再推断
+
+| 验收项 | 模拟数据回归 | 真实供应商采集 |
+|---|---|---|
+| 首次请求 CU0 realtime：`data_date=2026-09-30`，`is_fresh=false` | **通过** `test_snapshot_date_first_request_confirms_previous_session_before_storage`：库中 `commodity_prices` realtime 行 `trade_date=2026-09-30`、`observed_at=2026-09-30 15:00`、`date_confidence=confirmed_last_session`，`date_resolution_details` 含 `vendor_time_value=150000 / observed_date_inferred_from_fetch=true / confirmation_bar_record_ids×2 / confirmation_reason`；日线 30 根由同一 runner 日线链落库 | **通过**（23:23:47 新进程、新分钟）：`partial_success`，`data_date=2026-09-30`，`observed_at=2026-09-30T15:00:00+08:00`，`value=109680`，`is_fresh=false`，`status=stale`（6d），warning `snapshot_belongs_to_previous_session`；库行 `rec_0e54cdfb…` `date_confidence=confirmed_last_session` |
+| 同一分钟重复请求：仍 2026-09-30 / false | **通过** `test_snapshot_date_repeat_same_minute_and_after_restart_reuse_confirmed_record`：0 次供应商调用，`_confirm_snapshot_dates` 0 次调用，`served_from_store` | **通过**（23:23:48，新进程）：`served_from_store`，`data_date / observed_at / value / is_fresh` 与首次一致 |
+| 进程重启后重复请求：仍 2026-09-30 / false | **通过**（同上，新 `IngestionRunner` + 新 `Database` 同一 sqlite 文件） | **通过**（23:23:48 第三个进程）：结果同上 |
+| 三者的序列日期 / `observed_at` / 变化端点完全一致 | **通过**：`series[].data_date`、`series[].observed_at`（含时区）、`changes{snapshot_vs_pre_settle,1p,5p,20p}.(from_date,to_date,value)`、`record_ids` 三次相同；`1p` from 2026-09-29 to 2026-09-30 | **通过**：三次均 `series=[(2026-09-30, 2026-09-30T15:00:00+08:00)]`，`1p=+0.100392%（09-29→09-30）`、`5p=−1.47323%（09-22→09-30）`、`20p=+0.421168%（09-01→09-30）`、`snapshot_vs_pre_settle=+0.347667%`，`record_ids=[rec_0e54cdfb49374716996684b143e6c459]`、`raw_payload_ids` 相同 |
+| 日线获取失败且供应商只有时分秒 → 日期未知，不能返回当天新鲜 | **通过** `test_snapshot_date_unknown_when_daily_chain_fails_never_today_fresh[holiday/live]`：`status=failed`，`data_date=null`，`observed_at=null`，`usable=false`，`is_fresh=null`，`quality.status=unknown_date`，`SNAPSHOT_DATE_UNCONFIRMED retryable=true`，`commodity_prices` 0 行，`raw_payload_index` ≥1 | 未人为制造日线失败；但 23:19:53 的一次真实请求因旧库日线重复行（见 6.5）匹配失败，返回的正是 `failed / unknown_date / data_date=null / is_fresh=null / SNAPSHOT_DATE_UNCONFIRMED`，未写标准记录、raw 保留——**真实路径行为符合规则** |
+| 盘中快照（价格已偏离上一日线收盘）→ 未知，不按采集机时间归属当天 | **通过** `test_snapshot_date_live_session_time_only_is_unknown_even_with_daily_bars` | 未验证（验收日休市） |
+| 供应商给完整日期 → 直接使用，不走确认 | **通过** `test_snapshot_date_vendor_full_timestamp_is_kept_without_confirmation`（`date_confidence=vendor_timestamp`，无 `snapshot_belongs_to_previous_session`） | 未验证（新浪 `futures_zh_spot` 只给 `time=HHMMSS`） |
+| 旧记录没有确认依据（`date_confidence` NULL）→ 按未知处理，不按 `vendor_timestamp` | **通过** `test_snapshot_date_legacy_record_without_confidence_is_unknown_not_vendor_timestamp`（库回放 → `unknown_date`） | 旧库中 20:27 写入的 realtime 行 `trade_date=2026-10-06, date_confidence=NULL` 仍在当前表，但业务键不同、未被任何成功 run 关联，不会被回放；按规则若被读取即为未知 |
+| 旧 SQLite 补列 | **通过** `test_snapshot_date_columns_are_added_to_legacy_sqlite`（`ensure_columns` 补 `date_confidence / date_resolution_details`，幂等） | **通过**：真实库 `pragma table_info(commodity_prices)` 含两列（由 `Database.init()` 自动补齐） |
+
+### 6.2 业务参数：symbol 决定对象，其余只做一致性校验
+
+| 请求 | 模拟数据回归 | 真实供应商采集 |
+|---|---|---|
+| CU0，不带其他参数 → 正常 | **通过** `test_business_params_consistent_with_symbol_are_accepted` | **通过**（§6.1 全部 CU0 请求） |
+| CU0 + `contract=CU0` + `instrument_type=futures` → 正常 | **通过** | **通过**：`partial_success`，`identity={commodity: copper, instrument_type: futures, market: SHFE, contract: CU0, …}`，`stock_data_response.status=success` |
+| CU0 + `contract=CU2612` → `INVALID_REQUEST`，0 次供应商调用 | **通过** `test_business_params_conflicting_with_symbol_fail_without_vendor_call`：`fake_ak.calls == []`，五张表 0 行，`retryable=false`；消息与评审样例逐字一致（`test_business_params_example_message_matches_review_wording`） | **通过**：`failed`，`INVALID_REQUEST retryable=false`，`symbol=CU0 的 contract 配置为 CU0，请求 contract=CU2612，与 symbol 绑定不一致。请使用已注册的 CU2612 symbol。`，`stock_data_response.request_id=null`（未进入 runner） |
+| CU0 + `instrument_type=spot` → `INVALID_REQUEST`，0 次调用 | **通过** | **通过**：`symbol=CU0 的 instrument_type 配置为 futures，请求 instrument_type=spot，与 symbol 绑定不一致。…` |
+| US_CGB_10Y + `tenor=2Y` → `INVALID_REQUEST`，0 次调用 | **通过** | **通过**：`symbol=US_CGB_10Y 的 tenor 配置为 10Y，请求 tenor=2Y，与 symbol 绑定不一致。…` |
+| 其他字段（`market` 对 commodity / fx / hk_index，`rate_type` 对 interest_rate） | **通过**（同一参数化用例） | 未逐一执行 |
+| 身份与供应商参数全部来自配置 | **通过** `test_identity_and_vendor_args_come_from_config_not_request`（`_market_context_identity` 忽略请求覆盖；`futures_zh_daily_sina(symbol=CU0)`） | **通过**（上表 identity 来自 yaml） |
+
+### 6.3 同日更新：当前表最新一条，历史表保存被替换的完整记录
+
+| 验收项 | 模拟数据回归 | 真实供应商采集 |
+|---|---|---|
+| 9 点 85.59 → 当前 85.59 | **通过** `test_same_day_update_replaces_current_and_archives_full_old_record` | **模拟数据专项**：中行牌价当日不会在验收窗口内变化，无法真实复现 85.59→86.59 |
+| 10 点 86.59 → 当前 86.59；历史表保留 85.59 及原 request_id / raw_payload_id / field_provenance | **通过**：`record_id / request_id / ingestion_run_id / raw_payload_id / raw_payload_ref / raw_hash / fetch_time` 整体替换，新 `field_provenance.rate.raw_payload_id == 新 raw_payload_id`；`market_context_record_revisions` 一行 `record_id=旧 id, superseded_by_record_id=新 id, record_json.rate=85.59, record_json.raw_payload_id=旧 raw`；`get_raw_ref_by_record_id(旧 id)` 返回旧 raw 引用 + `archived=true` | 真实库中替换机制已发生：23:23 的 CU0 realtime 重采替换了 23:18 的记录（`market_context_record_revisions` 含 1 行 realtime 归档），23:18 的日线重采归档了 20:27 的 38 根日线 |
+| 10 点重复 / 进程重启后重复 → 86.59，record_id / raw_payload_id 为 86.59 那次采集的 | **通过** `test_same_day_update_repeat_and_restart_return_latest_collection`（`served_from_store`，`record_ids` 与 10 点一致，序列中无 85.59） | **通过**（§6.1 的 23:23:48 两次回放返回 23:23:47 采集的 record_id / raw_payload_id） |
+| 迟到的旧结果不得覆盖 | **通过** `test_same_day_update_late_arriving_older_result_does_not_overwrite`（`fetch_time=08:00` 的 85.59 到达 → 当前仍 86.59、record_id 不变、无新归档、warning `stale_update_rejected`）；`test_repository_upsert_rules_direct`（更旧 / 同龄保留现有，更新替换，`provider_update_time` 优先于 `fetch_time`） | 未验证（需人为制造迟到结果） |
+| 旧库同键重复行收敛 | **通过** `test_legacy_duplicate_rows_collapse_into_one_current_record`（两行 → 全部归档、只留一条、快照确认仍成功） | 真实库 CU0 日线仍有 38 日 × 2 行（20:27 / 21:01 两次旧代码写入；23:18 只替换了其中一组），确认步骤已按日期去重取最新一行；下一个小时的日线重采会把剩余重复行归档 |
+
+### 6.4 隔离数据（PR #1 `91103dc`）
+
+| 验收项 | 模拟数据回归 | 真实供应商采集 |
+|---|---|---|
+| `quarantined / manual_review_required / conflicted_high / failed` → `status=failed`、`quality.status=failed`、`usable=false`，保留值 / 来源 / 拦截原因，`is_fresh` 独立 | **通过** `test_service_blocks_upstream_validation_on_fetch_and_store_replay`（首采 + 库回放） | 不适用（真实采集无被隔离记录；拦截由 `_rescore_record` 注入模拟） |
+| 多记录聚合保留拦截状态 | **通过** `test_service_fx_aggregation_preserves_blocking_status` | 同上 |
+| 被拦截的变化端点 → change null + reason | **通过** `test_service_does_not_compute_change_from_quarantined_reference` | 同上 |
+| Agent 不存为有效快照、不计覆盖 | **通过** `test_agent_upstream_quarantined_value_does_not_count_as_coverage` | 同上 |
+
+### 6.5 Agent 侧映射
+
+| 验收项 | 模拟数据回归（假 CLI） | 真实链路 |
+|---|---|---|
+| `unknown_date` + `SNAPSHOT_DATE_UNCONFIRMED`（可重试）→ ticket `open` 重排队，`market_context_snapshots` 0 行，覆盖 0，P2 `market_context_collect_failed`；适配器 `quality.status=unknown_date`、`is_fresh=None`、`data_date / observed_at / value=None` | **通过** `test_agent_unknown_snapshot_date_is_not_saved_and_is_retried` | 未单独跑 Agent 链路（工具 CLI 真实输出格式即 6.1 所示 `failed / unknown_date`） |
+| `INVALID_REQUEST`（参数不一致）→ ticket `failed`，人工处理，不存快照 | **通过** `test_agent_business_param_mismatch_is_manual_not_retried` | 同上 |
+
+### 6.6 回归与遗留
+
+- 工具 `tests/test_market_context.py` 53 项（原 25 + 新增 28），全套 **179 passed**；Agent `tests/test_v09_market_context.py`
+  17 项，全套 **242 passed**（`/home/yu/.venv/mydev/bin/python -m pytest -q tests`）。
+- 真实库遗留：20:27 旧代码写入的 realtime 行 `rec_eafa5a15…`（`trade_date=2026-10-06`，`date_confidence=NULL`，按新规则属"日期未知"）
+  与 21:01 的 38 根重复日线仍在当前表，未在本轮删除；不影响新请求（不被成功 run 关联、确认步骤已去重）。
+- 未验证：盘中真实快照（休市）、供应商带完整日期的快照、真实迟到结果、85.59→86.59 的真实当日变价。

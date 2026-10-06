@@ -94,7 +94,18 @@ STANDARD_RECORD_METADATA_FIELDS = {
     "raw_row_index",
     "data_quality",
     "quality_flags",
+    # Snapshot date-confirmation audit (CommodityPriceRecord): describes how trade_date /
+    # observed_at were established, not vendor business data.
+    "date_confidence",
+    "date_resolution_details",
 }
+
+# How a realtime commodity snapshot's calendar date was established.
+#   vendor_timestamp        vendor supplied a full date+time
+#   confirmed_last_session  time-of-day only; matched to the previous session's daily bar
+#   unknown                 could not be confirmed (record is not written to standard storage)
+#   None                    legacy record without any confirmation evidence
+SNAPSHOT_DATE_CONFIDENCES = frozenset({"vendor_timestamp", "confirmed_last_session", "unknown"})
 
 
 def required_provenance_fields(record: BaseModel) -> list[str]:
@@ -517,11 +528,18 @@ class CommodityPriceRecord(StandardRecord, CurrencyMixin, TimezoneMixin):
     pre_settle: Optional[float] = None
     volume: Optional[float] = None
     open_interest: Optional[float] = None
+    # Realtime snapshots: how trade_date/observed_at were established (see
+    # SNAPSHOT_DATE_CONFIDENCES). Daily bars carry the vendor date and leave this None.
+    date_confidence: Optional[str] = None
+    # Vendor's original time value, inference flag, confirming daily-bar record ids, reason.
+    date_resolution_details: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_commodity(self) -> "CommodityPriceRecord":
         if self.instrument_type not in {"futures", "spot"}:
             raise ValueError("NORMALIZATION_FAILED: instrument_type must be futures or spot")
+        if self.date_confidence is not None and self.date_confidence not in SNAPSHOT_DATE_CONFIDENCES:
+            raise ValueError(f"NORMALIZATION_FAILED: date_confidence must be one of {sorted(SNAPSHOT_DATE_CONFIDENCES)} or None")
         if self.close is None and self.settle is None and self.latest is None:
             raise ValueError("NORMALIZATION_FAILED: commodity record needs close, settle or latest")
         for name in ("open", "high", "low", "close", "settle", "latest"):

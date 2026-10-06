@@ -45,18 +45,19 @@ providers:
     # ------------------------------------------------------------------------
     # A-share indices reuse request_type=index_data (AKShareAdapter.fetch_index_data,
     # IndexBarRecord). Only the symbol registry lives here; the fetch implementation
-    # is the existing index path.
+    # is the existing index path. market / currency are the business identity the service
+    # reports and checks request parameters against (requests cannot override them).
     # ------------------------------------------------------------------------
     equity_index:
       symbols:
-        "000300": {name: 沪深300, exchange: SSE, provider_symbol: sh000300}
-        "000016": {name: 上证50, exchange: SSE, provider_symbol: sh000016}
-        "000001": {name: 上证指数, exchange: SSE, provider_symbol: sh000001}
-        "000905": {name: 中证500, exchange: SSE, provider_symbol: sh000905}
-        "000852": {name: 中证1000, exchange: SSE, provider_symbol: sh000852}
-        "399001": {name: 深证成指, exchange: SZSE, provider_symbol: sz399001}
-        "399006": {name: 创业板指, exchange: SZSE, provider_symbol: sz399006}
-        "000688": {name: 科创50, exchange: SSE, provider_symbol: sh000688}
+        "000300": {name: 沪深300, exchange: SSE, market: A_share, currency: CNY, provider_symbol: sh000300}
+        "000016": {name: 上证50, exchange: SSE, market: A_share, currency: CNY, provider_symbol: sh000016}
+        "000001": {name: 上证指数, exchange: SSE, market: A_share, currency: CNY, provider_symbol: sh000001}
+        "000905": {name: 中证500, exchange: SSE, market: A_share, currency: CNY, provider_symbol: sh000905}
+        "000852": {name: 中证1000, exchange: SSE, market: A_share, currency: CNY, provider_symbol: sh000852}
+        "399001": {name: 深证成指, exchange: SZSE, market: A_share, currency: CNY, provider_symbol: sz399001}
+        "399006": {name: 创业板指, exchange: SZSE, market: A_share, currency: CNY, provider_symbol: sz399006}
+        "000688": {name: 科创50, exchange: SSE, market: A_share, currency: CNY, provider_symbol: sh000688}
 
     # ------------------------------------------------------------------------
     # Hong Kong indices -> IndexBarRecord with market=HK, currency=HKD.
@@ -76,9 +77,9 @@ providers:
           columns: {open: 开盘, high: 最高, low: 最低, close: 最新}
           source_url: https://quote.eastmoney.com/center/hszs.html
       symbols:
-        HSTECH: {name: 恒生科技指数, exchange: HKEX, currency: HKD, provider_symbol: HSTECH}
-        HSI: {name: 恒生指数, exchange: HKEX, currency: HKD, provider_symbol: HSI}
-        HSCEI: {name: 恒生中国企业指数, exchange: HKEX, currency: HKD, provider_symbol: HSCEI}
+        HSTECH: {name: 恒生科技指数, exchange: HKEX, currency: HKD, market: HK, provider_symbol: HSTECH}
+        HSI: {name: 恒生指数, exchange: HKEX, currency: HKD, market: HK, provider_symbol: HSI}
+        HSCEI: {name: 恒生中国企业指数, exchange: HKEX, currency: HKD, market: HK, provider_symbol: HSCEI}
 
     # ------------------------------------------------------------------------
     # FX -> FxRateRecord. BOC quotes are CNY per 100 units of the foreign currency, so

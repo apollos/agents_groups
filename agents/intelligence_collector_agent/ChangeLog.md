@@ -4,6 +4,37 @@
 
 ---
 
+## V0.11.1 — 2026-10-06：市场背景评审四项修改（快照日期确认 / 业务参数校验 / 同日更新 / 隔离数据）
+
+按评审意见逐项修改，均在工具侧 `stock_data_collector`，Agent 侧只补映射测试与验收记录。
+
+- **商品快照日期在入库前确认一次**：`IngestionRunner._confirm_snapshot_dates()` 在标准化之后、合并 / SQLite /
+  Parquet 之前运行，原 `MarketContextService._resolve_snapshot_date()` 的结果阶段修正删除。规则：供应商完整日期 →
+  `vendor_timestamp`；只有时分秒且与同合约上一交易日日线匹配（`latest==close` 且 `pre_settle==前一根 settle`）→
+  `confirmed_last_session`（入库前修正 `trade_date / observed_at`，raw 不改）；其余 → 日期未知，不写标准记录，
+  `status=failed`、`data_date=null`、`observed_at=null`、`quality.usable=false`、`is_fresh=null`、
+  `quality.status=unknown_date`、错误 `SNAPSHOT_DATE_UNCONFIRMED`（可重试）。删除"pre_settle == 最新日线 settle ⇒ 今天"
+  分支；采集机时间 / 请求日永不作为确认日期。`CommodityPriceRecord / commodity_prices` 新增 `date_confidence`、
+  `date_resolution_details`；旧 SQLite 由 `ensure_columns()` 补列；旧 realtime 记录 NULL 一律按未知处理。
+  首次与库回放都直接使用已确认日期；重复读取不再调用确认、不改库；只有命中已成功 `idempotency_key` 才读库，
+  且回放的是原成功 run 关联的记录（`QueryService.get_market_context_records_for_request`）。
+- **业务参数只校验**：`MarketContextService._validate_business_params()`，`symbol` 决定对象，`market / contract /
+  instrument_type / tenor / rate_type` 不传=配置值、一致=允许、不一致或配置缺失=`INVALID_REQUEST`（不可重试，0 次供应商调用，
+  不写记录；消息列出字段、请求值、配置值）。`_identity()` 与 `AKShareAdapter._market_context_identity()` 不再接受请求覆盖，
+  `market_context_sources.yaml` 的 A 股 / 港股指数条目补 `market / currency`。
+- **同日更新**：新表 `market_context_record_revisions`；`Repository.upsert_market_context_record()` 按各表 UNIQUE 业务键
+  插入 / 整条归档后整条替换 / 旧数据保留现有（`provider_update_time` 都有时比它，否则比 `fetch_time`），归档 + 替换同一事务；
+  runner 响应与 Parquet 使用保留下来的记录（迟到旧结果 → `stale_update_rejected`）；按 record_id 查溯源可回到历史表。
+  旧库同键重复行在下一次更新时全部归档只留一条。
+- **隔离数据**：采纳 PR #1（`91103dc`）：`validation_status ∈ {quarantined, manual_review_required, conflicted_high, failed}`
+  → `status=failed`、`quality.status=failed`、`usable=false`，保留值 / 来源 / 拦截原因，多记录聚合保留拦截，被拦截的
+  变化端点 → change null + reason，新鲜度独立，无新质量分阈值。
+- Agent 侧行为不变（`unknown_date` + 可重试 → ticket 重排队、不存快照、不计覆盖；`INVALID_REQUEST` → 人工处理），
+  新增 `test_agent_unknown_snapshot_date_is_not_saved_and_is_retried`、`test_agent_business_param_mismatch_is_manual_not_retried`。
+- 测试：工具 `tests/test_market_context.py` 53 项（+28，全套 179 passed）；Agent `tests/test_v09_market_context.py`
+  17 项（全套 242 passed）。验收（区分模拟数据回归 / 真实供应商采集）见
+  `docs/acceptance/collector_acceptance_20261006_market_context.md` §6。
+
 ## V0.11.0 — 2026-10-06：市场背景数据采集下沉到 stock_data_collector（架构归位）
 
 与 V0.9.1 港股通下沉同一原则：Agent 不再直接调用 AKShare 拉取指数 / 汇率 / 商品 / 利率。

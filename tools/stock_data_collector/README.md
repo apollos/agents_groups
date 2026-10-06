@@ -677,7 +677,7 @@ python -m stock_data_ingestion.cli --config-dir config fetch market-context \
 | 取值 | `metric / value / unit / values{...}`；单位显式（`index_points`、`CNY per 100 HKD`、`CNY/ton`、`percent`） |
 | 变动 | `changes{1p,5p,20p}`，每项含 `periods / period_unit(trading_day|observation) / kind(percent|percentage_point|basis_points|...) / value / reason`。利率用百分点与 bp，不用百分比；样本不足给 `reason=insufficient_history`、值为 null，不补零；realtime 快照只给 `snapshot_vs_pre_settle|pre_close`，历史变动来自已确认日线，无日线则 `reason=realtime_only_snapshot` |
 | 来源 | `source{provider, source_api(实际命中的接口), source_url, source_site, adapter_version}` |
-| 质量 | `quality{usable, status(fresh|stale|missing|failed), is_fresh, staleness_days, max_staleness_days, data_date_matches_as_of, observations, missing_fields, single_source, cross_validated, conflicts, anomalies, warnings, data_quality_score}` |
+| 质量 | `quality{usable, status(fresh|stale|missing|failed|unknown_date), is_fresh, staleness_days, max_staleness_days, data_date_matches_as_of, observations, missing_fields, single_source, cross_validated, conflicts, anomalies, warnings, data_quality_score}`。`failed`：上游 `validation_status ∈ {quarantined, manual_review_required, conflicted_high, failed}` 时 `usable=false`，值/来源/拦截原因保留供检查，新鲜度独立判断；`unknown_date`：realtime 快照日期无法确认（见下） |
 | 溯源 | `provenance{stock_data_request_id, ingestion_run_ids, record_ids, raw_payload_ids, raw_payload_refs, parquet_refs}` |
 
 语义约束：
@@ -689,8 +689,34 @@ python -m stock_data_ingestion.cli --config-dir config fetch market-context \
 - 商品 `instrument_type`（spot/futures）、`contract`（如 `CU0` 主连）、`market`（SHFE/GFEX/...）、
   `price_unit` 全部进入业务键；日线 `close` 与 `settle` 并存，快照 `latest` 与 `pre_settle/pre_close` 并存，不混用。
 - 利率 `tenor / rate_type / market` 进入业务键，`unit=percent`。
-- 幂等：相同 `(类别, 代码, 市场/合约/期限/口径, 频率, 窗口, provider)` 当天重复请求不重复抓取，直接从库中回放
-  （`warnings` 含 `served_from_store`）；realtime 幂等粒度为分钟。
+- **业务参数只校验、不决定对象**：`symbol` 唯一决定采集对象，身份与供应商参数全部来自
+  `market_context_sources.yaml`。请求里的 `--market / --contract / --instrument-type / --tenor / --rate-type`
+  不传=取配置值；传了且与配置一致=允许；传了但不一致=`INVALID_REQUEST`（不可重试，不调供应商、不写记录），
+  消息列出字段、请求值、配置值，例：`symbol=CU0 的 contract 配置为 CU0，请求 contract=CU2612，与 symbol 绑定不一致。
+  请使用已注册的 CU2612 symbol。`；配置里没有该字段则同样 `INVALID_REQUEST`（提示补配置或去掉参数）。
+- **realtime 商品快照的日期在写标准记录之前确认一次**（`IngestionRunner._confirm_snapshot_dates`），
+  之后的重复读取不再重新推断。规则只有三条：供应商给了完整日期 → 直接用（`date_confidence=vendor_timestamp`）；
+  供应商只给时分秒且快照与同合约上一交易日日线匹配（`latest == 日线 close` 且 `pre_settle == 前一根日线 settle`）
+  → 归属该交易日（`confirmed_last_session`，修正 `trade_date / observed_at` 后入库，raw 不改）；其余 → 日期未知：
+  不写带猜测日期的标准记录（raw 仍保存），`response.status=failed`、`data_date=null`、`observed_at=null`、
+  `quality.usable=false`、`quality.is_fresh=null`、`quality.status=unknown_date`、
+  错误 `SNAPSHOT_DATE_UNCONFIRMED`（可重试）。采集机时间与请求日永远不被当作确认日期。记录列
+  `commodity_prices.date_confidence`（`vendor_timestamp | confirmed_last_session | unknown`，旧记录 NULL 一律按未知处理，
+  不按 `vendor_timestamp`）与 `date_resolution_details`（供应商原始时间、是否由采集时间推断、确认用日线 record_id、原因）。
+  确认所需日线走本工具自己的日线采集链（同一 runner、同一幂等与落库），日线请求本身不进入确认步骤。
+- 幂等：相同 `(类别, 代码, 市场/合约/期限/口径, 频率, 窗口, provider)` 当天重复请求不重复抓取，只有命中已成功的
+  `idempotency_key` 时才从库回放（`warnings` 含 `served_from_store`），回放的是原成功 run 关联的记录；失败的采集不会把
+  旧记录当成功复用。realtime 幂等粒度为分钟，`latest` 模式当日为小时。
+- **同日更新**：`fx_rates / interest_rates / index_bars / commodity_prices` 每个业务键（即各表 UNIQUE 约束）只保留一条
+  **当前记录**；新一轮采集到的值更新时（两边都有 `provider_update_time` 比较它，否则比较 `fetch_time`）把旧记录
+  **整条**归档到 `market_context_record_revisions`（`record_id / record_type / table_name / business_key / record_json /
+  superseded_by_record_id / archived_at`）再整条替换（值、record_id、质量、request_id / ingestion_run_id、raw 引用、
+  `field_provenance`、`fetch_time / provider_update_time` 一起换，不会出现新值配旧溯源）；迟到的旧结果不覆盖
+  （`warnings` 含 `stale_update_rejected`，响应与 Parquet 返回保留下来的记录）。按 record_id 查溯源
+  （`QueryService.get_raw_ref_by_record_id`）可从历史表取回被替换的记录，旧报告引用的 record_id 仍可追溯。
+  旧库里同一业务键的重复行（NULL 列绕过 UNIQUE 造成）在下一次更新时全部归档、只留一条。
+- 旧 SQLite 升级：`Database.init()` 在 `create_all()` 之后执行 `ensure_columns()`，为已存在的表补模型里新增的列
+  （`ALTER TABLE ... ADD COLUMN`）。
 
 数据源与兜底（均在 `config/market_context_sources.yaml` 内声明，可直接改配置换源）：
 
@@ -699,7 +725,7 @@ python -m stock_data_ingestion.cli --config-dir config fetch market-context \
 | `equity_index` | 复用 `index_data`：`stock_zh_index_daily_em`（东财）→ `stock_zh_index_daily`（新浪） | 东财 WAF 拒绝无浏览器特征客户端时自动回退，响应 `warnings` 带 `source_fallback:` |
 | `hk_index` | `stock_hk_index_daily_sina` → `stock_hk_index_daily_em` | HSTECH / HSI / HSCEI |
 | `fx` | `currency_boc_sina`（中行牌价） | 每 100 外币；`currency_names` 决定支持的币种 |
-| `commodity` | 日线 `futures_zh_daily_sina`；realtime `futures_zh_spot` | 快照归属日用同合约日线确认（`snapshot_date_confidence`） |
+| `commodity` | 日线 `futures_zh_daily_sina`；realtime `futures_zh_spot` | 快照归属日在入库前用同合约日线确认（`date_confidence`），确认不了即 `unknown_date` |
 | `interest_rate` | `bond_china_yield`（中债曲线）→ `bond_zh_us_rate`；SHIBOR 用 `rate_interbank` | 期限列映射在 `tenor_columns` / `series_map` |
 
 每个接口调用受 `call_deadline_seconds`（默认 60s）硬超时保护；主机 IPv6 到国内站点黑洞时设置
@@ -714,9 +740,12 @@ python -m stock_data_ingestion.cli --config-dir config query market-context --co
 python -m stock_data_ingestion.cli --config-dir config query market-context --context-type hk_index --index-code HSTECH
 ```
 
-错误码：`INVALID_REQUEST`（未知业务代码/类别，不可重试，提示去配置 `symbols` 注册表）、
-`PROVIDER_TIMEOUT` / `UNKNOWN_ERROR`（所有源都失败，可重试）、`PROVIDER_UNAVAILABLE`（akshare 未安装）。
-本机验收记录见 `agents/intelligence_collector_agent/docs/acceptance/collector_acceptance_20261006_market_context.md`。
+错误码：`INVALID_REQUEST`（未知业务代码/类别，或 `market / contract / instrument_type / tenor / rate_type` 与 symbol
+配置不一致；不可重试，提示去配置 `symbols` 注册表或改请求）、`SNAPSHOT_DATE_UNCONFIRMED`（realtime 快照日期无法确认，
+可重试：等下一根日线发布或改用 `--frequency 1d`）、`PROVIDER_TIMEOUT` / `UNKNOWN_ERROR`（所有源都失败，可重试）、
+`PROVIDER_UNAVAILABLE`（akshare 未安装）。
+本机验收记录见 `agents/intelligence_collector_agent/docs/acceptance/collector_acceptance_20261006_market_context.md`
+（含 2026-10-06 评审四项修改的验收，区分"模拟数据回归通过"与"真实供应商采集通过"）。
 
 ---
 
@@ -1023,9 +1052,14 @@ Agent 用它判断：
 | `market_context` fx | `fx_rates` | `fx_rates` | `fx_rate` | `base_currency + quote_currency + quote_basis + rate_type + market + rate_date + effective_provider` |
 | `market_context` commodity | `commodity_prices` | `commodity_prices` | `commodity_price` | `commodity + instrument_type + contract + market + frequency + trade_date(+observed_at) + effective_provider` |
 | `market_context` interest_rate | `interest_rates` | `interest_rates` | `interest_rate` | `rate_type + market + tenor + rate_date + effective_provider` |
+| `market_context` 被替换记录 | `market_context_record_revisions` | —（仅 SQLite） | — | `record_id`（被替换记录的原 id，唯一）；`business_key / record_json / superseded_by_record_id / archived_at` |
 | `corporate_action` | `corporate_actions` | `corporate_actions` | `corporate_actions` | `normalized_ticker + action_type + announcement_date + ex_date + effective_provider` |
 
 元数据表包括：`source_fetch_logs`、`provider_comparisons`、`data_quality_conflicts`、`raw_payload_index`、`ingestion_requests`、`ingestion_runs`、`ticker_mappings` 等。
+
+四张市场背景表（`fx_rates / interest_rates / index_bars / commodity_prices`）每个业务键只保留一条当前记录，被替换的整条
+记录进入 `market_context_record_revisions`（见 §6.16 "同日更新"）；`commodity_prices` 另有 `date_confidence /
+date_resolution_details` 列记录 realtime 快照日期的确认依据。
 
 ### 11.2 标准记录公共字段
 
