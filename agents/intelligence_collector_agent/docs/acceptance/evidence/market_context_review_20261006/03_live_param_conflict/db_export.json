@@ -1,0 +1,1840 @@
+{
+  "ingestion_requests": [
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "idempotency_key": "market_context:interest_rate:US_CGB_10Y:US:::10Y:government_bond_yield:1d:2026-08-08:2026-10-07:akshare:latest:2026100700",
+      "status": "success",
+      "created_at": "2026-10-07 00:20:12.712141",
+      "updated_at": "2026-10-07 00:20:13.761897"
+    }
+  ],
+  "request_record_links": [
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_004654a5243a4cd5b1e1f457caf8d9a1"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_08010527e52f4b76bbe5950aeae91a6e"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_0d6ca0cee24e4f35a088362ff387f2e7"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_0da5875d1ae44780b1412e01f5dc746c"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_122073015c5d4060a9161e2e1ca67cbf"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_1329cd4fd40c4396985cae66edfaf92e"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_13e8e818edc8482d97de678e33bd5c75"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_1430a7eac5a24a99aae6ea0be4104f73"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_1b1064f74e974d02bd9b278c48879618"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_28c0ebccd26b4c93a75e1240a7abff79"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_2a379ca912294fd1afa1cb38acb8409c"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_3b708aa4f29a44b18212f66caae70de6"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_3d94b88aa6ab4a6ba73c2a4e1347018d"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_40540e7e076647bab071ca0099ce709d"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_4d354db254b24095bd5f58dec5254712"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_53b54f463530494195f6ae965f15ef6e"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_5a96c0fcc3a84b52a1b5ab68aa7afbea"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_5f28c68b1ed04911bb0316b9b799ed11"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_5ff77b07b326415ea9c2dba27fe42d3b"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_68d88da86e88444cbca4d8bb19f03417"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_75b6aa81eb8d4b0e99b88bf2aa0b0efb"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_7800788d442e4097aefaabe56b4db7f9"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_80725c853aa04ea0b88ab001e6d66b18"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_82c858d71f0a4c449fa21a2f7075fa44"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_8488bb21860e47f0ad46088ec638d21b"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_86658a66b3ce4272b202bd59124c2e87"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_982fcf449bd840c39653af8b183156a7"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_987779c043e14e35bc6dc611a425a5ec"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_9b4492381a3f4491b92b458f876b8a2c"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_9c5c450c12af491f9d82cff49fb9f74d"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_aa4c88aa7e4a40da990318b7c9d4bfc5"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_ad7bfbb0b6834bcf89e7ce40d5926ac2"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_cbd5a1dddcc84691af9bf8f01b783e42"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_d2fec8d191b84b2f9d1eaeb72330c6c8"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_daf7c36bec2d4269992c931a67f7f3b8"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_ddbad378238e42e3bad3e9493ed1c3cf"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_de8667f2e5f44c5cb2f5ee4d3880c95b"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_e6e2f6321c4b48ca8be5b55e58f4d996"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_ef982c60a4f842368dda5ae1669e3b5f"
+    },
+    {
+      "request_id": "req_762ae1e5f9f74269",
+      "record_type": "interest_rate",
+      "record_id": "rec_f9fa212727de43609ed20b95611f53c0"
+    }
+  ],
+  "current_records": {
+    "interest_rates": [
+      {
+        "rate_type": "government_bond_yield",
+        "market": "US",
+        "tenor": "10Y",
+        "rate_date": "2026-08-25",
+        "rate_value": 4.64,
+        "unit": "percent",
+        "curve_name": null,
+        "rate_name": "美国10年期国债收益率",
+        "currency": "USD",
+        "source_methodology": "bond_zh_us_rate:美国国债收益率10年",
+        "record_id": "rec_e6e2f6321c4b48ca8be5b55e58f4d996",
+        "provider": "akshare",
+        "effective_provider": "akshare",
+        "source_api": "bond_zh_us_rate",
+        "source_site": "akshare",
+        "adapter_version": "0.5.0",
+        "canonical_provider": "akshare",
+        "source_role": "canonical",
+        "merge_method": "canonical_only",
+        "validation_status": "validated_with_warning",
+        "supplement_flags": "{}",
+        "conflict_ids": "[]",
+        "canonical_value_suspect": 0,
+        "fetch_time": "2026-10-07 00:20:13.481269",
+        "provider_update_time": null,
+        "ingested_at": "2026-10-07 00:20:13.484408",
+        "request_id": "req_762ae1e5f9f74269",
+        "ingestion_run_id": "run_20261007_002012_41f5d7d7",
+        "request_params_hash": "sha256:e61e1c2652ae942d30706ac79c3bbe14b4265dbf06b2640b079f5d3df8f8fcbe",
+        "idempotency_key": "market_context:interest_rate:US_CGB_10Y:US:::10Y:government_bond_yield:1d:2026-08-08:2026-10-07:akshare:latest:2026100700",
+        "raw_payload_id": "raw_akshare_market_context_20261007_req_762ae1e5f9f74269",
+        "raw_hash": "sha256:0c5d37805942838ebdfd93f21e1fe4fa3507c8b229bf9770d6c524aa77b3b14e",
+        "raw_format": "jsonl.gz",
+        "raw_row_index": 11,
+        "data_quality": 0.925,
+        "quality_flags": "[]",
+        "id": 90,
+        "created_at": "2026-10-07 00:20:13.503973",
+        "updated_at": "2026-10-07 00:20:13.503974"
+      },
+      {
+        "rate_type": "government_bond_yield",
+        "market": "US",
+        "tenor": "10Y",
+        "rate_date": "2026-09-04",
+        "rate_value": 4.78,
+        "unit": "percent",
+        "curve_name": null,
+        "rate_name": "美国10年期国债收益率",
+        "currency": "USD",
+        "source_methodology": "bond_zh_us_rate:美国国债收益率10年",
+        "record_id": "rec_ef982c60a4f842368dda5ae1669e3b5f",
+        "provider": "akshare",
+        "effective_provider": "akshare",
+        "source_api": "bond_zh_us_rate",
+        "source_site": "akshare",
+        "adapter_version": "0.5.0",
+        "canonical_provider": "akshare",
+        "source_role": "canonical",
+        "merge_method": "canonical_only",
+        "validation_status": "validated_with_warning",
+        "supplement_flags": "{}",
+        "conflict_ids": "[]",
+        "canonical_value_suspect": 0,
+        "fetch_time": "2026-10-07 00:20:13.481269",
+        "provider_update_time": null,
+        "ingested_at": "2026-10-07 00:20:13.484796",
+        "request_id": "req_762ae1e5f9f74269",
+        "ingestion_run_id": "run_20261007_002012_41f5d7d7",
+        "request_params_hash": "sha256:e61e1c2652ae942d30706ac79c3bbe14b4265dbf06b2640b079f5d3df8f8fcbe",
+        "idempotency_key": "market_context:interest_rate:US_CGB_10Y:US:::10Y:government_bond_yield:1d:2026-08-08:2026-10-07:akshare:latest:2026100700",
+        "raw_payload_id": "raw_akshare_market_context_20261007_req_762ae1e5f9f74269",
+        "raw_hash": "sha256:0c5d37805942838ebdfd93f21e1fe4fa3507c8b229bf9770d6c524aa77b3b14e",
+        "raw_format": "jsonl.gz",
+        "raw_row_index": 19,
+        "data_quality": 0.925,
+        "quality_flags": "[]",
+        "id": 98,
+        "created_at": "2026-10-07 00:20:13.510021",
+        "updated_at": "2026-10-07 00:20:13.510022"
+      },
+      {
+        "rate_type": "government_bond_yield",
+        "market": "US",
+        "tenor": "10Y",
+        "rate_date": "2026-09-09",
+        "rate_value": 4.83,
+        "unit": "percent",
+        "curve_name": null,
+        "rate_name": "美国10年期国债收益率",
+        "currency": "USD",
+        "source_methodology": "bond_zh_us_rate:美国国债收益率10年",
+        "record_id": "rec_f9fa212727de43609ed20b95611f53c0",
+        "provider": "akshare",
+        "effective_provider": "akshare",
+        "source_api": "bond_zh_us_rate",
+        "source_site": "akshare",
+        "adapter_version": "0.5.0",
+        "canonical_provider": "akshare",
+        "source_role": "canonical",
+        "merge_method": "canonical_only",
+        "validation_status": "validated_with_warning",
+        "supplement_flags": "{}",
+        "conflict_ids": "[]",
+        "canonical_value_suspect": 0,
+        "fetch_time": "2026-10-07 00:20:13.481269",
+        "provider_update_time": null,
+        "ingested_at": "2026-10-07 00:20:13.484894",
+        "request_id": "req_762ae1e5f9f74269",
+        "ingestion_run_id": "run_20261007_002012_41f5d7d7",
+        "request_params_hash": "sha256:e61e1c2652ae942d30706ac79c3bbe14b4265dbf06b2640b079f5d3df8f8fcbe",
+        "idempotency_key": "market_context:interest_rate:US_CGB_10Y:US:::10Y:government_bond_yield:1d:2026-08-08:2026-10-07:akshare:latest:2026100700",
+        "raw_payload_id": "raw_akshare_market_context_20261007_req_762ae1e5f9f74269",
+        "raw_hash": "sha256:0c5d37805942838ebdfd93f21e1fe4fa3507c8b229bf9770d6c524aa77b3b14e",
+        "raw_format": "jsonl.gz",
+        "raw_row_index": 21,
+        "data_quality": 0.925,
+        "quality_flags": "[]",
+        "id": 100,
+        "created_at": "2026-10-07 00:20:13.511552",
+        "updated_at": "2026-10-07 00:20:13.511554"
+      }
+    ],
+    "interest_rates_count_in_provenance": 40,
+    "commodity_prices": [
+      {
+        "commodity": "copper",
+        "commodity_name": "沪铜连续合约",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-08-24",
+        "observed_at": null,
+        "price_unit": "CNY/ton",
+        "currency": "CNY",
+        "timezone": "Asia/Shanghai",
+        "open": 108010.0,
+        "high": 108050.0,
+        "low": 107390.0,
+        "close": 107910.0,
+        "settle": 107750.0,
+        "latest": null,
+        "pre_close": null,
+        "pre_settle": null,
+        "volume": 77057.0,
+        "open_interest": 191791.0,
+        "record_id": "rec_da03cda9c84e4ba9aa40d5b63ab1a0d7",
+        "provider": "akshare",
+        "effective_provider": "akshare",
+        "source_api": "futures_zh_daily_sina",
+        "source_site": "akshare",
+        "adapter_version": "0.5.0",
+        "canonical_provider": "akshare",
+        "source_role": "canonical",
+        "merge_method": "canonical_only",
+        "validation_status": "validated_with_warning",
+        "supplement_flags": "{}",
+        "conflict_ids": "[]",
+        "canonical_value_suspect": 0,
+        "fetch_time": "2026-10-07 00:20:02.519307",
+        "provider_update_time": null,
+        "ingested_at": "2026-10-07 00:20:02.522645",
+        "request_id": "req_5f58ebbdde174d73",
+        "ingestion_run_id": "run_20261007_002000_43c1c08a",
+        "request_params_hash": "sha256:2f790a215fdb1d1b706c4441e45118bb246f99e7770804ce24d5988c5843624f",
+        "idempotency_key": "market_context:commodity:CU0:SHFE:CU0:futures:::1d:2026-08-08:2026-10-07:akshare:latest:2026100700",
+        "raw_payload_id": "raw_akshare_market_context_20261007_req_5f58ebbdde174d73",
+        "raw_hash": "sha256:98d9494fbf4648ea615ae7d5683eae860679aaf223dd826931365a8fc392cc61",
+        "raw_format": "jsonl.gz",
+        "raw_row_index": 10,
+        "data_quality": 0.925,
+        "quality_flags": "[]",
+        "id": 12,
+        "created_at": "2026-10-06 20:27:49.356086",
+        "updated_at": "2026-10-07 00:20:02.565880",
+        "date_confidence": null,
+        "date_resolution_details": {}
+      },
+      {
+        "commodity": "copper",
+        "commodity_name": "沪铜连续合约",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-22",
+        "observed_at": null,
+        "price_unit": "CNY/ton",
+        "currency": "CNY",
+        "timezone": "Asia/Shanghai",
+        "open": 111380.0,
+        "high": 111770.0,
+        "low": 110510.0,
+        "close": 111320.0,
+        "settle": 111220.0,
+        "latest": null,
+        "pre_close": null,
+        "pre_settle": null,
+        "volume": 91942.0,
+        "open_interest": 146794.0,
+        "record_id": "rec_eaffa182793f45028ce46d78fef79a6c",
+        "provider": "akshare",
+        "effective_provider": "akshare",
+        "source_api": "futures_zh_daily_sina",
+        "source_site": "akshare",
+        "adapter_version": "0.5.0",
+        "canonical_provider": "akshare",
+        "source_role": "canonical",
+        "merge_method": "canonical_only",
+        "validation_status": "validated_with_warning",
+        "supplement_flags": "{}",
+        "conflict_ids": "[]",
+        "canonical_value_suspect": 0,
+        "fetch_time": "2026-10-07 00:20:02.519307",
+        "provider_update_time": null,
+        "ingested_at": "2026-10-07 00:20:02.523872",
+        "request_id": "req_5f58ebbdde174d73",
+        "ingestion_run_id": "run_20261007_002000_43c1c08a",
+        "request_params_hash": "sha256:2f790a215fdb1d1b706c4441e45118bb246f99e7770804ce24d5988c5843624f",
+        "idempotency_key": "market_context:commodity:CU0:SHFE:CU0:futures:::1d:2026-08-08:2026-10-07:akshare:latest:2026100700",
+        "raw_payload_id": "raw_akshare_market_context_20261007_req_5f58ebbdde174d73",
+        "raw_hash": "sha256:98d9494fbf4648ea615ae7d5683eae860679aaf223dd826931365a8fc392cc61",
+        "raw_format": "jsonl.gz",
+        "raw_row_index": 31,
+        "data_quality": 0.925,
+        "quality_flags": "[]",
+        "id": 33,
+        "created_at": "2026-10-06 20:27:49.364677",
+        "updated_at": "2026-10-07 00:20:02.611880",
+        "date_confidence": null,
+        "date_resolution_details": {}
+      },
+      {
+        "commodity": "copper",
+        "commodity_name": "沪铜连续合约",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-08",
+        "observed_at": null,
+        "price_unit": "CNY/ton",
+        "currency": "CNY",
+        "timezone": "Asia/Shanghai",
+        "open": 109540.0,
+        "high": 110890.0,
+        "low": 109320.0,
+        "close": 110620.0,
+        "settle": 110260.0,
+        "latest": null,
+        "pre_close": null,
+        "pre_settle": null,
+        "volume": 111169.0,
+        "open_interest": 229857.0,
+        "record_id": "rec_ed78e6e34f264501b673844e86408a87",
+        "provider": "akshare",
+        "effective_provider": "akshare",
+        "source_api": "futures_zh_daily_sina",
+        "source_site": "akshare",
+        "adapter_version": "0.5.0",
+        "canonical_provider": "akshare",
+        "source_role": "canonical",
+        "merge_method": "canonical_only",
+        "validation_status": "validated_with_warning",
+        "supplement_flags": "{}",
+        "conflict_ids": "[]",
+        "canonical_value_suspect": 0,
+        "fetch_time": "2026-10-07 00:20:02.519307",
+        "provider_update_time": null,
+        "ingested_at": "2026-10-07 00:20:02.523275",
+        "request_id": "req_5f58ebbdde174d73",
+        "ingestion_run_id": "run_20261007_002000_43c1c08a",
+        "request_params_hash": "sha256:2f790a215fdb1d1b706c4441e45118bb246f99e7770804ce24d5988c5843624f",
+        "idempotency_key": "market_context:commodity:CU0:SHFE:CU0:futures:::1d:2026-08-08:2026-10-07:akshare:latest:2026100700",
+        "raw_payload_id": "raw_akshare_market_context_20261007_req_5f58ebbdde174d73",
+        "raw_hash": "sha256:98d9494fbf4648ea615ae7d5683eae860679aaf223dd826931365a8fc392cc61",
+        "raw_format": "jsonl.gz",
+        "raw_row_index": 21,
+        "data_quality": 0.925,
+        "quality_flags": "[]",
+        "id": 23,
+        "created_at": "2026-10-06 20:27:49.360629",
+        "updated_at": "2026-10-07 00:20:02.589779",
+        "date_confidence": null,
+        "date_resolution_details": {}
+      }
+    ],
+    "commodity_prices_count_in_provenance": 37
+  },
+  "archived_records_touching_these_ids": [
+    {
+      "record_id": "rec_580a061765384c67895ae04805822999",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-02",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_0b7d124778f449c39fbd09fd487e9b78",
+      "archived_at": "2026-10-07 00:20:02.581093",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_5128715ebbc84b13bc4bb7448723383e",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-02",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_0b7d124778f449c39fbd09fd487e9b78",
+      "archived_at": "2026-10-07 00:20:02.581093",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_ad9537812afc43dd99deae7ba0e0e26d",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-08-31",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_29e04c76b19b4be4b8d12c740569f201",
+      "archived_at": "2026-10-07 00:20:02.576781",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_52d322a82238478d9d6a03042f2f518e",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-08-31",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_29e04c76b19b4be4b8d12c740569f201",
+      "archived_at": "2026-10-07 00:20:02.576781",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_49478e83126049348635ee3af9249a39",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-21",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_2be6df240cb345b184752c6d184fa975",
+      "archived_at": "2026-10-07 00:20:02.609703",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_d8ec8d05ce884d49b8ddd421e8045605",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-21",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_2be6df240cb345b184752c6d184fa975",
+      "archived_at": "2026-10-07 00:20:02.609703",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_28acbbc0a3e841a9ba68a1e72a96585c",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-08-12",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_2e436ba193ba4e09a8d51810e0d22615",
+      "archived_at": "2026-10-07 00:20:02.548468",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_2a2826d22b034cb39f80f29a7235a219",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-08-12",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_2e436ba193ba4e09a8d51810e0d22615",
+      "archived_at": "2026-10-07 00:20:02.548468",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_2181dbd8b8b14b66baf1b6cdf18d7c41",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-29",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_3598cf0777b045c1a2bcdcb4f3ae4695",
+      "archived_at": "2026-10-07 00:20:02.620544",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_443fb2cca5784e44861660061630c4b9",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-29",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_3598cf0777b045c1a2bcdcb4f3ae4695",
+      "archived_at": "2026-10-07 00:20:02.620544",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_8de4ab7db09a4094839bcad79a350b24",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-08-27",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_3b3183bf694548c495522da0096ef0f7",
+      "archived_at": "2026-10-07 00:20:02.572433",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_d372dd5df10449f5a0934f30851bdca2",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-08-27",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_3b3183bf694548c495522da0096ef0f7",
+      "archived_at": "2026-10-07 00:20:02.572433",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_fb2a920a399043e28786aef8cb566aa9",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-11",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_3f59835c636143eb91c5f350259b96d7",
+      "archived_at": "2026-10-07 00:20:02.596304",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_64dec1fa75e945e8a1a4b33cb2fd0a32",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-11",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_3f59835c636143eb91c5f350259b96d7",
+      "archived_at": "2026-10-07 00:20:02.596304",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_d8523768cf3644ab93b64c2c8d6e4e01",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-08-13",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_41459f63625d4778a7d66c84b47d4ccf",
+      "archived_at": "2026-10-07 00:20:02.550637",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_6a0b5f837cc040daaecb7c3afe9891d2",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-08-13",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_41459f63625d4778a7d66c84b47d4ccf",
+      "archived_at": "2026-10-07 00:20:02.550637",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_82a6567a03ff4d7c81b3fc1596297b50",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-08-25",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_480174319f1a4a3a8551b627083e3ab7",
+      "archived_at": "2026-10-07 00:20:02.568053",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_2d3027442dad4898994a64707abcfa2b",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-08-25",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_480174319f1a4a3a8551b627083e3ab7",
+      "archived_at": "2026-10-07 00:20:02.568053",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_3403be652a9642c78ac066804e065613",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-09",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_48a2de3b6a7747be9f72300792283066",
+      "archived_at": "2026-10-07 00:20:02.591973",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_b69fc6201eb34a39b80098957bae0a8a",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-09",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_48a2de3b6a7747be9f72300792283066",
+      "archived_at": "2026-10-07 00:20:02.591973",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_b2ae300573cf4c449afcba217ca6c9bf",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-04",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_497ee0c7d4cc4496a5646de3608a0c90",
+      "archived_at": "2026-10-07 00:20:02.585464",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_8c42f3b1e79b445eb6a1fa3e7cdc24ac",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-04",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_497ee0c7d4cc4496a5646de3608a0c90",
+      "archived_at": "2026-10-07 00:20:02.585464",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_95dd149df3f741819b31ccc08817dd8f",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-23",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_4d7bbbd3491c4e98b5d10bb1d947d795",
+      "archived_at": "2026-10-07 00:20:02.614041",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_579e848a69674436ac11fa2af221b56a",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-23",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_4d7bbbd3491c4e98b5d10bb1d947d795",
+      "archived_at": "2026-10-07 00:20:02.614041",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_48f8f92c21a743a69a068877ad90fa9e",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-08-28",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_59d8b28b8e8a40eda968e54b9b08f297",
+      "archived_at": "2026-10-07 00:20:02.574602",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_716444ada03945d78ca8136db1b3a707",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-08-28",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_59d8b28b8e8a40eda968e54b9b08f297",
+      "archived_at": "2026-10-07 00:20:02.574602",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_ca77e95a98ae4f5f894c43cd85385046",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-15",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_5be01cb73ea74f70a1ac8cb1e9a5e0bd",
+      "archived_at": "2026-10-07 00:20:02.600910",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_b39e8989519d46c9a340b46f2682d41d",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-15",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_5be01cb73ea74f70a1ac8cb1e9a5e0bd",
+      "archived_at": "2026-10-07 00:20:02.600910",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_5fffce55286d42e39278d15ba967f90e",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-24",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_62a6ea2ae4d5459bb0fb66c61a4fb9c2",
+      "archived_at": "2026-10-07 00:20:02.616217",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_91cecce3578141df90177666e686bc1c",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-24",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_62a6ea2ae4d5459bb0fb66c61a4fb9c2",
+      "archived_at": "2026-10-07 00:20:02.616217",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_e4a01d73d90a4dcb98d2a4fa53d6fac9",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-08-10",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_643d2fac48be4e849d075af6fd31b603",
+      "archived_at": "2026-10-07 00:20:02.533583",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_73cd122ac85b457682d219c73e608ab8",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-08-10",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_643d2fac48be4e849d075af6fd31b603",
+      "archived_at": "2026-10-07 00:20:02.533583",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_ac0774b2bfe34f088344f35de10da7fa",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-08-19",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_685255b67b5e49e78d435ae4f3e1c21c",
+      "archived_at": "2026-10-07 00:20:02.559363",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_1492bca72f89485eb89e06ed611abbd7",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-08-19",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_685255b67b5e49e78d435ae4f3e1c21c",
+      "archived_at": "2026-10-07 00:20:02.559363",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_ab09ca1801d14d418bfa1d1dcdafa3b9",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-08-26",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_68eca8cc8f32421b9382a77c51433b9b",
+      "archived_at": "2026-10-07 00:20:02.570260",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_92d2f7051b6b48a39ad3ca93f3aff94c",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-08-26",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_68eca8cc8f32421b9382a77c51433b9b",
+      "archived_at": "2026-10-07 00:20:02.570260",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_ad8b81aee4e24262ab48a4340c4a6242",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-08-20",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_6a3ef9a80b8e4afbb332438ef39c45c7",
+      "archived_at": "2026-10-07 00:20:02.561556",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_7c2dcbd81c484650bca2b542956d2b1f",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-08-20",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_6a3ef9a80b8e4afbb332438ef39c45c7",
+      "archived_at": "2026-10-07 00:20:02.561556",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_1b1dda0b2c014334b1f5e730d7e92d33",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-08-17",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_78557bc2d50446cb8db0248e651cb263",
+      "archived_at": "2026-10-07 00:20:02.555000",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_aa6113122de049e0af37eaf4a6d95b8f",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-08-17",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_78557bc2d50446cb8db0248e651cb263",
+      "archived_at": "2026-10-07 00:20:02.555000",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_47ee918bf729447284a6d1eec36d2f8f",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-08-21",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_78c05591151d4d429fb7372466eacef5",
+      "archived_at": "2026-10-07 00:20:02.563730",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_de0fc800b7c84815b3bb2428e68a505f",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-08-21",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_78c05591151d4d429fb7372466eacef5",
+      "archived_at": "2026-10-07 00:20:02.563730",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_02371e636f5a4349ab59e608ca753bb2",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-08-18",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_7b3d98fa8b5b4ff49febc1895b06b031",
+      "archived_at": "2026-10-07 00:20:02.557171",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_8bad978bb15046bd8325ec76f97e4756",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-08-18",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_7b3d98fa8b5b4ff49febc1895b06b031",
+      "archived_at": "2026-10-07 00:20:02.557171",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_773c1300efeb4d549416f6d0930ef8f8",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-16",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_7fa90346d3424ce680b96303cf6179ab",
+      "archived_at": "2026-10-07 00:20:02.603123",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_bea2516f3b2b40bb9a59197792a99405",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-16",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_7fa90346d3424ce680b96303cf6179ab",
+      "archived_at": "2026-10-07 00:20:02.603123",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_657a555625c34731a89e931ec36cb2fe",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-07",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_86ec3990fdfc4bfc94aac16e2e1cc66a",
+      "archived_at": "2026-10-07 00:20:02.587619",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_450bee49337b40dea25eaa1f26bae70d",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-07",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_86ec3990fdfc4bfc94aac16e2e1cc66a",
+      "archived_at": "2026-10-07 00:20:02.587619",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_ac39503ac0784c65b63d5c2489b888f4",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-30",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_8b799004443b4680bda20b894efd1e11",
+      "archived_at": "2026-10-07 00:20:02.622697",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_4e3cae58bedf435dad2577286da3db9a",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-30",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_8b799004443b4680bda20b894efd1e11",
+      "archived_at": "2026-10-07 00:20:02.622697",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_b57cee9212fa496c99d8a790bc252459",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-01",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_9f221a32f60b41b7bc71b6643d08f0a7",
+      "archived_at": "2026-10-07 00:20:02.578940",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_7d463139adc6410f90105a762fdf4c24",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-01",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_9f221a32f60b41b7bc71b6643d08f0a7",
+      "archived_at": "2026-10-07 00:20:02.578940",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_7b84b92eb98742b8a36dc4134b5e2c51",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-28",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_9ff6fcd8c92c49308d873756e173bff4",
+      "archived_at": "2026-10-07 00:20:02.618388",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_cf81aa7fcafb47fab5df6ac4f87ca97c",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-28",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_9ff6fcd8c92c49308d873756e173bff4",
+      "archived_at": "2026-10-07 00:20:02.618388",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_17de849cf36142379f272898c9298add",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-10",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_a8f36e7260974c40a11b41a4cb600e01",
+      "archived_at": "2026-10-07 00:20:02.594113",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_98e22c30d04a4baa8cd777228a0aba58",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-10",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_a8f36e7260974c40a11b41a4cb600e01",
+      "archived_at": "2026-10-07 00:20:02.594113",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_96a91cfedddc45d9b3f46dff096c9718",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-17",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_b572da76e1754d44868473ab56a27746",
+      "archived_at": "2026-10-07 00:20:02.605313",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_16ae34d596e747788c8692a07de896ec",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-17",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_b572da76e1754d44868473ab56a27746",
+      "archived_at": "2026-10-07 00:20:02.605313",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_bccab735bf784ee1aaabd9b473df81a9",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-18",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_bdebedd7cfa14ec3ab9be43ae4ffa7c9",
+      "archived_at": "2026-10-07 00:20:02.607531",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_1683a80c08f444a8a806e6ec767fb0db",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-18",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_bdebedd7cfa14ec3ab9be43ae4ffa7c9",
+      "archived_at": "2026-10-07 00:20:02.607531",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_b9e6bde396d34640a03afab7da46a27b",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-08-11",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_c352cbabc5f64f1e96bb9a044d132a01",
+      "archived_at": "2026-10-07 00:20:02.546026",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_093a6c847cf145ef8595bf1bf0caa91c",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-08-11",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_c352cbabc5f64f1e96bb9a044d132a01",
+      "archived_at": "2026-10-07 00:20:02.546026",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_da3057e5d80b41a4926e616f2dac6f84",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-14",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_d2849cc4a4314eb6b4abd4fbb257d68f",
+      "archived_at": "2026-10-07 00:20:02.598567",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_261a1c5494404a3598b3cc0e6581daf0",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-14",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_d2849cc4a4314eb6b4abd4fbb257d68f",
+      "archived_at": "2026-10-07 00:20:02.598567",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_8ba1d66536f445fbb29e0835cd18ab9d",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-03",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_d2a2c5e8b7894ff79b5fb2c5ffd426fc",
+      "archived_at": "2026-10-07 00:20:02.583314",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_4949433c6709417097509082b308cda2",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-03",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_d2a2c5e8b7894ff79b5fb2c5ffd426fc",
+      "archived_at": "2026-10-07 00:20:02.583314",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_149fa1f122174c99a21ac53d12aaba8f",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-08-14",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_d71a16f169da4432a0d2503912760f80",
+      "archived_at": "2026-10-07 00:20:02.552812",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_5218b48f00764e519a4edc5814f96d0f",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-08-14",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_d71a16f169da4432a0d2503912760f80",
+      "archived_at": "2026-10-07 00:20:02.552812",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_7531d0dc46584a02a54f90ee6146e7eb",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-08-24",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_da03cda9c84e4ba9aa40d5b63ab1a0d7",
+      "archived_at": "2026-10-07 00:20:02.565880",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_f4056fe13bb94d52b1936be62a61bc0f",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-08-24",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_da03cda9c84e4ba9aa40d5b63ab1a0d7",
+      "archived_at": "2026-10-07 00:20:02.565880",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_3641ae9501dc4137b481e7cabedf668e",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-22",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_eaffa182793f45028ce46d78fef79a6c",
+      "archived_at": "2026-10-07 00:20:02.611880",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_454bfc5cf3f042b2810aebf54335127c",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-22",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_eaffa182793f45028ce46d78fef79a6c",
+      "archived_at": "2026-10-07 00:20:02.611880",
+      "request_id": "req_05c1e299da084dfd"
+    },
+    {
+      "record_id": "rec_eca7af45efd7440bbf92f61b56701bbe",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-08",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_ed78e6e34f264501b673844e86408a87",
+      "archived_at": "2026-10-07 00:20:02.589779",
+      "request_id": "req_9461ec63b10f4f54"
+    },
+    {
+      "record_id": "rec_94dd9ab547ee47f8a5e7e2d451f45d89",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "1d",
+        "trade_date": "2026-09-08",
+        "observed_at": null,
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_ed78e6e34f264501b673844e86408a87",
+      "archived_at": "2026-10-07 00:20:02.589779",
+      "request_id": "req_05c1e299da084dfd"
+    }
+  ]
+}

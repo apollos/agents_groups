@@ -1,0 +1,238 @@
+{
+  "schema_version": "market_context_response.v0.1",
+  "request_id": "mctx_db397c2a99704763",
+  "status": "partial_success",
+  "created_at": "2026-10-07T00:22:02.912409+08:00",
+  "completed_at": "2026-10-07T00:22:02.953839+08:00",
+  "timezone": "Asia/Shanghai",
+  "request": {
+    "request_id": "mctx_db397c2a99704763",
+    "schema_version": "market_context_request.v0.1",
+    "context_id": "commodity_cu0",
+    "context_type": "commodity",
+    "symbol": "CU0",
+    "as_of": null,
+    "start_date": null,
+    "end_date": null,
+    "frequency": "realtime",
+    "metrics": [],
+    "market": null,
+    "contract": null,
+    "instrument_type": null,
+    "tenor": null,
+    "rate_type": null,
+    "max_staleness_days": null,
+    "providers": null,
+    "canonical_provider": null,
+    "cross_validate": false,
+    "save_raw": true,
+    "save_cleaned": true,
+    "export_parquet": true,
+    "requested_by": "review_verification_20261006",
+    "trace_id": "live-02_live_realtime_reread-3",
+    "created_at": "2026-10-07T00:22:02.912393+08:00"
+  },
+  "result": {
+    "context_id": "commodity_cu0",
+    "context_type": "commodity",
+    "symbol": "CU0",
+    "name": "沪铜连续合约",
+    "identity": {
+      "commodity": "copper",
+      "instrument_type": "futures",
+      "market": "SHFE",
+      "contract": "CU0",
+      "price_unit": "CNY/ton",
+      "currency": "CNY",
+      "frequency": "realtime"
+    },
+    "request_window": {
+      "mode": "latest",
+      "as_of": "2026-10-07",
+      "start_date": null,
+      "end_date": null,
+      "frequency": "realtime",
+      "lookback_days": null
+    },
+    "data_date": "2026-09-30",
+    "observed_at": "2026-09-30T15:00:00+08:00",
+    "collected_at": "2026-10-07T00:22:02.947860+08:00",
+    "metric": "latest",
+    "value": 109680.0,
+    "unit": "CNY/ton",
+    "values": {
+      "open": 109280.0,
+      "high": 109790.0,
+      "low": 109270.0,
+      "close": null,
+      "settle": null,
+      "latest": 109680.0,
+      "pre_close": 109680.0,
+      "pre_settle": 109300.0,
+      "volume": 69830.0,
+      "open_interest": 185404.0
+    },
+    "changes": {
+      "snapshot_vs_pre_settle": {
+        "periods": 1,
+        "period_unit": "snapshot_vs_pre_settle",
+        "kind": "percent",
+        "value": 0.34766697163768345,
+        "basis_points": null,
+        "from_date": null,
+        "to_date": "2026-09-30",
+        "from_value": 109300.0,
+        "to_value": 109680.0,
+        "reason": null
+      },
+      "1p": {
+        "periods": 1,
+        "period_unit": "trading_day",
+        "kind": "percent",
+        "value": 0.10039244318700291,
+        "basis_points": null,
+        "from_date": "2026-09-29",
+        "to_date": "2026-09-30",
+        "from_value": 109570.0,
+        "to_value": 109680.0,
+        "reason": null
+      },
+      "5p": {
+        "periods": 5,
+        "period_unit": "trading_day",
+        "kind": "percent",
+        "value": -1.4732303269852642,
+        "basis_points": null,
+        "from_date": "2026-09-22",
+        "to_date": "2026-09-30",
+        "from_value": 111320.0,
+        "to_value": 109680.0,
+        "reason": null
+      },
+      "20p": {
+        "periods": 20,
+        "period_unit": "trading_day",
+        "kind": "percent",
+        "value": 0.42116828419702657,
+        "basis_points": null,
+        "from_date": "2026-09-01",
+        "to_date": "2026-09-30",
+        "from_value": 109220.0,
+        "to_value": 109680.0,
+        "reason": null
+      }
+    },
+    "series": [
+      {
+        "data_date": "2026-09-30",
+        "observed_at": "2026-09-30T15:00:00+08:00",
+        "values": {
+          "open": 109280.0,
+          "high": 109790.0,
+          "low": 109270.0,
+          "close": null,
+          "settle": null,
+          "latest": 109680.0,
+          "pre_close": 109680.0,
+          "pre_settle": 109300.0,
+          "volume": 69830.0,
+          "open_interest": 185404.0
+        },
+        "record_id": "rec_924985f4fefc4f96887020e239dd2cc6",
+        "provider": "akshare",
+        "source_api": "futures_zh_spot",
+        "raw_payload_id": "raw_akshare_market_context_20261007_req_97a4a2e048a14a3b",
+        "raw_payload_ref": "raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_97a4a2e048a14a3b.jsonl.gz",
+        "raw_row_index": 0,
+        "data_quality": 0.925,
+        "validation_status": "validated_with_warning"
+      }
+    ],
+    "source": {
+      "provider": "akshare",
+      "source_api": "futures_zh_spot",
+      "source_site": "akshare",
+      "source_url": "https://finance.sina.com.cn/futuremarket/",
+      "adapter_version": "0.5.0",
+      "providers_attempted": []
+    },
+    "quality": {
+      "usable": true,
+      "status": "stale",
+      "is_fresh": false,
+      "staleness_days": 7,
+      "max_staleness_days": 0,
+      "data_date_matches_as_of": false,
+      "observations": 1,
+      "missing_fields": [],
+      "single_source": true,
+      "cross_validated": false,
+      "conflicts": [],
+      "anomalies": [],
+      "warnings": [
+        "snapshot_date_confidence=confirmed_last_session",
+        "stale: latest data_date 2026-09-30 is 7d before as_of 2026-10-07 (tolerance 0d)",
+        "single_source: value not cross-checked against a second provider"
+      ],
+      "data_quality_score": 0.925
+    },
+    "provenance": {
+      "stock_data_request_id": "req_b9ce53d4b4204725",
+      "ingestion_run_ids": [
+        "run_20261007_002201_e6456d2d"
+      ],
+      "idempotency_key": "market_context:commodity:CU0:SHFE:CU0:futures:::realtime:::akshare:latest:202610070022",
+      "record_ids": [
+        "rec_924985f4fefc4f96887020e239dd2cc6"
+      ],
+      "raw_payload_ids": [
+        "raw_akshare_market_context_20261007_req_97a4a2e048a14a3b"
+      ],
+      "raw_payload_refs": [
+        "raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_97a4a2e048a14a3b.jsonl.gz"
+      ],
+      "tables_written": [],
+      "parquet_refs": []
+    }
+  },
+  "errors": [],
+  "warnings": [
+    "idempotency_key already succeeded; skipped duplicate write",
+    "served_from_store: identical request already collected; records read back from SQLite"
+  ],
+  "stock_data_response": {
+    "schema_version": "stock_data_response.v0.1",
+    "request_id": "req_b9ce53d4b4204725",
+    "status": "success",
+    "created_at": "2026-10-07T00:22:02.912675+08:00",
+    "completed_at": "2026-10-07T00:22:02.947860+08:00",
+    "timezone": "Asia/Shanghai",
+    "canonical_provider": "akshare",
+    "provider_results": [],
+    "provider_comparisons": [],
+    "quality_report": {
+      "completeness_score": 0.0,
+      "consistency_score": 0.0,
+      "timeliness_score": 0.0,
+      "provider_reliability_score": 0.0,
+      "anomaly_score": 0.0,
+      "provenance_score": 0.0,
+      "data_quality_score": 0.0,
+      "cross_provider_checks": [],
+      "conflicts": [],
+      "missing_fields": [],
+      "warnings": [
+        "idempotency_key already succeeded; skipped duplicate write"
+      ]
+    },
+    "persistence": {
+      "saved": false,
+      "tables_written": [],
+      "parquet_refs": [],
+      "raw_payload_refs": [],
+      "raw_payload_ids": []
+    },
+    "errors": [],
+    "records_returned": {}
+  }
+}

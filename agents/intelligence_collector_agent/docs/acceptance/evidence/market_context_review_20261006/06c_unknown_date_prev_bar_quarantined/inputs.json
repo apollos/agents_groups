@@ -1,0 +1,67 @@
+{
+  "scenario": "06c_unknown_date_prev_bar_quarantined",
+  "description": "日期无法确认：参考日线中前一条日线（2026-09-29）被隔离（validation_status=quarantined）。确认立即失败，不跳过被隔离日线找更早日期。",
+  "data_mode": "simulated",
+  "code_commit": "4d1066553cf67f886577c857ff2d8ec8c9be5f4a",
+  "driver": "sim_driver.py (copied alongside)",
+  "fixtures": "tests/test_market_context.py: FakeAK (vendor stub), clock pinned via market_context_requests.now_asia_shanghai, temp SQLite",
+  "temp_sqlite": "/tmp/mctx_verify/work/06c_unknown_date_prev_bar_quarantined/db.sqlite",
+  "calls": [
+    {
+      "n": 1,
+      "label": "CU0 realtime; daily bar 2026-09-29 quarantined",
+      "note": "IngestionRunner._rescore_record patched: 1d bar 2026-09-29 -> validation_status=quarantined",
+      "request": {
+        "request_id": "mctx_fb82989ed5b84b33",
+        "schema_version": "market_context_request.v0.1",
+        "context_id": "ctx",
+        "context_type": "commodity",
+        "symbol": "CU0",
+        "as_of": "2026-10-06",
+        "frequency": "realtime",
+        "metrics": [],
+        "cross_validate": false,
+        "save_raw": true,
+        "save_cleaned": true,
+        "export_parquet": true,
+        "requested_by": "manual",
+        "trace_id": "sim-06c_unknown_date_prev_bar_quarantined-call1",
+        "created_at": "2026-10-07T00:15:38.254936+08:00"
+      },
+      "clock_now": "2026-10-06T09:00:00+08:00",
+      "fake_ak": {
+        "fx_shift": 0.0,
+        "spot_mode": "holiday",
+        "fail": [],
+        "quarantined_daily_bar": "2026-09-29"
+      },
+      "vendor_calls_so_far": 2,
+      "response_file": "response_1.json",
+      "status": "failed",
+      "value": null,
+      "data_date": null,
+      "quality_status": "unknown_date",
+      "stock_data_request_id": "req_e344966949024924",
+      "idempotency_key": "market_context:commodity:CU0:SHFE:CU0:futures:::realtime:::akshare:latest:202610060900",
+      "record_ids": [],
+      "warnings": [
+        "no records normalized"
+      ],
+      "error_codes": [
+        "SNAPSHOT_DATE_UNCONFIRMED"
+      ]
+    }
+  ],
+  "checks": {
+    "status_failed": true,
+    "error_SNAPSHOT_DATE_UNCONFIRMED": true,
+    "data_date_null_observed_at_null_value_null": true,
+    "quality_unknown_date_unusable_is_fresh_null": true,
+    "no_realtime_standard_record": true,
+    "raw_snapshot_kept": true,
+    "error_message_mentions_evidence": true,
+    "blocked_bar_persisted_as_quarantined": true,
+    "all_30_daily_bars_kept": true
+  },
+  "code_commit_note": "code state the scenario ran against: 5eb4c3d (main change set) + this follow-up commit (single-WARNING for unknown date; agent data_mode default field)"
+}

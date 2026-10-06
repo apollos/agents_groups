@@ -22,6 +22,7 @@
 | 回归 | **通过**。Agent 239 passed（含既有 MIC / 股票 / 港股通 / 日报 / 看板），工具 145 passed（126 既有 + 19 新增） |
 | 未验证 | 东财 `stock_zh_index_daily_em`、`stock_hk_index_daily_em`（本机被 WAF `RemoteDisconnected`，未配置 `EASTMONEY_COOKIE`）；`bond_zh_us_rate` 兜底、`futures_zh_spot` 盘中时段快照（验收时为休市，仅验证了休市快照归属日校正）；BaoStock 对 `index_data` 的第二源交叉校验 |
 | 评审四项修改（同日晚） | 见 **§6**：快照日期入库前确认 / 业务参数只校验 / 同日更新 + 历史表 / 隔离数据，逐项区分"模拟数据回归通过"与"真实供应商采集通过"。回归：工具 179 passed，Agent 242 passed |
+| 评审补齐两项 + 日志 + 七类本地验证（10-07 凌晨） | 见 **§7**：请求—记录关联表、隔离日线阻断快照日期确认、JSONL 结构化日志；七类场景（3 类真实采集 `data_mode=live`、4 类模拟 `data_mode=simulated`）全部通过，材料在 `docs/acceptance/evidence/market_context_review_20261006/`。回归：工具 187 passed，Agent 245 passed |
 
 ## 1. 工具侧真实样本（CLI 直接调用，2026-10-06）
 
@@ -188,3 +189,44 @@ source_api / tool_request_id / quality_json / provenance_json`（`provenance.ing
 - 真实库遗留：20:27 旧代码写入的 realtime 行 `rec_eafa5a15…`（`trade_date=2026-10-06`，`date_confidence=NULL`，按新规则属"日期未知"）
   与 21:01 的 38 根重复日线仍在当前表，未在本轮删除；不影响新请求（不被成功 run 关联、确认步骤已去重）。
 - 未验证：盘中真实快照（休市）、供应商带完整日期的快照、真实迟到结果、85.59→86.59 的真实当日变价。
+
+## 7. 评审补齐两项 + 结构化日志 + 七类本地验证（2026-10-07 00:14–00:23 本机）
+
+代码 commit：`4d10665`（= `5eb4c3d` 主改动 + 两处小修：日期未知 WARNING 只发一次、Agent 日志 `data_mode` 默认字段；`market_context_review_20261006/*/inputs.json` 的 `code_commit` 均指向它）。
+运行者：本机 `/home/yu/.venv/mydev/bin/python`；真实场景走真实 CLI 子进程 + 真实供应商 + 工具自己的 `data/stock_data.db`；
+模拟场景复用 `tests/test_market_context.py` 的 `FakeAK` 与时钟控制（`market_context_requests.now_asia_shanghai` 钉死），
+每个场景独立临时 SQLite（`/tmp/mctx_verify/work/<scenario>/db.sqlite`）。日志事件字段带 `data_mode=live|simulated`。
+
+### 7.1 补齐项
+
+| 项 | 实现 | 测试（模拟数据回归） |
+| --- | --- | --- |
+| 请求—记录关联 | 新表 `market_context_request_records(request_id, record_type, record_id)` 联合主键；`_persist()` 对本次请求最终采用的每条记录（`inserted / replaced / kept_existing`）写关联，与记录更新同一事务；`QueryService.resolve_request_records()` 先查关联表，关联记录已归档则沿 `superseded_by_record_id` 替换链到当前记录，无关联才回退旧的按记录 `request_id` 查询；记录自身 `request_id` 不改 | `test_same_day_update_late_arriving_older_result_does_not_overwrite` 追加：B 重复请求、重启后 B 请求均 86.59 且溯源为 A 采集的记录；`test_request_record_links_cover_insert_replace_and_keep` |
+| 隔离日线阻断日期确认 | 阻断集合 `schemas/quality.py: BLOCKING_VALIDATION_STATUSES = {quarantined, manual_review_required, conflicted_high, failed}`，日期确认（`IngestionRunner._match_snapshot_to_last_session`）与汇总层（`MarketContextService._BLOCKING_VALIDATION_STATUSES`）同一引用；先按日期去重，取最近两个交易日，任一条阻断 → 立即 `SNAPSHOT_DATE_UNCONFIRMED`，不跳到更早日期；错误消息与 `date_resolution_details.reference_bars` 含参考记录 ID 与状态 | `test_snapshot_date_blocked_reference_bar_fails_confirmation[last]` / `[previous]`、`test_blocking_statuses_are_shared_between_confirmation_and_summary` |
+| 结构化日志 | 工具 `logging_config.py`（JSONL、固定关联字段、`log_context` ContextVar、`--debug/--log-file/--trace-id`、`main()` 单次初始化、20 MiB×5）；Agent `logging_setup.py`（`agent.jsonl`、`ToolLogSink` → `tool_stderr.jsonl`、`--debug` 转发、`agent_outcome`）。事件清单见工具 README §6.17 | 工具 `test_logging_events_carry_correlation_fields_and_trace`、`test_logging_warnings_for_rejection_unknown_date_and_block`、`test_logging_info_level_has_no_per_record_detail`、`test_cli_debug_and_log_file_flags`；Agent `test_adapter_forwards_debug_and_trace_and_sinks_stderr_on_success_failure_and_timeout`、`test_agent_emits_agent_outcome_and_passes_ticket_trace`、`test_agent_cli_debug_flag_enables_debug_and_tool_forwarding` |
+
+### 7.2 七类场景材料索引
+
+每个目录：`inputs.json`（输入参数、commit、每次调用的摘要、`checks` 核对表）、`response_N.json`（每次调用完整响应）、
+`debug.jsonl`（工具 DEBUG 日志；07 场景为 Agent 转存的工具 stderr）、`agent.jsonl`（涉及 Agent 时）、`db_export.json`
+（仅该场景的当前记录、归档记录、请求—记录关联、快照日期确认依据）。驱动脚本在 `_drivers/`。
+
+| 场景 | 模式 | 目录 | 调用 | 结果 | 核对 |
+| --- | --- | --- | --- | --- | --- |
+| 五类真实采集 | **live** | `01_live_five_categories` | 000300 / HSTECH / HKDCNY / CU0 1d / CN_CGB_10Y 各 1 次 | 000300 `4357.616 index_points @2026-09-30 stale`；HSTECH `4223.08008 @2026-10-06 fresh`；HKDCNY `85.59 CNY per 100 HKD @2026-10-06 fresh`；CU0 `109680.0 CNY/ton @2026-09-30 stale`；CN_CGB_10Y `1.6822 percent @2026-09-30 stale`。`source_crosscheck.json` 为 CLI 调用后对同一 akshare 函数的直接读取，五项日期与数值逐一相等；请求日 2026-10-07（跨午夜运行），非当日数据均带 `data_date_matches_as_of=false / staleness_days`，超出容忍的标 `stale` | 23/23 |
+| 实时快照重复读取 | **live** | `02_live_realtime_reread` | CU0 realtime 三个新进程，00:22:00 / :01 / :02 | 幂等键三次相同（`…:realtime:::akshare:latest:202610070022`）；同记录 `rec_924985f4…`、同日期 2026-09-30、同值 109680.0、同来源；第 1 次 `snapshot_date_resolution` 1 条（`confirmed_last_session`，参考日线 `rec_8b799004…`@09-30 与 `rec_3598cf07…`@09-29），第 2/3 次只有 `store_replay`，无 `snapshot_date_resolution`、无 `provider_call`。`db_export.json.snapshot_date_confirmation` 含 realtime 记录的 `date_resolution_details` 与两条参考日线 | 9/9 |
+| 参数冲突 | **live** | `03_live_param_conflict` | CU0 1d 正常 → `--contract CU2612`；US_CGB_10Y 正常 → `--tenor 2Y` | 两次冲突均 `failed / INVALID_REQUEST / retryable=false`，消息与规格原文一致；对应 trace 的日志里 `provider_call` 为 0、无 `record_write`，`identity_check decision=rejected` 列出冲突字段，`business_param_rejected` WARNING 各 1 条 | 12/12 |
+| 同日更新 | simulated | `04_same_day_update` | 09:00 85.59 → 10:00 86.59 → 同幂等键重复 → 重启后重复 | 当前行 86.59、新 `record_id / request_id / raw_payload_id`；旧记录整条进 `market_context_record_revisions`（`superseded_by_record_id`=新 id）；重复与重启 0 次供应商调用、`served_from_store`、溯源为新记录 | 9/9 |
+| 迟到旧结果 | simulated | `05_late_older_result` | 10:00 A=86.59；11:00 B 的抓取时间钉为 08:00（旧）→ 被拒；11:30 B 重复；重启后 B | B 三次均 86.59；当前行不变（`request_id` 仍为 A）、无新归档；`market_context_request_records` 有 (B, fx_rate, A 的记录) 关联；`store_replay` 事件 `resolution_source=request_record_links`，`QueryService.resolve_request_records` 命中 100 条、`missing=[]`；B 的重复与重启幂等键相同 | 11/11 |
+| 日期无法确认 | simulated | `06a_unknown_date_daily_failed` / `06b_…last_bar_quarantined` / `06c_…prev_bar_quarantined` | CU0 realtime：日线采集失败 / 最后一条日线隔离 / 前一条日线隔离 | 三例均 `failed / SNAPSHOT_DATE_UNCONFIRMED / quality.status=unknown_date / usable=false / is_fresh=null / data_date=null`，raw 已保存，`commodity_prices` 无 realtime 行；06b/06c 错误消息含被隔离记录 ID、`validation_status=quarantined`、"no earlier bar is substituted"，`snapshot_date_resolution` 事件 `decision=rejected` 并列出两条参考日线的 ID/日期/价格/状态，`snapshot_date_unknown` WARNING 1 条 | 7/7、9/9、9/9 |
+| 隔离数据 | simulated（经真实子进程边界） | `07_quarantined_via_agent` | Agent `run_once` → `fake_python.sh -m stock_data_ingestion.cli --debug fetch market-context … --trace-id corr-07-quarantine`（真实 `cli.main`，FakeAK，HSTECH 最新日线 `quarantined`） | 工具 `failed / quality.status=failed / usable=false`，值 4058.0@2026-10-05 保留供检查，1p/5p/20p 全部 `value=null + reason="upstream_validation_blocked: 2026-10-05=quarantined"`；Agent ticket `failed`、`market_context_snapshots` 0 行、覆盖 `contexts_with_snapshot=0`、`collection.result status=failed usable=false`；`agent.jsonl` 的 `agent_outcome`：`snapshot_saved=false / counted_as_coverage=false / final_status=failed`，`trace_id` 与工具 stderr 事件一致；`debug.jsonl` 为 Agent 转存的工具 stderr（含 `quality_decision / upstream_validation_blocked / request_summary`） | 16/16 |
+
+### 7.3 回归与遗留
+
+- 工具 `tests/test_market_context.py` 61 项，全套 **187 passed**；Agent `tests/test_v09_market_context.py` 20 项，全套 **245 passed**。
+- 日志默认 INFO 只出 `request_summary`（+ 请求级 WARNING/ERROR）；DEBUG 下 100 条 FX 记录一次请求约产生 200 条明细事件
+  （`record_write` + `request_record_link` 各 100），文件 20 MiB × 5 轮转。
+- 真实库在本轮验证中新增：五类 1d 记录各一批（已存在键按同日更新规则处理）、1 条 CU0 realtime（`rec_924985f4…`，
+  `confirmed_last_session`）、对应的请求—记录关联行。§6.6 提到的旧遗留行未动。
+- 未验证（与 §6.6 相同）：盘中真实快照、供应商带完整日期的快照、真实迟到结果、真实当日变价；真实 Agent 子进程下的
+  `TimeoutExpired` 部分 stderr 转存只有离线测试。

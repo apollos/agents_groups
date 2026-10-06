@@ -1,0 +1,205 @@
+{
+  "schema_version": "market_context_response.v0.1",
+  "request_id": "mctx_b0e0f1c42b6e4b70",
+  "status": "failed",
+  "created_at": "2026-10-07T00:15:37.301991+08:00",
+  "completed_at": "2026-10-07T00:15:37.545035+08:00",
+  "timezone": "Asia/Shanghai",
+  "request": {
+    "request_id": "mctx_b0e0f1c42b6e4b70",
+    "schema_version": "market_context_request.v0.1",
+    "context_id": "ctx",
+    "context_type": "commodity",
+    "symbol": "CU0",
+    "as_of": "2026-10-06",
+    "start_date": null,
+    "end_date": null,
+    "frequency": "realtime",
+    "metrics": [],
+    "market": null,
+    "contract": null,
+    "instrument_type": null,
+    "tenor": null,
+    "rate_type": null,
+    "max_staleness_days": null,
+    "providers": null,
+    "canonical_provider": null,
+    "cross_validate": false,
+    "save_raw": true,
+    "save_cleaned": true,
+    "export_parquet": true,
+    "requested_by": "manual",
+    "trace_id": "sim-06b_unknown_date_last_bar_quarantined-call1",
+    "created_at": "2026-10-07T00:15:37.301951+08:00"
+  },
+  "result": {
+    "context_id": "ctx",
+    "context_type": "commodity",
+    "symbol": "CU0",
+    "name": "沪铜连续合约",
+    "identity": {
+      "commodity": "copper",
+      "instrument_type": "futures",
+      "market": "SHFE",
+      "contract": "CU0",
+      "price_unit": "CNY/ton",
+      "currency": "CNY",
+      "frequency": "realtime"
+    },
+    "request_window": {
+      "mode": "latest",
+      "as_of": "2026-10-06",
+      "start_date": null,
+      "end_date": null,
+      "frequency": "realtime",
+      "lookback_days": null
+    },
+    "data_date": null,
+    "observed_at": null,
+    "collected_at": "2026-10-07T00:15:37.544061+08:00",
+    "metric": "latest",
+    "value": null,
+    "unit": "CNY/ton",
+    "values": {},
+    "changes": {},
+    "series": [],
+    "source": {
+      "provider": null,
+      "source_api": "futures_zh_spot",
+      "source_site": "akshare",
+      "source_url": null,
+      "adapter_version": "0.5.0",
+      "providers_attempted": [
+        {
+          "provider": "akshare",
+          "source_api": "futures_zh_spot",
+          "status": "success",
+          "rows_fetched": 1,
+          "error": null
+        }
+      ]
+    },
+    "quality": {
+      "usable": false,
+      "status": "unknown_date",
+      "is_fresh": null,
+      "staleness_days": null,
+      "max_staleness_days": 0,
+      "data_date_matches_as_of": null,
+      "observations": 0,
+      "missing_fields": [
+        "latest"
+      ],
+      "single_source": true,
+      "cross_validated": false,
+      "conflicts": [],
+      "anomalies": [],
+      "warnings": [],
+      "data_quality_score": null
+    },
+    "provenance": {
+      "stock_data_request_id": "req_538cafd1746c4c32",
+      "ingestion_run_ids": [],
+      "idempotency_key": "market_context:commodity:CU0:SHFE:CU0:futures:::realtime:::akshare:latest:202610060900",
+      "record_ids": [],
+      "raw_payload_ids": [
+        "raw_akshare_market_context_20261007_req_538cafd1746c4c32"
+      ],
+      "raw_payload_refs": [
+        "raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_538cafd1746c4c32.jsonl.gz"
+      ],
+      "tables_written": [
+        "raw_payload_index",
+        "source_fetch_logs"
+      ],
+      "parquet_refs": []
+    }
+  },
+  "errors": [
+    {
+      "error_id": "err_49feb3fae9a04c848026361c9919c945",
+      "provider": "akshare",
+      "source_api": "futures_zh_spot",
+      "source_site": "akshare",
+      "error_code": "SNAPSHOT_DATE_UNCONFIRMED",
+      "error_message": "realtime snapshot of copper/CU0 has no confirmable data date: reference daily bar(s) are blocked by upstream validation and cannot date the snapshot: last daily bar rec_59038f0768f5405e8a5784899c3114d0 (2026-09-30) has validation_status=quarantined; no earlier bar is substituted for a blocked recent session. Raw payload raw_akshare_market_context_20261007_req_538cafd1746c4c32 retained; no standard record written. details={'vendor_time_value': '150000', 'observed_date_inferred_from_fetch': True, 'collection_time': '2026-10-07T00:15:37.352131+08:00', 'provisional_trade_date': '2026-10-07', 'confirmation_reason': 'reference daily bar(s) are blocked by upstream validation and cannot date the snapshot: last daily bar rec_59038f0768f5405e8a5784899c3114d0 (2026-09-30) has validation_status=quarantined; no earlier bar is substituted for a blocked recent session', 'daily_request_id': 'req_c4ebc339a9a24ea5', 'daily_bars_available': 30, 'reference_bars': [{'record_id': 'rec_bfed4a3325274c1b9ae0ef7d422a4600', 'trade_date': '2026-09-29', 'close': 109280.0, 'settle': 109180.0, 'validation_status': 'validated_with_warning'}, {'record_id': 'rec_59038f0768f5405e8a5784899c3114d0', 'trade_date': '2026-09-30', 'close': 109290.0, 'settle': 109190.0, 'validation_status': 'quarantined'}]}",
+      "retryable": true,
+      "retry_count": 0,
+      "suggested_action": "Retry after the next session's daily bar is published, or use frequency=1d.",
+      "created_at": "2026-10-07T00:15:37.542926+08:00"
+    }
+  ],
+  "warnings": [
+    "no records normalized"
+  ],
+  "stock_data_response": {
+    "schema_version": "stock_data_response.v0.1",
+    "request_id": "req_538cafd1746c4c32",
+    "status": "failed",
+    "created_at": "2026-10-07T00:15:37.302415+08:00",
+    "completed_at": "2026-10-07T00:15:37.544061+08:00",
+    "timezone": "Asia/Shanghai",
+    "canonical_provider": "akshare",
+    "provider_results": [
+      {
+        "provider": "akshare",
+        "source_api": "futures_zh_spot",
+        "source_site": "akshare",
+        "adapter_version": "0.5.0",
+        "status": "success",
+        "raw_payload_id": "raw_akshare_market_context_20261007_req_538cafd1746c4c32",
+        "raw_payload_ref": "raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_538cafd1746c4c32.jsonl.gz",
+        "raw_hash": "sha256:be0f6ad62f164341e8adfebfb6b0b4cd885f22599f4d626d354ebec60d3e5afb",
+        "rows_fetched": 1,
+        "started_at": "2026-10-07T00:15:37.350674+08:00",
+        "completed_at": "2026-10-07T00:15:37.352347+08:00",
+        "error": null
+      }
+    ],
+    "provider_comparisons": [],
+    "quality_report": {
+      "completeness_score": 0.0,
+      "consistency_score": 0.0,
+      "timeliness_score": 0.0,
+      "provider_reliability_score": 0.0,
+      "anomaly_score": 0.0,
+      "provenance_score": 0.0,
+      "data_quality_score": 0.0,
+      "cross_provider_checks": [],
+      "conflicts": [],
+      "missing_fields": [],
+      "warnings": [
+        "no records normalized"
+      ]
+    },
+    "persistence": {
+      "saved": true,
+      "tables_written": [
+        "raw_payload_index",
+        "source_fetch_logs"
+      ],
+      "parquet_refs": [],
+      "raw_payload_refs": [
+        "raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_538cafd1746c4c32.jsonl.gz"
+      ],
+      "raw_payload_ids": [
+        "raw_akshare_market_context_20261007_req_538cafd1746c4c32"
+      ]
+    },
+    "errors": [
+      {
+        "error_id": "err_49feb3fae9a04c848026361c9919c945",
+        "provider": "akshare",
+        "source_api": "futures_zh_spot",
+        "source_site": "akshare",
+        "error_code": "SNAPSHOT_DATE_UNCONFIRMED",
+        "error_message": "realtime snapshot of copper/CU0 has no confirmable data date: reference daily bar(s) are blocked by upstream validation and cannot date the snapshot: last daily bar rec_59038f0768f5405e8a5784899c3114d0 (2026-09-30) has validation_status=quarantined; no earlier bar is substituted for a blocked recent session. Raw payload raw_akshare_market_context_20261007_req_538cafd1746c4c32 retained; no standard record written. details={'vendor_time_value': '150000', 'observed_date_inferred_from_fetch': True, 'collection_time': '2026-10-07T00:15:37.352131+08:00', 'provisional_trade_date': '2026-10-07', 'confirmation_reason': 'reference daily bar(s) are blocked by upstream validation and cannot date the snapshot: last daily bar rec_59038f0768f5405e8a5784899c3114d0 (2026-09-30) has validation_status=quarantined; no earlier bar is substituted for a blocked recent session', 'daily_request_id': 'req_c4ebc339a9a24ea5', 'daily_bars_available': 30, 'reference_bars': [{'record_id': 'rec_bfed4a3325274c1b9ae0ef7d422a4600', 'trade_date': '2026-09-29', 'close': 109280.0, 'settle': 109180.0, 'validation_status': 'validated_with_warning'}, {'record_id': 'rec_59038f0768f5405e8a5784899c3114d0', 'trade_date': '2026-09-30', 'close': 109290.0, 'settle': 109190.0, 'validation_status': 'quarantined'}]}",
+        "retryable": true,
+        "retry_count": 0,
+        "suggested_action": "Retry after the next session's daily bar is published, or use frequency=1d.",
+        "created_at": "2026-10-07T00:15:37.542926+08:00"
+      }
+    ],
+    "records_returned": {}
+  }
+}

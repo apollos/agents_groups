@@ -1,0 +1,205 @@
+{
+  "schema_version": "market_context_response.v0.1",
+  "request_id": "mctx_d78d165111b8444f",
+  "status": "failed",
+  "created_at": "2026-10-07T00:15:36.534052+08:00",
+  "completed_at": "2026-10-07T00:15:36.597110+08:00",
+  "timezone": "Asia/Shanghai",
+  "request": {
+    "request_id": "mctx_d78d165111b8444f",
+    "schema_version": "market_context_request.v0.1",
+    "context_id": "ctx",
+    "context_type": "commodity",
+    "symbol": "CU0",
+    "as_of": "2026-10-06",
+    "start_date": null,
+    "end_date": null,
+    "frequency": "realtime",
+    "metrics": [],
+    "market": null,
+    "contract": null,
+    "instrument_type": null,
+    "tenor": null,
+    "rate_type": null,
+    "max_staleness_days": null,
+    "providers": null,
+    "canonical_provider": null,
+    "cross_validate": false,
+    "save_raw": true,
+    "save_cleaned": true,
+    "export_parquet": true,
+    "requested_by": "manual",
+    "trace_id": "sim-06a_unknown_date_daily_failed-call1",
+    "created_at": "2026-10-07T00:15:36.534015+08:00"
+  },
+  "result": {
+    "context_id": "ctx",
+    "context_type": "commodity",
+    "symbol": "CU0",
+    "name": "沪铜连续合约",
+    "identity": {
+      "commodity": "copper",
+      "instrument_type": "futures",
+      "market": "SHFE",
+      "contract": "CU0",
+      "price_unit": "CNY/ton",
+      "currency": "CNY",
+      "frequency": "realtime"
+    },
+    "request_window": {
+      "mode": "latest",
+      "as_of": "2026-10-06",
+      "start_date": null,
+      "end_date": null,
+      "frequency": "realtime",
+      "lookback_days": null
+    },
+    "data_date": null,
+    "observed_at": null,
+    "collected_at": "2026-10-07T00:15:36.595735+08:00",
+    "metric": "latest",
+    "value": null,
+    "unit": "CNY/ton",
+    "values": {},
+    "changes": {},
+    "series": [],
+    "source": {
+      "provider": null,
+      "source_api": "futures_zh_spot",
+      "source_site": "akshare",
+      "source_url": null,
+      "adapter_version": "0.5.0",
+      "providers_attempted": [
+        {
+          "provider": "akshare",
+          "source_api": "futures_zh_spot",
+          "status": "success",
+          "rows_fetched": 1,
+          "error": null
+        }
+      ]
+    },
+    "quality": {
+      "usable": false,
+      "status": "unknown_date",
+      "is_fresh": null,
+      "staleness_days": null,
+      "max_staleness_days": 0,
+      "data_date_matches_as_of": null,
+      "observations": 0,
+      "missing_fields": [
+        "latest"
+      ],
+      "single_source": true,
+      "cross_validated": false,
+      "conflicts": [],
+      "anomalies": [],
+      "warnings": [],
+      "data_quality_score": null
+    },
+    "provenance": {
+      "stock_data_request_id": "req_b00c7a4611e94f1c",
+      "ingestion_run_ids": [],
+      "idempotency_key": "market_context:commodity:CU0:SHFE:CU0:futures:::realtime:::akshare:latest:202610060900",
+      "record_ids": [],
+      "raw_payload_ids": [
+        "raw_akshare_market_context_20261007_req_b00c7a4611e94f1c"
+      ],
+      "raw_payload_refs": [
+        "raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_b00c7a4611e94f1c.jsonl.gz"
+      ],
+      "tables_written": [
+        "raw_payload_index",
+        "source_fetch_logs"
+      ],
+      "parquet_refs": []
+    }
+  },
+  "errors": [
+    {
+      "error_id": "err_d5dc7bc0cd83489e86a6ba5218ba6feb",
+      "provider": "akshare",
+      "source_api": "futures_zh_spot",
+      "source_site": "akshare",
+      "error_code": "SNAPSHOT_DATE_UNCONFIRMED",
+      "error_message": "realtime snapshot of copper/CU0 has no confirmable data date: vendor supplied a time of day only and no daily bars were available to confirm the session date. Raw payload raw_akshare_market_context_20261007_req_b00c7a4611e94f1c retained; no standard record written. details={'vendor_time_value': '150000', 'observed_date_inferred_from_fetch': True, 'collection_time': '2026-10-07T00:15:36.586756+08:00', 'provisional_trade_date': '2026-10-07', 'confirmation_reason': 'vendor supplied a time of day only and no daily bars were available to confirm the session date', 'daily_request_id': 'req_88fc9b7679104c95', 'daily_bars_available': 0, 'daily_collection_note': 'UNKNOWN_ERROR: futures_zh_daily_sina: ConnectionError: futures_zh_daily_sina blocked', 'reference_bars': []}",
+      "retryable": true,
+      "retry_count": 0,
+      "suggested_action": "Retry after the next session's daily bar is published, or use frequency=1d.",
+      "created_at": "2026-10-07T00:15:36.594130+08:00"
+    }
+  ],
+  "warnings": [
+    "no records normalized"
+  ],
+  "stock_data_response": {
+    "schema_version": "stock_data_response.v0.1",
+    "request_id": "req_b00c7a4611e94f1c",
+    "status": "failed",
+    "created_at": "2026-10-07T00:15:36.534474+08:00",
+    "completed_at": "2026-10-07T00:15:36.595735+08:00",
+    "timezone": "Asia/Shanghai",
+    "canonical_provider": "akshare",
+    "provider_results": [
+      {
+        "provider": "akshare",
+        "source_api": "futures_zh_spot",
+        "source_site": "akshare",
+        "adapter_version": "0.5.0",
+        "status": "success",
+        "raw_payload_id": "raw_akshare_market_context_20261007_req_b00c7a4611e94f1c",
+        "raw_payload_ref": "raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_b00c7a4611e94f1c.jsonl.gz",
+        "raw_hash": "sha256:b2681c86c4ce06167045f5ba25d6a522c2c505af9634eacf2367487cd3bbd61c",
+        "rows_fetched": 1,
+        "started_at": "2026-10-07T00:15:36.585164+08:00",
+        "completed_at": "2026-10-07T00:15:36.586979+08:00",
+        "error": null
+      }
+    ],
+    "provider_comparisons": [],
+    "quality_report": {
+      "completeness_score": 0.0,
+      "consistency_score": 0.0,
+      "timeliness_score": 0.0,
+      "provider_reliability_score": 0.0,
+      "anomaly_score": 0.0,
+      "provenance_score": 0.0,
+      "data_quality_score": 0.0,
+      "cross_provider_checks": [],
+      "conflicts": [],
+      "missing_fields": [],
+      "warnings": [
+        "no records normalized"
+      ]
+    },
+    "persistence": {
+      "saved": true,
+      "tables_written": [
+        "raw_payload_index",
+        "source_fetch_logs"
+      ],
+      "parquet_refs": [],
+      "raw_payload_refs": [
+        "raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_b00c7a4611e94f1c.jsonl.gz"
+      ],
+      "raw_payload_ids": [
+        "raw_akshare_market_context_20261007_req_b00c7a4611e94f1c"
+      ]
+    },
+    "errors": [
+      {
+        "error_id": "err_d5dc7bc0cd83489e86a6ba5218ba6feb",
+        "provider": "akshare",
+        "source_api": "futures_zh_spot",
+        "source_site": "akshare",
+        "error_code": "SNAPSHOT_DATE_UNCONFIRMED",
+        "error_message": "realtime snapshot of copper/CU0 has no confirmable data date: vendor supplied a time of day only and no daily bars were available to confirm the session date. Raw payload raw_akshare_market_context_20261007_req_b00c7a4611e94f1c retained; no standard record written. details={'vendor_time_value': '150000', 'observed_date_inferred_from_fetch': True, 'collection_time': '2026-10-07T00:15:36.586756+08:00', 'provisional_trade_date': '2026-10-07', 'confirmation_reason': 'vendor supplied a time of day only and no daily bars were available to confirm the session date', 'daily_request_id': 'req_88fc9b7679104c95', 'daily_bars_available': 0, 'daily_collection_note': 'UNKNOWN_ERROR: futures_zh_daily_sina: ConnectionError: futures_zh_daily_sina blocked', 'reference_bars': []}",
+        "retryable": true,
+        "retry_count": 0,
+        "suggested_action": "Retry after the next session's daily bar is published, or use frequency=1d.",
+        "created_at": "2026-10-07T00:15:36.594130+08:00"
+      }
+    ],
+    "records_returned": {}
+  }
+}

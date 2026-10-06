@@ -1,0 +1,697 @@
+{
+  "schema_version": "market_context_response.v0.1",
+  "request_id": "mctx_d654884134144495",
+  "status": "partial_success",
+  "created_at": "2026-10-07T00:20:03.540187+08:00",
+  "completed_at": "2026-10-07T00:20:06.359037+08:00",
+  "timezone": "Asia/Shanghai",
+  "request": {
+    "request_id": "mctx_d654884134144495",
+    "schema_version": "market_context_request.v0.1",
+    "context_id": "rate_cn_cgb_10y",
+    "context_type": "interest_rate",
+    "symbol": "CN_CGB_10Y",
+    "as_of": null,
+    "start_date": null,
+    "end_date": null,
+    "frequency": "1d",
+    "metrics": [],
+    "market": null,
+    "contract": null,
+    "instrument_type": null,
+    "tenor": null,
+    "rate_type": null,
+    "max_staleness_days": null,
+    "providers": null,
+    "canonical_provider": null,
+    "cross_validate": false,
+    "save_raw": true,
+    "save_cleaned": true,
+    "export_parquet": true,
+    "requested_by": "review_verification_20261006",
+    "trace_id": "live-01_live_five_categories-5",
+    "created_at": "2026-10-07T00:20:03.540171+08:00"
+  },
+  "result": {
+    "context_id": "rate_cn_cgb_10y",
+    "context_type": "interest_rate",
+    "symbol": "CN_CGB_10Y",
+    "name": "中国10年期国债收益率",
+    "identity": {
+      "rate_type": "government_bond_yield",
+      "market": "CN",
+      "tenor": "10Y",
+      "currency": "CNY",
+      "unit": "percent"
+    },
+    "request_window": {
+      "mode": "latest",
+      "as_of": "2026-10-07",
+      "start_date": null,
+      "end_date": null,
+      "frequency": "1d",
+      "lookback_days": 60
+    },
+    "data_date": "2026-09-30",
+    "observed_at": null,
+    "collected_at": "2026-10-07T00:20:06.356326+08:00",
+    "metric": "rate_value",
+    "value": 1.6822,
+    "unit": "percent",
+    "values": {
+      "rate_value": 1.6822
+    },
+    "changes": {
+      "1p": {
+        "periods": 1,
+        "period_unit": "observation",
+        "kind": "percentage_point",
+        "value": 0.01519999999999988,
+        "basis_points": 1.519999999999988,
+        "from_date": "2026-09-29",
+        "to_date": "2026-09-30",
+        "from_value": 1.667,
+        "to_value": 1.6822,
+        "reason": null
+      },
+      "5p": {
+        "periods": 5,
+        "period_unit": "observation",
+        "kind": "percentage_point",
+        "value": 0.0030999999999998806,
+        "basis_points": 0.30999999999998806,
+        "from_date": "2026-09-22",
+        "to_date": "2026-09-30",
+        "from_value": 1.6791,
+        "to_value": 1.6822,
+        "reason": null
+      },
+      "20p": {
+        "periods": 20,
+        "period_unit": "observation",
+        "kind": "percentage_point",
+        "value": -0.0039000000000000146,
+        "basis_points": -0.39000000000000146,
+        "from_date": "2026-09-02",
+        "to_date": "2026-09-30",
+        "from_value": 1.6861,
+        "to_value": 1.6822,
+        "reason": null
+      }
+    },
+    "series": [
+      {
+        "data_date": "2026-09-02",
+        "observed_at": null,
+        "values": {
+          "rate_value": 1.6861
+        },
+        "record_id": "rec_180804dfac6244a4ae83af6d88aa9ff0",
+        "provider": "akshare",
+        "source_api": "bond_china_yield",
+        "raw_payload_id": "raw_akshare_market_context_20261007_req_f86daaeb84bf4c46",
+        "raw_payload_ref": "raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_f86daaeb84bf4c46.jsonl.gz",
+        "raw_row_index": 17,
+        "data_quality": 0.925,
+        "validation_status": "validated_with_warning"
+      },
+      {
+        "data_date": "2026-09-03",
+        "observed_at": null,
+        "values": {
+          "rate_value": 1.6798
+        },
+        "record_id": "rec_ad31ae52a3cb470eb04e138d34d3c258",
+        "provider": "akshare",
+        "source_api": "bond_china_yield",
+        "raw_payload_id": "raw_akshare_market_context_20261007_req_f86daaeb84bf4c46",
+        "raw_payload_ref": "raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_f86daaeb84bf4c46.jsonl.gz",
+        "raw_row_index": 18,
+        "data_quality": 0.925,
+        "validation_status": "validated_with_warning"
+      },
+      {
+        "data_date": "2026-09-04",
+        "observed_at": null,
+        "values": {
+          "rate_value": 1.6804
+        },
+        "record_id": "rec_0dca507a8b5c4d7db3b476bfefec4a06",
+        "provider": "akshare",
+        "source_api": "bond_china_yield",
+        "raw_payload_id": "raw_akshare_market_context_20261007_req_f86daaeb84bf4c46",
+        "raw_payload_ref": "raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_f86daaeb84bf4c46.jsonl.gz",
+        "raw_row_index": 19,
+        "data_quality": 0.925,
+        "validation_status": "validated_with_warning"
+      },
+      {
+        "data_date": "2026-09-07",
+        "observed_at": null,
+        "values": {
+          "rate_value": 1.6798
+        },
+        "record_id": "rec_ec902c99025d42e59415595fa01d8c7e",
+        "provider": "akshare",
+        "source_api": "bond_china_yield",
+        "raw_payload_id": "raw_akshare_market_context_20261007_req_f86daaeb84bf4c46",
+        "raw_payload_ref": "raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_f86daaeb84bf4c46.jsonl.gz",
+        "raw_row_index": 20,
+        "data_quality": 0.925,
+        "validation_status": "validated_with_warning"
+      },
+      {
+        "data_date": "2026-09-08",
+        "observed_at": null,
+        "values": {
+          "rate_value": 1.6815
+        },
+        "record_id": "rec_816fa0c98dc04452a826d7c4fd79c090",
+        "provider": "akshare",
+        "source_api": "bond_china_yield",
+        "raw_payload_id": "raw_akshare_market_context_20261007_req_f86daaeb84bf4c46",
+        "raw_payload_ref": "raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_f86daaeb84bf4c46.jsonl.gz",
+        "raw_row_index": 21,
+        "data_quality": 0.925,
+        "validation_status": "validated_with_warning"
+      },
+      {
+        "data_date": "2026-09-09",
+        "observed_at": null,
+        "values": {
+          "rate_value": 1.6816
+        },
+        "record_id": "rec_ee9304c1ab4b4fc5a2db30b99a8f5899",
+        "provider": "akshare",
+        "source_api": "bond_china_yield",
+        "raw_payload_id": "raw_akshare_market_context_20261007_req_f86daaeb84bf4c46",
+        "raw_payload_ref": "raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_f86daaeb84bf4c46.jsonl.gz",
+        "raw_row_index": 22,
+        "data_quality": 0.925,
+        "validation_status": "validated_with_warning"
+      },
+      {
+        "data_date": "2026-09-10",
+        "observed_at": null,
+        "values": {
+          "rate_value": 1.6797
+        },
+        "record_id": "rec_23da4ba047f941c9a3c7e8106dd18298",
+        "provider": "akshare",
+        "source_api": "bond_china_yield",
+        "raw_payload_id": "raw_akshare_market_context_20261007_req_f86daaeb84bf4c46",
+        "raw_payload_ref": "raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_f86daaeb84bf4c46.jsonl.gz",
+        "raw_row_index": 23,
+        "data_quality": 0.925,
+        "validation_status": "validated_with_warning"
+      },
+      {
+        "data_date": "2026-09-11",
+        "observed_at": null,
+        "values": {
+          "rate_value": 1.6899
+        },
+        "record_id": "rec_f975529128d94f2a90c51ee906a26bf7",
+        "provider": "akshare",
+        "source_api": "bond_china_yield",
+        "raw_payload_id": "raw_akshare_market_context_20261007_req_f86daaeb84bf4c46",
+        "raw_payload_ref": "raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_f86daaeb84bf4c46.jsonl.gz",
+        "raw_row_index": 24,
+        "data_quality": 0.925,
+        "validation_status": "validated_with_warning"
+      },
+      {
+        "data_date": "2026-09-14",
+        "observed_at": null,
+        "values": {
+          "rate_value": 1.6888
+        },
+        "record_id": "rec_56344c687d204a6b96d577aa7419b0a3",
+        "provider": "akshare",
+        "source_api": "bond_china_yield",
+        "raw_payload_id": "raw_akshare_market_context_20261007_req_f86daaeb84bf4c46",
+        "raw_payload_ref": "raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_f86daaeb84bf4c46.jsonl.gz",
+        "raw_row_index": 25,
+        "data_quality": 0.925,
+        "validation_status": "validated_with_warning"
+      },
+      {
+        "data_date": "2026-09-15",
+        "observed_at": null,
+        "values": {
+          "rate_value": 1.6865
+        },
+        "record_id": "rec_c536c5a0ae8148e49be8c58b93132253",
+        "provider": "akshare",
+        "source_api": "bond_china_yield",
+        "raw_payload_id": "raw_akshare_market_context_20261007_req_f86daaeb84bf4c46",
+        "raw_payload_ref": "raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_f86daaeb84bf4c46.jsonl.gz",
+        "raw_row_index": 26,
+        "data_quality": 0.925,
+        "validation_status": "validated_with_warning"
+      },
+      {
+        "data_date": "2026-09-16",
+        "observed_at": null,
+        "values": {
+          "rate_value": 1.6858
+        },
+        "record_id": "rec_8e8be025fe0549e2a28c1a767915a361",
+        "provider": "akshare",
+        "source_api": "bond_china_yield",
+        "raw_payload_id": "raw_akshare_market_context_20261007_req_f86daaeb84bf4c46",
+        "raw_payload_ref": "raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_f86daaeb84bf4c46.jsonl.gz",
+        "raw_row_index": 27,
+        "data_quality": 0.925,
+        "validation_status": "validated_with_warning"
+      },
+      {
+        "data_date": "2026-09-17",
+        "observed_at": null,
+        "values": {
+          "rate_value": 1.6862
+        },
+        "record_id": "rec_6b37f6696b234299a121162faf84ddfe",
+        "provider": "akshare",
+        "source_api": "bond_china_yield",
+        "raw_payload_id": "raw_akshare_market_context_20261007_req_f86daaeb84bf4c46",
+        "raw_payload_ref": "raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_f86daaeb84bf4c46.jsonl.gz",
+        "raw_row_index": 28,
+        "data_quality": 0.925,
+        "validation_status": "validated_with_warning"
+      },
+      {
+        "data_date": "2026-09-18",
+        "observed_at": null,
+        "values": {
+          "rate_value": 1.682
+        },
+        "record_id": "rec_d95d22549e3d44038a5aa863cdfbb415",
+        "provider": "akshare",
+        "source_api": "bond_china_yield",
+        "raw_payload_id": "raw_akshare_market_context_20261007_req_f86daaeb84bf4c46",
+        "raw_payload_ref": "raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_f86daaeb84bf4c46.jsonl.gz",
+        "raw_row_index": 29,
+        "data_quality": 0.925,
+        "validation_status": "validated_with_warning"
+      },
+      {
+        "data_date": "2026-09-20",
+        "observed_at": null,
+        "values": {
+          "rate_value": 1.6818
+        },
+        "record_id": "rec_f267f3771ca8425f85912c20c4490683",
+        "provider": "akshare",
+        "source_api": "bond_china_yield",
+        "raw_payload_id": "raw_akshare_market_context_20261007_req_f86daaeb84bf4c46",
+        "raw_payload_ref": "raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_f86daaeb84bf4c46.jsonl.gz",
+        "raw_row_index": 30,
+        "data_quality": 0.925,
+        "validation_status": "validated_with_warning"
+      },
+      {
+        "data_date": "2026-09-21",
+        "observed_at": null,
+        "values": {
+          "rate_value": 1.6829
+        },
+        "record_id": "rec_6b368ed8298c4115853ea3f452a24ff5",
+        "provider": "akshare",
+        "source_api": "bond_china_yield",
+        "raw_payload_id": "raw_akshare_market_context_20261007_req_f86daaeb84bf4c46",
+        "raw_payload_ref": "raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_f86daaeb84bf4c46.jsonl.gz",
+        "raw_row_index": 31,
+        "data_quality": 0.925,
+        "validation_status": "validated_with_warning"
+      },
+      {
+        "data_date": "2026-09-22",
+        "observed_at": null,
+        "values": {
+          "rate_value": 1.6791
+        },
+        "record_id": "rec_81b7be14135a4d918863b061064c7cce",
+        "provider": "akshare",
+        "source_api": "bond_china_yield",
+        "raw_payload_id": "raw_akshare_market_context_20261007_req_f86daaeb84bf4c46",
+        "raw_payload_ref": "raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_f86daaeb84bf4c46.jsonl.gz",
+        "raw_row_index": 32,
+        "data_quality": 0.925,
+        "validation_status": "validated_with_warning"
+      },
+      {
+        "data_date": "2026-09-23",
+        "observed_at": null,
+        "values": {
+          "rate_value": 1.6807
+        },
+        "record_id": "rec_aa60bbca5fae4e5bacb2d0ba1da9e715",
+        "provider": "akshare",
+        "source_api": "bond_china_yield",
+        "raw_payload_id": "raw_akshare_market_context_20261007_req_f86daaeb84bf4c46",
+        "raw_payload_ref": "raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_f86daaeb84bf4c46.jsonl.gz",
+        "raw_row_index": 33,
+        "data_quality": 0.925,
+        "validation_status": "validated_with_warning"
+      },
+      {
+        "data_date": "2026-09-24",
+        "observed_at": null,
+        "values": {
+          "rate_value": 1.6738
+        },
+        "record_id": "rec_69237a3a7ca64850b9638dc1fc25f550",
+        "provider": "akshare",
+        "source_api": "bond_china_yield",
+        "raw_payload_id": "raw_akshare_market_context_20261007_req_f86daaeb84bf4c46",
+        "raw_payload_ref": "raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_f86daaeb84bf4c46.jsonl.gz",
+        "raw_row_index": 34,
+        "data_quality": 0.925,
+        "validation_status": "validated_with_warning"
+      },
+      {
+        "data_date": "2026-09-28",
+        "observed_at": null,
+        "values": {
+          "rate_value": 1.679
+        },
+        "record_id": "rec_ff857ca8904948a5b341a0b8228dfc0d",
+        "provider": "akshare",
+        "source_api": "bond_china_yield",
+        "raw_payload_id": "raw_akshare_market_context_20261007_req_f86daaeb84bf4c46",
+        "raw_payload_ref": "raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_f86daaeb84bf4c46.jsonl.gz",
+        "raw_row_index": 35,
+        "data_quality": 0.925,
+        "validation_status": "validated_with_warning"
+      },
+      {
+        "data_date": "2026-09-29",
+        "observed_at": null,
+        "values": {
+          "rate_value": 1.667
+        },
+        "record_id": "rec_12c40acacb934ba88f52d8ca13ca99e4",
+        "provider": "akshare",
+        "source_api": "bond_china_yield",
+        "raw_payload_id": "raw_akshare_market_context_20261007_req_f86daaeb84bf4c46",
+        "raw_payload_ref": "raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_f86daaeb84bf4c46.jsonl.gz",
+        "raw_row_index": 36,
+        "data_quality": 0.925,
+        "validation_status": "validated_with_warning"
+      },
+      {
+        "data_date": "2026-09-30",
+        "observed_at": null,
+        "values": {
+          "rate_value": 1.6822
+        },
+        "record_id": "rec_d3538d4fbf9e42de98724f61e0c9c494",
+        "provider": "akshare",
+        "source_api": "bond_china_yield",
+        "raw_payload_id": "raw_akshare_market_context_20261007_req_f86daaeb84bf4c46",
+        "raw_payload_ref": "raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_f86daaeb84bf4c46.jsonl.gz",
+        "raw_row_index": 37,
+        "data_quality": 0.925,
+        "validation_status": "validated_with_warning"
+      }
+    ],
+    "source": {
+      "provider": "akshare",
+      "source_api": "bond_china_yield",
+      "source_site": "akshare",
+      "source_url": "https://yield.chinabond.com.cn/",
+      "adapter_version": "0.5.0",
+      "providers_attempted": [
+        {
+          "provider": "akshare",
+          "source_api": "bond_china_yield",
+          "status": "success",
+          "rows_fetched": 38,
+          "error": null
+        }
+      ]
+    },
+    "quality": {
+      "usable": true,
+      "status": "stale",
+      "is_fresh": false,
+      "staleness_days": 7,
+      "max_staleness_days": 3,
+      "data_date_matches_as_of": false,
+      "observations": 38,
+      "missing_fields": [],
+      "single_source": true,
+      "cross_validated": false,
+      "conflicts": [],
+      "anomalies": [],
+      "warnings": [
+        "stale: latest data_date 2026-09-30 is 7d before as_of 2026-10-07 (tolerance 3d)",
+        "single_source: value not cross-checked against a second provider"
+      ],
+      "data_quality_score": 0.9249999999999999
+    },
+    "provenance": {
+      "stock_data_request_id": "req_f86daaeb84bf4c46",
+      "ingestion_run_ids": [
+        "run_20261007_002003_2d62728e"
+      ],
+      "idempotency_key": "market_context:interest_rate:CN_CGB_10Y:CN:::10Y:government_bond_yield:1d:2026-08-08:2026-10-07:akshare:latest:2026100700",
+      "record_ids": [
+        "rec_9aa20b0fe03b472995c30f46ffc4ccf5",
+        "rec_87b0d485b91f4378844a06bf584cf425",
+        "rec_16d59e7563da4bacac5cb4384438efc7",
+        "rec_6d6615d6287b4496b4149ea416f4c220",
+        "rec_d7c4eebdb1774def93b397c8acc20551",
+        "rec_5a96fb2bff584362977feacfca48bf98",
+        "rec_a89f121fce7b49fa8a3de04929180a54",
+        "rec_5432c1dde2024c36a1e6226bde4139f8",
+        "rec_986a000e3d4d4b8dbfebb572057f5a1c",
+        "rec_67d47b3cdd4a40b7b8658c6db1373249",
+        "rec_c9eca5b97ccb468396cd68a1a840784d",
+        "rec_9cb1c09ba0e2441e90e980ac1142fc50",
+        "rec_74d7d30de92e422597ea64d2285d2a06",
+        "rec_60cf8fc75ad9488fb704c61940c79346",
+        "rec_507499f612cc4091848f857854d7a3b9",
+        "rec_1f481ce415474591baa4b60593e63de6",
+        "rec_496f4ee9c1ee4eaaa827e1b66da88931",
+        "rec_180804dfac6244a4ae83af6d88aa9ff0",
+        "rec_ad31ae52a3cb470eb04e138d34d3c258",
+        "rec_0dca507a8b5c4d7db3b476bfefec4a06",
+        "rec_ec902c99025d42e59415595fa01d8c7e",
+        "rec_816fa0c98dc04452a826d7c4fd79c090",
+        "rec_ee9304c1ab4b4fc5a2db30b99a8f5899",
+        "rec_23da4ba047f941c9a3c7e8106dd18298",
+        "rec_f975529128d94f2a90c51ee906a26bf7",
+        "rec_56344c687d204a6b96d577aa7419b0a3",
+        "rec_c536c5a0ae8148e49be8c58b93132253",
+        "rec_8e8be025fe0549e2a28c1a767915a361",
+        "rec_6b37f6696b234299a121162faf84ddfe",
+        "rec_d95d22549e3d44038a5aa863cdfbb415",
+        "rec_f267f3771ca8425f85912c20c4490683",
+        "rec_6b368ed8298c4115853ea3f452a24ff5",
+        "rec_81b7be14135a4d918863b061064c7cce",
+        "rec_aa60bbca5fae4e5bacb2d0ba1da9e715",
+        "rec_69237a3a7ca64850b9638dc1fc25f550",
+        "rec_ff857ca8904948a5b341a0b8228dfc0d",
+        "rec_12c40acacb934ba88f52d8ca13ca99e4",
+        "rec_d3538d4fbf9e42de98724f61e0c9c494"
+      ],
+      "raw_payload_ids": [
+        "raw_akshare_market_context_20261007_req_f86daaeb84bf4c46"
+      ],
+      "raw_payload_refs": [
+        "raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_f86daaeb84bf4c46.jsonl.gz"
+      ],
+      "tables_written": [
+        "interest_rates",
+        "market_context_record_revisions",
+        "market_context_request_records",
+        "raw_payload_index",
+        "source_fetch_logs"
+      ],
+      "parquet_refs": [
+        "data/parquet/interest_rates/rate_date=2026-08-10/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-08-11/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-08-12/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-08-13/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-08-14/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-08-17/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-08-18/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-08-19/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-08-20/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-08-21/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-08-24/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-08-25/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-08-26/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-08-27/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-08-28/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-08-31/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-01/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-02/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-03/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-04/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-07/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-08/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-09/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-10/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-11/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-14/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-15/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-16/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-17/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-18/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-20/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-21/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-22/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-23/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-24/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-28/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-29/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-30/effective_provider=akshare/part-000.parquet"
+      ]
+    }
+  },
+  "errors": [],
+  "warnings": [
+    "canonical_only_not_validated (x38)"
+  ],
+  "stock_data_response": {
+    "schema_version": "stock_data_response.v0.1",
+    "request_id": "req_f86daaeb84bf4c46",
+    "status": "success",
+    "created_at": "2026-10-07T00:20:03.540458+08:00",
+    "completed_at": "2026-10-07T00:20:06.356326+08:00",
+    "timezone": "Asia/Shanghai",
+    "canonical_provider": "akshare",
+    "provider_results": [
+      {
+        "provider": "akshare",
+        "source_api": "bond_china_yield",
+        "source_site": "akshare",
+        "adapter_version": "0.5.0",
+        "status": "success",
+        "raw_payload_id": "raw_akshare_market_context_20261007_req_f86daaeb84bf4c46",
+        "raw_payload_ref": "raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_f86daaeb84bf4c46.jsonl.gz",
+        "raw_hash": "sha256:5faca31cdabf54db27ad081e05575643d20b39b21f5ddba2990544c18771ace9",
+        "rows_fetched": 38,
+        "started_at": "2026-10-07T00:20:03.575114+08:00",
+        "completed_at": "2026-10-07T00:20:06.038880+08:00",
+        "error": null
+      }
+    ],
+    "provider_comparisons": [],
+    "quality_report": {
+      "completeness_score": 1.0,
+      "consistency_score": 1.0,
+      "timeliness_score": 1.0,
+      "provider_reliability_score": 0.9249999999999999,
+      "anomaly_score": 1.0,
+      "provenance_score": 1.0,
+      "data_quality_score": 0.9249999999999999,
+      "cross_provider_checks": [],
+      "conflicts": [],
+      "missing_fields": [],
+      "warnings": [
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated",
+        "canonical_only_not_validated"
+      ]
+    },
+    "persistence": {
+      "saved": true,
+      "tables_written": [
+        "interest_rates",
+        "market_context_record_revisions",
+        "market_context_request_records",
+        "raw_payload_index",
+        "source_fetch_logs"
+      ],
+      "parquet_refs": [
+        "data/parquet/interest_rates/rate_date=2026-08-10/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-08-11/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-08-12/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-08-13/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-08-14/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-08-17/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-08-18/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-08-19/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-08-20/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-08-21/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-08-24/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-08-25/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-08-26/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-08-27/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-08-28/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-08-31/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-01/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-02/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-03/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-04/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-07/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-08/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-09/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-10/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-11/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-14/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-15/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-16/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-17/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-18/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-20/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-21/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-22/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-23/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-24/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-28/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-29/effective_provider=akshare/part-000.parquet",
+        "data/parquet/interest_rates/rate_date=2026-09-30/effective_provider=akshare/part-000.parquet"
+      ],
+      "raw_payload_refs": [
+        "raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_f86daaeb84bf4c46.jsonl.gz"
+      ],
+      "raw_payload_ids": [
+        "raw_akshare_market_context_20261007_req_f86daaeb84bf4c46"
+      ]
+    },
+    "errors": [],
+    "records_returned": {
+      "interest_rates": 38
+    }
+  }
+}

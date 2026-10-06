@@ -1,0 +1,205 @@
+{
+  "ingestion_requests": [
+    {
+      "request_id": "req_97a4a2e048a14a3b",
+      "idempotency_key": "market_context:commodity:CU0:SHFE:CU0:futures:::realtime:::akshare:latest:202610070022",
+      "status": "success",
+      "created_at": "2026-10-07 00:22:01.039404",
+      "updated_at": "2026-10-07 00:22:01.621213"
+    }
+  ],
+  "request_record_links": [
+    {
+      "request_id": "req_97a4a2e048a14a3b",
+      "record_type": "commodity_price",
+      "record_id": "rec_924985f4fefc4f96887020e239dd2cc6"
+    }
+  ],
+  "current_records": {
+    "commodity_prices": [
+      {
+        "commodity": "copper",
+        "commodity_name": "沪铜连续合约",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "realtime",
+        "trade_date": "2026-09-30",
+        "observed_at": "2026-09-30 15:00:00.000000",
+        "price_unit": "CNY/ton",
+        "currency": "CNY",
+        "timezone": "Asia/Shanghai",
+        "open": 109280.0,
+        "high": 109790.0,
+        "low": 109270.0,
+        "close": null,
+        "settle": null,
+        "latest": 109680.0,
+        "pre_close": 109680.0,
+        "pre_settle": 109300.0,
+        "volume": 69830.0,
+        "open_interest": 185404.0,
+        "record_id": "rec_924985f4fefc4f96887020e239dd2cc6",
+        "provider": "akshare",
+        "effective_provider": "akshare",
+        "source_api": "futures_zh_spot",
+        "source_site": "akshare",
+        "adapter_version": "0.5.0",
+        "canonical_provider": "akshare",
+        "source_role": "canonical",
+        "merge_method": "canonical_only",
+        "validation_status": "validated_with_warning",
+        "field_provenance": "{\"currency\": {\"provider\": \"akshare\", \"source_api\": \"futures_zh_spot\", \"source_role\": \"canonical\", \"raw_payload_id\": \"raw_akshare_market_context_20261007_req_97a4a2e048a14a3b\", \"raw_payload_ref\": \"raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_97a4a2e048a14a3b.jsonl.gz\", \"raw_row_index\": 0}, \"timezone\": {\"provider\": \"akshare\", \"source_api\": \"futures_zh_spot\", \"source_role\": \"canonical\", \"raw_payload_id\": \"raw_akshare_market_context_20261007_req_97a4a2e048a14a3b\", \"raw_payload_ref\": \"raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_97a4a2e048a14a3b.jsonl.gz\", \"raw_row_index\": 0}, \"commodity\": {\"provider\": \"akshare\", \"source_api\": \"futures_zh_spot\", \"source_role\": \"canonical\", \"raw_payload_id\": \"raw_akshare_market_context_20261007_req_97a4a2e048a14a3b\", \"raw_payload_ref\": \"raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_97a4a2e048a14a3b.jsonl.gz\", \"raw_row_index\": 0}, \"commodity_name\": {\"provider\": \"akshare\", \"source_api\": \"futures_zh_spot\", \"source_role\": \"canonical\", \"raw_payload_id\": \"raw_akshare_market_context_20261007_req_97a4a2e048a14a3b\", \"raw_payload_ref\": \"raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_97a4a2e048a14a3b.jsonl.gz\", \"raw_row_index\": 0}, \"instrument_type\": {\"provider\": \"akshare\", \"source_api\": \"futures_zh_spot\", \"source_role\": \"canonical\", \"raw_payload_id\": \"raw_akshare_market_context_20261007_req_97a4a2e048a14a3b\", \"raw_payload_ref\": \"raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_97a4a2e048a14a3b.jsonl.gz\", \"raw_row_index\": 0}, \"market\": {\"provider\": \"akshare\", \"source_api\": \"futures_zh_spot\", \"source_role\": \"canonical\", \"raw_payload_id\": \"raw_akshare_market_context_20261007_req_97a4a2e048a14a3b\", \"raw_payload_ref\": \"raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_97a4a2e048a14a3b.jsonl.gz\", \"raw_row_index\": 0}, \"contract\": {\"provider\": \"akshare\", \"source_api\": \"futures_zh_spot\", \"source_role\": \"canonical\", \"raw_payload_id\": \"raw_akshare_market_context_20261007_req_97a4a2e048a14a3b\", \"raw_payload_ref\": \"raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_97a4a2e048a14a3b.jsonl.gz\", \"raw_row_index\": 0}, \"frequency\": {\"provider\": \"akshare\", \"source_api\": \"futures_zh_spot\", \"source_role\": \"canonical\", \"raw_payload_id\": \"raw_akshare_market_context_20261007_req_97a4a2e048a14a3b\", \"raw_payload_ref\": \"raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_97a4a2e048a14a3b.jsonl.gz\", \"raw_row_index\": 0}, \"trade_date\": {\"provider\": \"akshare\", \"source_api\": \"futures_zh_spot\", \"source_role\": \"canonical\", \"raw_payload_id\": \"raw_akshare_market_context_20261007_req_97a4a2e048a14a3b\", \"raw_payload_ref\": \"raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_97a4a2e048a14a3b.jsonl.gz\", \"raw_row_index\": 0}, \"observed_at\": {\"provider\": \"akshare\", \"source_api\": \"futures_zh_spot\", \"source_role\": \"canonical\", \"raw_payload_id\": \"raw_akshare_market_context_20261007_req_97a4a2e048a14a3b\", \"raw_payload_ref\": \"raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_97a4a2e048a14a3b.jsonl.gz\", \"raw_row_index\": 0}, \"price_unit\": {\"provider\": \"akshare\", \"source_api\": \"futures_zh_spot\", \"source_role\": \"canonical\", \"raw_payload_id\": \"raw_akshare_market_context_20261007_req_97a4a2e048a14a3b\", \"raw_payload_ref\": \"raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_97a4a2e048a14a3b.jsonl.gz\", \"raw_row_index\": 0}, \"open\": {\"provider\": \"akshare\", \"source_api\": \"futures_zh_spot\", \"source_role\": \"canonical\", \"raw_payload_id\": \"raw_akshare_market_context_20261007_req_97a4a2e048a14a3b\", \"raw_payload_ref\": \"raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_97a4a2e048a14a3b.jsonl.gz\", \"raw_row_index\": 0}, \"high\": {\"provider\": \"akshare\", \"source_api\": \"futures_zh_spot\", \"source_role\": \"canonical\", \"raw_payload_id\": \"raw_akshare_market_context_20261007_req_97a4a2e048a14a3b\", \"raw_payload_ref\": \"raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_97a4a2e048a14a3b.jsonl.gz\", \"raw_row_index\": 0}, \"low\": {\"provider\": \"akshare\", \"source_api\": \"futures_zh_spot\", \"source_role\": \"canonical\", \"raw_payload_id\": \"raw_akshare_market_context_20261007_req_97a4a2e048a14a3b\", \"raw_payload_ref\": \"raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_97a4a2e048a14a3b.jsonl.gz\", \"raw_row_index\": 0}, \"latest\": {\"provider\": \"akshare\", \"source_api\": \"futures_zh_spot\", \"source_role\": \"canonical\", \"raw_payload_id\": \"raw_akshare_market_context_20261007_req_97a4a2e048a14a3b\", \"raw_payload_ref\": \"raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_97a4a2e048a14a3b.jsonl.gz\", \"raw_row_index\": 0}, \"pre_close\": {\"provider\": \"akshare\", \"source_api\": \"futures_zh_spot\", \"source_role\": \"canonical\", \"raw_payload_id\": \"raw_akshare_market_context_20261007_req_97a4a2e048a14a3b\", \"raw_payload_ref\": \"raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_97a4a2e048a14a3b.jsonl.gz\", \"raw_row_index\": 0}, \"pre_settle\": {\"provider\": \"akshare\", \"source_api\": \"futures_zh_spot\", \"source_role\": \"canonical\", \"raw_payload_id\": \"raw_akshare_market_context_20261007_req_97a4a2e048a14a3b\", \"raw_payload_ref\": \"raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_97a4a2e048a14a3b.jsonl.gz\", \"raw_row_index\": 0}, \"volume\": {\"provider\": \"akshare\", \"source_api\": \"futures_zh_spot\", \"source_role\": \"canonical\", \"raw_payload_id\": \"raw_akshare_market_context_20261007_req_97a4a2e048a14a3b\", \"raw_payload_ref\": \"raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_97a4a2e048a14a3b.jsonl.gz\", \"raw_row_index\": 0}, \"open_interest\": {\"provider\": \"akshare\", \"source_api\": \"futures_zh_spot\", \"source_role\": \"canonical\", \"raw_payload_id\": \"raw_akshare_market_context_20261007_req_97a4a2e048a14a3b\", \"raw_payload_ref\": \"raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_97a4a2e048a14a3b.jsonl.gz\", \"raw_row_index\": 0}}",
+        "supplement_flags": "{}",
+        "conflict_ids": "[]",
+        "canonical_value_suspect": 0,
+        "fetch_time": "2026-10-07 00:22:01.583364",
+        "provider_update_time": null,
+        "ingested_at": "2026-10-07 00:22:01.584297",
+        "request_id": "req_97a4a2e048a14a3b",
+        "ingestion_run_id": "run_20261007_002201_e6456d2d",
+        "request_params_hash": "sha256:c5dc3da5dbe2bd679a612d47b3ebc82b8d7b5022ef8c204ce5d70fcfa89c8223",
+        "idempotency_key": "market_context:commodity:CU0:SHFE:CU0:futures:::realtime:::akshare:latest:202610070022",
+        "raw_payload_id": "raw_akshare_market_context_20261007_req_97a4a2e048a14a3b",
+        "raw_payload_ref": "raw://local/provider%3Dakshare/request_type%3Dmarket_context/date%3D2026-10-07/raw_akshare_market_context_20261007_req_97a4a2e048a14a3b.jsonl.gz",
+        "raw_hash": "sha256:0da47d324c38a430e3e3c6b21df6183d11daa9d601390f066ca50ead5bddc895",
+        "raw_format": "jsonl.gz",
+        "raw_row_index": 0,
+        "data_quality": 0.925,
+        "quality_flags": "[]",
+        "id": 116,
+        "created_at": "2026-10-06 23:18:31.914630",
+        "updated_at": "2026-10-07 00:22:01.593420",
+        "date_confidence": "confirmed_last_session",
+        "date_resolution_details": {
+          "vendor_time_value": "150000",
+          "observed_date_inferred_from_fetch": true,
+          "collection_time": "2026-10-07T00:22:01.583130+08:00",
+          "provisional_trade_date": "2026-10-07",
+          "confirmation_reason": "latest 109680.0 == close of 2026-09-30 daily bar and pre_settle 109300.0 == settle of 2026-09-29 daily bar",
+          "daily_request_id": "req_205fdb87bcc04e0c",
+          "daily_bars_available": 37,
+          "reference_bars": [
+            {
+              "record_id": "rec_3598cf0777b045c1a2bcdcb4f3ae4695",
+              "trade_date": "2026-09-29",
+              "close": 109570.0,
+              "settle": 109300.0,
+              "validation_status": "validated_with_warning"
+            },
+            {
+              "record_id": "rec_8b799004443b4680bda20b894efd1e11",
+              "trade_date": "2026-09-30",
+              "close": 109680.0,
+              "settle": 109570.0,
+              "validation_status": "validated_with_warning"
+            }
+          ],
+          "confirmation_bar_record_ids": [
+            "rec_8b799004443b4680bda20b894efd1e11",
+            "rec_3598cf0777b045c1a2bcdcb4f3ae4695"
+          ],
+          "confirmation_bar_dates": [
+            "2026-09-30",
+            "2026-09-29"
+          ],
+          "confirmation_bar_validation_status": [
+            "validated_with_warning",
+            "validated_with_warning"
+          ]
+        }
+      }
+    ],
+    "commodity_prices_count_in_provenance": 1
+  },
+  "archived_records_touching_these_ids": [
+    {
+      "record_id": "rec_0e54cdfb49374716996684b143e6c459",
+      "record_type": "commodity_price",
+      "table_name": "commodity_prices",
+      "business_key": {
+        "commodity": "copper",
+        "instrument_type": "futures",
+        "market": "SHFE",
+        "contract": "CU0",
+        "frequency": "realtime",
+        "trade_date": "2026-09-30",
+        "observed_at": "2026-09-30T15:00:00",
+        "effective_provider": "akshare"
+      },
+      "superseded_by_record_id": "rec_924985f4fefc4f96887020e239dd2cc6",
+      "archived_at": "2026-10-07 00:22:01.593420",
+      "request_id": "req_c1eac1a480e64663"
+    }
+  ],
+  "snapshot_date_confirmation": {
+    "realtime_records": [
+      {
+        "record_id": "rec_924985f4fefc4f96887020e239dd2cc6",
+        "trade_date": "2026-09-30",
+        "observed_at": "2026-09-30 15:00:00.000000",
+        "latest": 109680.0,
+        "pre_settle": 109300.0,
+        "date_confidence": "confirmed_last_session",
+        "date_resolution_details": {
+          "vendor_time_value": "150000",
+          "observed_date_inferred_from_fetch": true,
+          "collection_time": "2026-10-07T00:22:01.583130+08:00",
+          "provisional_trade_date": "2026-10-07",
+          "confirmation_reason": "latest 109680.0 == close of 2026-09-30 daily bar and pre_settle 109300.0 == settle of 2026-09-29 daily bar",
+          "daily_request_id": "req_205fdb87bcc04e0c",
+          "daily_bars_available": 37,
+          "reference_bars": [
+            {
+              "record_id": "rec_3598cf0777b045c1a2bcdcb4f3ae4695",
+              "trade_date": "2026-09-29",
+              "close": 109570.0,
+              "settle": 109300.0,
+              "validation_status": "validated_with_warning"
+            },
+            {
+              "record_id": "rec_8b799004443b4680bda20b894efd1e11",
+              "trade_date": "2026-09-30",
+              "close": 109680.0,
+              "settle": 109570.0,
+              "validation_status": "validated_with_warning"
+            }
+          ],
+          "confirmation_bar_record_ids": [
+            "rec_8b799004443b4680bda20b894efd1e11",
+            "rec_3598cf0777b045c1a2bcdcb4f3ae4695"
+          ],
+          "confirmation_bar_dates": [
+            "2026-09-30",
+            "2026-09-29"
+          ],
+          "confirmation_bar_validation_status": [
+            "validated_with_warning",
+            "validated_with_warning"
+          ]
+        },
+        "validation_status": "validated_with_warning",
+        "request_id": "req_97a4a2e048a14a3b",
+        "fetch_time": "2026-10-07 00:22:01.583364"
+      }
+    ],
+    "reference_daily_bars": [
+      {
+        "record_id": "rec_3598cf0777b045c1a2bcdcb4f3ae4695",
+        "trade_date": "2026-09-29",
+        "close": 109570.0,
+        "settle": 109300.0,
+        "validation_status": "validated_with_warning",
+        "fetch_time": "2026-10-07 00:20:02.519307"
+      },
+      {
+        "record_id": "rec_8b799004443b4680bda20b894efd1e11",
+        "trade_date": "2026-09-30",
+        "close": 109680.0,
+        "settle": 109570.0,
+        "validation_status": "validated_with_warning",
+        "fetch_time": "2026-10-07 00:20:02.519307"
+      }
+    ]
+  }
+}

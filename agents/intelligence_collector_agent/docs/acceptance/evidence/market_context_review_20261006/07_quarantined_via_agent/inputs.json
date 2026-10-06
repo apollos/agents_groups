@@ -1,0 +1,77 @@
+{
+  "scenario": "07_quarantined_via_agent",
+  "description": "隔离数据：模拟 HSTECH 最新日线 validation_status=quarantined，经工具 CLI（真实子进程边界）返回 Agent。Agent 不保存快照、不计入覆盖；被拦截端点的涨跌幅为 null+reason。",
+  "data_mode": "simulated",
+  "code_commit": "4d1066553cf67f886577c857ff2d8ec8c9be5f4a",
+  "driver": "sim_agent_driver.py + sim_cli.py + fake_python.sh (copied alongside)",
+  "agent_cli_equivalent": "intel-agent --config ... --debug agent run-once  (setup_logging(debug=True); adapter forwards --debug/--trace-id)",
+  "ticket": {
+    "ticket_id": "ticket_aaa1f7174b6a4965afd5",
+    "correlation_id": "corr-07-quarantine",
+    "task": {
+      "task_id": "task-quarantine",
+      "task_type": "market_context_snapshot",
+      "tool_name": "market_context_collector",
+      "idempotency_key": "mctx-task-quarantine",
+      "as_of": "2026-10-06T09:00:00+08:00",
+      "demand_id": "demand_market_context_daily",
+      "target": {
+        "target_id": "index_hstech",
+        "context_id": "index_hstech",
+        "target_type": "market_context",
+        "context_type": "hk_index",
+        "name": "恒生科技指数",
+        "symbol": "HSTECH",
+        "metrics": [
+          "close"
+        ]
+      }
+    }
+  },
+  "tool_command": [
+    "/tmp/mctx_verify/fake_python.sh",
+    "-m",
+    "stock_data_ingestion.cli",
+    "--debug",
+    "fetch",
+    "market-context",
+    "--context-type",
+    "hk_index",
+    "--symbol",
+    "HSTECH",
+    "--compact",
+    "--context-id",
+    "index_hstech",
+    "--trace-id",
+    "corr-07-quarantine",
+    "--as-of",
+    "2026-10-06",
+    "--metrics",
+    "close",
+    "--requested-by",
+    "intelligence_collector_agent"
+  ],
+  "tool_request_id": "mctx_9576fd9c65f74a0d",
+  "stock_data_request_id": "req_3656b4c0e39347f2",
+  "temp_tool_sqlite": "/tmp/mctx_verify/work/07_quarantined_via_agent/db.sqlite",
+  "temp_agent_sqlite": "/tmp/mctx_verify/work/07_quarantined_via_agent/agent/data.db",
+  "checks": {
+    "agent_forwarded_debug_and_trace": true,
+    "tool_response_failed_unusable": true,
+    "tool_value_retained_for_inspection": true,
+    "upstream_validation_blocked_warning": true,
+    "blocked_endpoint_changes_are_null_with_reason": true,
+    "head_bar_quarantined_in_tool_db": true,
+    "request_record_links_written": true,
+    "agent_ticket_failed_not_retried": true,
+    "no_snapshot_saved": true,
+    "not_counted_in_coverage": true,
+    "data_quality_issue_raised": true,
+    "collection_result_failed_unusable": true,
+    "agent_outcome_event": true,
+    "tool_stderr_sunk_with_same_trace": true,
+    "tool_events_include_quality_decision_and_summary": true,
+    "data_mode_simulated_everywhere": true
+  },
+  "code_commit_note": "code state the scenario ran against: 5eb4c3d (main change set) + this follow-up commit (single-WARNING for unknown date; agent data_mode default field)"
+}
