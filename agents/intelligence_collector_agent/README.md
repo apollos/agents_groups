@@ -693,6 +693,38 @@ stock_data 质量检查包括：
   MIC / A 股链路不受影响。
 - 盘中能力必须先跑 `tools verify-capabilities`。
 
+### market_context_collector（V0.11 起委托给 stock_data_collector）
+
+市场背景数据（A 股指数 / 港股指数 / 汇率 / 商品 / 利率）的采集本体在工具侧：agent 通过子进程调用
+`stock_data_ingestion.cli fetch market-context`（与 stock_data_collector 共用 `config_dir` /
+`working_dir` / `python_executable`，超时 `tools.market_context_collector.timeout_seconds`）。
+**agent 侧不再 import akshare、不再出现供应商函数名、列名解析、单位换算或涨跌幅计算**；这些全部在
+工具的 `config/market_context_sources.yaml` 与 `MarketContextService` 内完成。
+
+研究池 YAML 中 `market_contexts` 条目的字段归属：
+
+| 字段 | 归属 | 说明 |
+|---|---|---|
+| `context_id / context_type / symbol / name` | Agent（研究目标身份） | `context_type ∈ {equity_index, hk_index, fx, commodity, interest_rate}`；`symbol` 为工具注册表中的业务代码（`000300`、`HSTECH`、`HKDCNY`、`CU0`、`CN_CGB_10Y`） |
+| `frequency / metrics / market / contract / instrument_type / tenor / rate_type / max_staleness_days / priority` | Agent（研究需求） | 原样传给工具 CLI；汇率方向必须写 `<外币>CNY`（如 `HKDCNY`），`CNY***` 会被警告 |
+| `akshare_func / akshare_args / date_column / value_column / unit / provider` | **已迁出** | 现属 `tools/stock_data_collector/config/market_context_sources.yaml`；旧 YAML 仍含这些字段时注册会给出迁移 warning 并忽略它们，不会静默生效 |
+
+工具返回后 agent 的处理：
+
+- `quality.usable && is_fresh` → 作为研究材料，计入当日 market context 覆盖。
+- `usable && !is_fresh`（节假日 / 数据源未更新）→ 仍落库（保留**真实数据日** `data_date`），记 P3
+  `market_context_stale`，ticket `done (stale)`，`collection.result` 带 `status=stale`，**不计入**当日覆盖
+  （`eval` / dashboard 的 `coverage_ratio` 只数 fresh）。
+- 可重试错误（超时、所有数据源失败）→ 走既有队列重试，计入 circuit breaker。
+- 配置/依赖/权限类错误（未知 symbol、`INVALID_MARKET_CONTEXT_CONFIG`、akshare 未安装）→ 不重试，
+  P2 `market_context_collect_failed` 带 `manual_action` 提示修哪个文件；不触发 breaker。
+- `market_context_snapshots`（schema v10）新增 `data_date / is_fresh / freshness_status / metric /
+  change_kind / provider / source_api / tool_request_id / quality_json / provenance_json`；旧行这些列为
+  NULL，看板与 `eval` 显示为"新鲜度未知（旧数据）"。涨跌幅口径随行保存：价格类 `percent`，利率类
+  `percentage_point`（1/5/20 期的 `period_unit` 为交易日或观测日，样本不足给 null + reason，不补零）。
+
+本机真实链路验收见 `docs/acceptance/collector_acceptance_20261006_market_context.md`。
+
 ## 16. 内部读取 CLI
 
 Reader 仅用于内部测试、调试和 CLI。多 Agent 服务化时，其他 Agent 应通过消息机制查询，不应直接调用 Reader。

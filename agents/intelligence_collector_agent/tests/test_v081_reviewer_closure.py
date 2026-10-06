@@ -260,6 +260,7 @@ def _context_target(context_id: str) -> dict:
         "context_id": context_id,
         "context_type": "equity_index",
         "name": context_id,
+        "symbol": "000300",
         "collect_mic": False,
         "collect_stock": False,
     }
@@ -322,6 +323,8 @@ def test_market_context_coverage_reports_missing_contexts(tmp_path: Path):
     assert out["contexts_with_snapshot"] == 1
     assert out["missing_snapshot"] == ["fx_cny_hkd"]
     assert out["missing_value"] == []
+    # No freshness info on the result (legacy-style row): unknown, and not counted as fresh coverage.
+    assert out["unknown_freshness"] == ["index_csi_300"] and out["contexts_fresh"] == 0
 
 
 # ---------------------------------------------------------------------------
@@ -354,8 +357,10 @@ def test_request_batch_registers_market_contexts(tmp_path: Path):
     assert demand["task_profile"]["market_context"]["enabled"] is True
     target = demand["targets"][0]
     assert target["target_type"] == "market_context"
-    assert target["context_id"] == "index_csi_300"
-    assert target["akshare_func"] == "stock_zh_index_daily_em"
+    assert target["context_id"] == "index_csi_300" and target["symbol"] == "000300" and target["frequency"] == "1d"
+    # V0.9: vendor bindings no longer live on the agent target; legacy fields are dropped with a warning.
+    assert not any(k in target for k in ("akshare_func", "akshare_args", "date_column", "value_column", "unit"))
+    assert any("index_csi_300" in w and "akshare_func" in w and "market_context_sources.yaml" in w for w in out["warnings"])
     assert target["collect_mic"] is False
     # No MIC profile is written for context rows.
     mic_profiles = yaml.safe_load((tmp_path / "mic_config" / "target_profiles.yaml").read_text(encoding="utf-8"))
@@ -367,8 +372,11 @@ def test_research_pool_full_yaml_market_contexts_section():
         (Path(__file__).resolve().parents[1] / "examples" / "research_pool_full.yaml").read_text(encoding="utf-8")
     )
     contexts = spec["market_contexts"]
-    assert {c["context_id"] for c in contexts} >= {"index_csi_300", "fx_cny_hkd", "commodity_copper"}
-    assert all(c.get("akshare_func") for c in contexts)
+    assert {c["context_id"] for c in contexts} >= {"index_csi_300", "fx_hkd_cny", "commodity_copper", "rate_cn_cgb_10y"}
+    # Business need only: every entry names a context_type + symbol, none carries vendor bindings.
+    assert all(c.get("context_type") and c.get("symbol") for c in contexts)
+    assert not any(c.get(k) for c in contexts for k in ("akshare_func", "akshare_args", "date_column", "value_column"))
+    assert next(c for c in contexts if c["context_id"] == "fx_hkd_cny")["symbol"] == "HKDCNY"
     assert spec["demands"]["demand_market_context_daily"]["kind"] == "market_context"
 
 

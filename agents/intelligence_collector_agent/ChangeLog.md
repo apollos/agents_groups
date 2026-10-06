@@ -4,6 +4,46 @@
 
 ---
 
+## V0.11.0 — 2026-10-06：市场背景数据采集下沉到 stock_data_collector（架构归位）
+
+与 V0.9.1 港股通下沉同一原则：Agent 不再直接调用 AKShare 拉取指数 / 汇率 / 商品 / 利率。
+
+- **`MarketContextAdapter` 重写为薄 CLI 层**：子进程调用 `stock_data_ingestion.cli fetch market-context`
+  （复用 `tools.stock_data_collector.{config_dir, working_dir, python_executable}`，`INTEL_AGENT_PYTHON` 覆盖；
+  超时 `tools.market_context_collector.timeout_seconds`，默认 180s）。删除 `import akshare`、`akshare_func`
+  动态查找、供应商参数拼装、中文列名识别 / 数值解析 / 单位换算、排序取最新、日期推断、源重试与兜底、
+  通用 1/5/20 期涨跌幅计算。错误码：`MARKET_CONTEXT_TIMEOUT` / `MARKET_CONTEXT_CLI_FAILED`（可重试）、
+  `MARKET_CONTEXT_CLI_UNAVAILABLE` / `MARKET_CONTEXT_INVALID_TARGET` / 配置类失败（不可重试，附人工处理提示）。
+- **工具侧新增能力**（stock_data_collector V0.5）：`fetch market-context` / `query market-context` CLI、
+  `StockDataCollector.fetch_market_context`、`MarketContextService`（as_of / 历史窗口语义、新鲜度、变动口径、
+  异常检查、快照归属日校正、溯源）、`FxRateRecord / CommodityPriceRecord / InterestRateRecord` 与同名表、
+  `config/market_context_sources.yaml`（供应商函数 / 参数模板 / 列映射 / 单位 / 兜底顺序 / 业务代码注册表），
+  东财被 WAF 拒绝时 A 股指数自动回退新浪，所有接口调用带硬超时，`STOCK_DATA_PREFER_IPV4` 解决 IPv6 黑洞挂死。
+- **结果语义**：请求日 ≠ 数据日。`result.data_date` 为实际数据日，节假日 / 未更新返回最近真实数据并标
+  `quality.status=stale`；历史请求不会把今天的值贴到历史日期；汇率方向显式（`HKDCNY`、每 100 外币、
+  `rate_type` 区分买卖 / 中间价）；商品区分 spot/futures、`close` 与 `settle`、快照 `latest` 与 `pre_settle`；
+  利率带 `tenor / rate_type`，变动用百分点 + bp；样本不足 → null + `insufficient_history`，不补零；
+  realtime 快照不伪造历史涨跌幅（`realtime_only_snapshot`）。
+- **Agent 处理**：fresh 可用 → 研究材料并计入覆盖；stale → 落库 + P3 `market_context_stale` + ticket `done (stale)`
+  + `collection.result status=stale`，不计入当日覆盖，不触发 breaker；可重试 → 队列重试；配置 / 依赖类 → P2
+  `market_context_collect_failed` 含 `manual_action`，不重试。
+- **schema v10**：`market_context_snapshots` 新增 `data_date / is_fresh / freshness_status / metric / change_kind /
+  provider / source_api / tool_request_id / quality_json / provenance_json`；旧库自动迁移，旧行为 NULL =
+  "新鲜度未知"，`eval market-context` 与 dashboard 分别显示 fresh / stale / unknown，`coverage_ratio` 只数 fresh。
+- **配置迁移**：研究池 `market_contexts` 保留，字段归属重划——身份（`context_id/context_type/symbol/name`）与
+  需求（`frequency/metrics/market/contract/instrument_type/tenor/rate_type/max_staleness_days/priority`）留在 Agent；
+  `akshare_func/akshare_args/date_column/value_column/unit/provider` 迁到工具配置，旧 YAML 仍含这些字段时
+  `demand register` 给出迁移 warning 并忽略（不静默）。`CNY***` 方向写法警告并建议 `***CNY`。
+  `examples/research_pool_full.yaml` 六个 market context 已迁移；`config/intelligence_collector.yaml`
+  `tools.market_context_collector` 去掉 `provider`。
+- 测试：`tests/test_v09_market_context.py`（边界源码扫描、假 CLI 适配器、持久化 / 迁移 / 覆盖、agent 任务
+  stale/重试/人工处理、request center 字段归属）；工具侧 `tests/test_market_context.py`（19 项）。
+  Agent 239 passed，工具 145 passed。
+- 2026-10-06 本机真实链路验收（Agent → CLI → 工具 → 新浪 / 中行 / 中债）：六个 context 全部 `done`，
+  HKDCNY、HSTECH 当日 fresh，国庆休市期间 A 股指数 / 商品 / 国债收益率如实返回 2026-09-30 并标 stale；
+  重复投递 5 秒内从库回放、数值一致。东财接口在本机被 WAF 拒绝，**未验证**（已自动回退新浪）。
+  详见 `docs/acceptance/collector_acceptance_20261006_market_context.md`。
+
 ## V0.10.0 — 2026-10-01：MIC 采集改为受监督子进程；接入本地浏览器搜索路线（设计 C5b）
 
 对应 MIC 设计 `tools/market_intelligence_collector/docs/design/local_browser_search.md` 第 8、14、15 节。

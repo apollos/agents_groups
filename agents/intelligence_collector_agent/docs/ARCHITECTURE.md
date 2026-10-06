@@ -94,6 +94,10 @@ Tool Run / Event / Feature / Quality Ticket
 
 - MIC：通过 `from mic.api import AnalystAPI` 调用。
 - stock_data_collector：通过 `python -m stock_data_ingestion.cli` 调用。
+- 港股通快照、市场背景数据（指数 / 汇率 / 商品 / 利率）同样经 `stock_data_ingestion.cli fetch hk-connect|market-context`
+  取数；**Agent 代码不直接依赖任何行情供应商 SDK**（akshare / tushare / baostock 只存在于工具环境）。
+  供应商函数、参数、列名与单位口径在工具配置内声明；Agent 只描述业务需求（类别、业务代码、请求日、频率、口径），
+  并接收带实际数据日、单位、来源、质量与溯源的标准化结果。`tests/test_v09_market_context.py` 以源码扫描守护这条边界。
 
 如果工具不可用，Agent 会生成失败结果 / `FAULT_TICKET` / `DATA_QUALITY_TICKET`，而不是伪造成功。
 

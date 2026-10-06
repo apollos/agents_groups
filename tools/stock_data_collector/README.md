@@ -156,6 +156,7 @@ export STOCK_DATA_DISABLE_ENV_AUTOLOAD=true
 | `STOCK_DATA_CANONICAL_PROVIDER` | canonical provider | 推荐 `tushare` |
 | `STOCK_DATA_DISABLED_PROVIDERS` | 禁用 provider | 推荐 `joinquant` |
 | `STOCK_DATA_PROVIDERS_<REQUEST_TYPE>` | 按请求类型覆盖 provider | 可选，例如 `STOCK_DATA_PROVIDERS_MONEY_FLOW=tushare,akshare` |
+| `STOCK_DATA_PREFER_IPV4` | 对 AKShare/urllib3 强制 IPv4 解析（见 §6.16） | 可选；主机 IPv6 到国内站点"黑洞"（连接挂死）时设为 `true` |
 
 ---
 
@@ -353,9 +354,12 @@ financial-indicator
 financial-statement
 money-flow
 hk-connect
+market-context
 trading-status
 corporate-action
 ```
+
+`market-context` 为市场背景数据统一入口（A 股指数 / 港股指数 / 汇率 / 商品 / 利率，见 §6.16）。
 
 其中 `hk-connect` 为港股通结构化快照（南向持股/资格/1/5/10 日市值变化，东财数据源，
 可选依赖 akshare），**只返回结构化 JSON、不落本工具库**——快照属研究域数据，由调用方
@@ -382,6 +386,7 @@ python -m stock_data_ingestion.cli fetch hk-connect --tickers 00700.HK 09988.HK 
 bars
 conflicts
 meta-summary
+market-context
 ```
 
 当前 `verify` 命令：
@@ -631,6 +636,87 @@ python -m stock_data_ingestion.cli --config-dir config verify raw \
   "verified": true
 }
 ```
+
+### 6.16 市场背景数据 `fetch market-context`（V0.5）
+
+市场背景数据（A 股指数、港股指数、汇率、商品、利率/国债收益率）的**唯一**采集入口。
+intelligence_collector_agent 等调用方不再直接调用 AKShare，而是通过本命令取数；供应商函数名、
+参数模板、列名映射、单位口径只存在于 `config/market_context_sources.yaml`。
+
+```bash
+# 请求按业务含义描述：类别 + 业务代码 + 请求日；不出现任何供应商函数名
+python -m stock_data_ingestion.cli --config-dir config fetch market-context \
+  --context-type equity_index --symbol 000300 --as-of 2026-10-06 --compact
+python -m stock_data_ingestion.cli --config-dir config fetch market-context \
+  --context-type hk_index --symbol HSTECH --as-of 2026-10-06
+python -m stock_data_ingestion.cli --config-dir config fetch market-context \
+  --context-type fx --symbol HKDCNY --metrics spot_sell --as-of 2026-10-06
+python -m stock_data_ingestion.cli --config-dir config fetch market-context \
+  --context-type commodity --symbol CU0 --instrument-type futures --metrics close settle --as-of 2026-10-06
+python -m stock_data_ingestion.cli --config-dir config fetch market-context \
+  --context-type commodity --symbol CU0 --frequency realtime --as-of 2026-10-06      # 盘中快照
+python -m stock_data_ingestion.cli --config-dir config fetch market-context \
+  --context-type interest_rate --symbol CN_CGB_10Y --tenor 10Y --as-of 2026-10-06
+# 历史区间（永远不会把"今天"的值贴到历史日期上）
+python -m stock_data_ingestion.cli --config-dir config fetch market-context \
+  --context-type hk_index --symbol HSTECH --start-date 2026-09-01 --end-date 2026-09-15
+```
+
+参数：`--context-type {equity_index,hk_index,fx,commodity,interest_rate}`、`--symbol`（业务代码，
+见配置 `symbols` 注册表）、`--as-of`（请求日，默认今天）、`--start-date/--end-date`（历史模式）、
+`--frequency {1d,realtime}`、`--metrics`（默认按类别：close / spot_sell / close+settle / rate_value）、
+类别限定 `--market --contract --instrument-type --tenor --rate-type`、`--max-staleness-days`（默认 3）、
+`--cross-validate`、`--no-save`（不落库 dry-run）、`--compact`（裁掉 `stock_data_response` 大字段）。
+
+响应 `result` 固定包含：
+
+| 字段组 | 内容 |
+|---|---|
+| 身份 | `context_type / symbol / name / identity{index_code, base_currency, quote_currency, quote_basis, commodity, contract, instrument_type, market, tenor, rate_type, currency, ...}` |
+| 三个时间 | `request_window.as_of`（请求日）、`data_date`（**实际数据日**，日线=交易日，快照=归属交易日）、`observed_at`（快照时间戳）、`collected_at`（采集时间） |
+| 取值 | `metric / value / unit / values{...}`；单位显式（`index_points`、`CNY per 100 HKD`、`CNY/ton`、`percent`） |
+| 变动 | `changes{1p,5p,20p}`，每项含 `periods / period_unit(trading_day|observation) / kind(percent|percentage_point|basis_points|...) / value / reason`。利率用百分点与 bp，不用百分比；样本不足给 `reason=insufficient_history`、值为 null，不补零；realtime 快照只给 `snapshot_vs_pre_settle|pre_close`，历史变动来自已确认日线，无日线则 `reason=realtime_only_snapshot` |
+| 来源 | `source{provider, source_api(实际命中的接口), source_url, source_site, adapter_version}` |
+| 质量 | `quality{usable, status(fresh|stale|missing|failed), is_fresh, staleness_days, max_staleness_days, data_date_matches_as_of, observations, missing_fields, single_source, cross_validated, conflicts, anomalies, warnings, data_quality_score}` |
+| 溯源 | `provenance{stock_data_request_id, ingestion_run_ids, record_ids, raw_payload_ids, raw_payload_refs, parquet_refs}` |
+
+语义约束：
+
+- 请求日/采集日**不是**数据日。节假日或数据源未更新时返回最近真实数据日并标 `stale`
+  （`staleness_days` 按日历日计算），`status=partial_success`；调用方据 `quality.is_fresh` 决定是否计入当日覆盖。
+- 外汇方向显式：`HKDCNY` = `quote_basis` 单位港币折人民币（中行牌价为每 100 外币），`rate_type` 区分
+  `spot_buy / cash_buy / spot_sell / central_parity / boc_conversion`；配置里的 `CNY***` 写法不受支持。
+- 商品 `instrument_type`（spot/futures）、`contract`（如 `CU0` 主连）、`market`（SHFE/GFEX/...）、
+  `price_unit` 全部进入业务键；日线 `close` 与 `settle` 并存，快照 `latest` 与 `pre_settle/pre_close` 并存，不混用。
+- 利率 `tenor / rate_type / market` 进入业务键，`unit=percent`。
+- 幂等：相同 `(类别, 代码, 市场/合约/期限/口径, 频率, 窗口, provider)` 当天重复请求不重复抓取，直接从库中回放
+  （`warnings` 含 `served_from_store`）；realtime 幂等粒度为分钟。
+
+数据源与兜底（均在 `config/market_context_sources.yaml` 内声明，可直接改配置换源）：
+
+| 类别 | 主源 → 兜底 | 说明 |
+|---|---|---|
+| `equity_index` | 复用 `index_data`：`stock_zh_index_daily_em`（东财）→ `stock_zh_index_daily`（新浪） | 东财 WAF 拒绝无浏览器特征客户端时自动回退，响应 `warnings` 带 `source_fallback:` |
+| `hk_index` | `stock_hk_index_daily_sina` → `stock_hk_index_daily_em` | HSTECH / HSI / HSCEI |
+| `fx` | `currency_boc_sina`（中行牌价） | 每 100 外币；`currency_names` 决定支持的币种 |
+| `commodity` | 日线 `futures_zh_daily_sina`；realtime `futures_zh_spot` | 快照归属日用同合约日线确认（`snapshot_date_confidence`） |
+| `interest_rate` | `bond_china_yield`（中债曲线）→ `bond_zh_us_rate`；SHIBOR 用 `rate_interbank` | 期限列映射在 `tenor_columns` / `series_map` |
+
+每个接口调用受 `call_deadline_seconds`（默认 60s）硬超时保护；主机 IPv6 到国内站点黑洞时设置
+`STOCK_DATA_PREFER_IPV4=true`（.env），否则 akshare 底层 requests 会在 IPv6 上挂死直到超时。
+
+查询已落库数据：
+
+```bash
+python -m stock_data_ingestion.cli --config-dir config query market-context --context-type fx --base-currency HKD --quote-currency CNY --rate-type spot_sell
+python -m stock_data_ingestion.cli --config-dir config query market-context --context-type commodity --commodity copper --instrument-type futures --start-date 2026-09-01
+python -m stock_data_ingestion.cli --config-dir config query market-context --context-type interest_rate --tenor 10Y --rate-type CGB
+python -m stock_data_ingestion.cli --config-dir config query market-context --context-type hk_index --index-code HSTECH
+```
+
+错误码：`INVALID_REQUEST`（未知业务代码/类别，不可重试，提示去配置 `symbols` 注册表）、
+`PROVIDER_TIMEOUT` / `UNKNOWN_ERROR`（所有源都失败，可重试）、`PROVIDER_UNAVAILABLE`（akshare 未安装）。
+本机验收记录见 `agents/intelligence_collector_agent/docs/acceptance/collector_acceptance_20261006_market_context.md`。
 
 ---
 
@@ -933,6 +1019,10 @@ Agent 用它判断：
 | `industry_concept` | `industry_memberships` / `concept_memberships` | 同名 | 同名 | provider-specific |
 | `money_flow` | `money_flow` | `money_flow` | `money_flow` | `normalized_ticker + trade_date + effective_provider` 或 source methodology |
 | `index_data` | `indices` / `index_bars` / `index_constituents` | 同名 | 同名 | 见各表 |
+| `market_context` equity_index / hk_index | `index_bars` | `index_bars` | `index_bars` | `index_code + frequency + trade_date + effective_provider` |
+| `market_context` fx | `fx_rates` | `fx_rates` | `fx_rate` | `base_currency + quote_currency + quote_basis + rate_type + market + rate_date + effective_provider` |
+| `market_context` commodity | `commodity_prices` | `commodity_prices` | `commodity_price` | `commodity + instrument_type + contract + market + frequency + trade_date(+observed_at) + effective_provider` |
+| `market_context` interest_rate | `interest_rates` | `interest_rates` | `interest_rate` | `rate_type + market + tenor + rate_date + effective_provider` |
 | `corporate_action` | `corporate_actions` | `corporate_actions` | `corporate_actions` | `normalized_ticker + action_type + announcement_date + ex_date + effective_provider` |
 
 元数据表包括：`source_fetch_logs`、`provider_comparisons`、`data_quality_conflicts`、`raw_payload_index`、`ingestion_requests`、`ingestion_runs`、`ticker_mappings` 等。
