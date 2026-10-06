@@ -39,6 +39,7 @@ logger = get_logger("cli")
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="intel-agent")
     parser.add_argument("--config", required=True, help="Path to intelligence collector YAML config")
+    parser.add_argument("--debug", action="store_true", help="DEBUG-level logs here and in tool subprocesses (default INFO)")
     sub = parser.add_subparsers(dest="command", required=True)
 
     init_db = sub.add_parser("init-db")
@@ -280,6 +281,7 @@ def main(argv: list[str] | None = None) -> None:
         cfg.runtime.log_dir,
         level=str(cfg.get("logging.level", "INFO")),
         retention_days=int(cfg.get("logging.retention_days", 14)),
+        debug=True if args.debug else None,
     )
     logger.info("cli invoked: command=%s", args.command)
     if args.command == "init-db" and getattr(args, "reset", False):

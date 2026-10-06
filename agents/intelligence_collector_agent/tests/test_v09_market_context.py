@@ -445,6 +445,133 @@ def test_agent_retryable_failure_requeues_and_config_failure_asks_for_manual_act
 
 
 # ---------------------------------------------------------------------------
+# Structured logging: trace propagation, --debug forwarding, tool stderr sink, agent_outcome
+# ---------------------------------------------------------------------------
+def _tool_stderr_line(event, trace_id, level="DEBUG", **extra):
+    return json.dumps({"event": event, "timestamp": "2026-07-06T09:00:00+08:00", "level": level, "trace_id": trace_id, "request_id": "req_1",
+                       "parent_request_id": None, "ingestion_run_id": None, "context_id": "index_csi_300", "context_type": "equity_index",
+                       "symbol": "000300", "idempotency_key": None, **extra}, ensure_ascii=False)
+
+
+def test_adapter_forwards_debug_and_trace_and_sinks_stderr_on_success_failure_and_timeout(monkeypatch, tmp_path):
+    from agent_trade_intel.logging_setup import ToolLogSink
+
+    sink = ToolLogSink(tmp_path / "logs" / "tool_stderr.jsonl")
+    stderr = _tool_stderr_line("record_write", "trace-1") + "\n" + _tool_stderr_line("request_summary", "trace-1", level="INFO") + "\n"
+    cli = FakeCLI(tool_payload(value=4026.0, data_date=AS_OF), stderr=stderr)
+    adapter = adapter_with(monkeypatch, cli, debug=True, log_sink=sink)
+    ok = adapter.collect_snapshot(context=CTX, as_of=AS_OF, trace_id="trace-1")
+    cmd = cli.cmds[0]
+    assert ok.status == "success"
+    assert cmd.index("--debug") < cmd.index("fetch"), "--debug is a top-level tool CLI flag"
+    assert cmd[cmd.index("--trace-id") + 1] == "trace-1"
+    lines = [json.loads(l) for l in (tmp_path / "logs" / "tool_stderr.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [l["event"] for l in lines] == ["record_write", "request_summary"], "stderr is persisted on success, not only on failure"
+    assert all(l["trace_id"] == "trace-1" for l in lines)
+
+    # Failure: JSON lines kept verbatim, a traceback line is wrapped so the file stays JSONL.
+    failed = FakeCLI(rc=1, stdout="", stderr=_tool_stderr_line("persist_failed", "trace-2", level="ERROR") + "\nTraceback (most recent call last):\n  boom\n")
+    adapter_with(monkeypatch, failed, debug=False, log_sink=sink).collect_snapshot(context=CTX, as_of=AS_OF, trace_id="trace-2")
+    assert "--debug" not in failed.cmds[0]
+    lines = [json.loads(l) for l in (tmp_path / "logs" / "tool_stderr.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert lines[2]["event"] == "persist_failed" and lines[2]["level"] == "ERROR"
+    assert lines[3]["event"] == "tool_stderr_text" and lines[3]["trace_id"] == "trace-2" and lines[3]["line"].startswith("Traceback")
+    assert lines[4]["event"] == "tool_stderr_text" and lines[4]["call_outcome"] == "rc=1"
+
+    # Timeout: the partial stderr carried by TimeoutExpired is persisted too.
+    timeout = subprocess.TimeoutExpired("cmd", 1, stderr=_tool_stderr_line("provider_call", "trace-3").encode("utf-8"))
+    r = adapter_with(monkeypatch, FakeCLI(exc=timeout), log_sink=sink).collect_snapshot(context=CTX, trace_id="trace-3")
+    assert r.errors[0]["error_code"] == "MARKET_CONTEXT_TIMEOUT"
+    lines = [json.loads(l) for l in (tmp_path / "logs" / "tool_stderr.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert lines[-1]["event"] == "provider_call" and lines[-1]["trace_id"] == "trace-3"
+    # Without a sink nothing is written and nothing breaks.
+    adapter_with(monkeypatch, FakeCLI(tool_payload(value=1.0, data_date=AS_OF), stderr="x")).collect_snapshot(context=CTX)
+
+
+def test_agent_emits_agent_outcome_and_passes_ticket_trace(tmp_path, monkeypatch):
+    import logging
+
+    from agent_trade_intel.logging_setup import JsonlEventFormatter, PACKAGE_LOGGER, _StructuredEventFilter
+
+    agent = _agent(tmp_path / "a")
+    captured: list[dict] = []
+
+    class Capture(logging.Handler):
+        def emit(self, record):
+            captured.append(json.loads(JsonlEventFormatter().format(record)))
+
+    handler = Capture()
+    handler.addFilter(_StructuredEventFilter())
+    pkg = logging.getLogger(PACKAGE_LOGGER)
+    pkg.addHandler(handler)
+    old_level = pkg.level
+    pkg.setLevel(logging.INFO)
+    try:
+        cli = FakeCLI(tool_payload(value=4026.0, data_date=AS_OF), stderr=_tool_stderr_line("request_summary", "ignored", level="INFO") + "\n")
+        monkeypatch.setattr(MarketContextAdapter, "_run_cli", lambda self, cmd: cli(cmd))
+        ticket_id = _dispatch(agent, "trace")
+        stale = tool_payload(value=4357.6, data_date="2026-06-30", status="partial_success", quality={"status": "stale", "is_fresh": False, "staleness_days": 6})
+        monkeypatch.setattr(MarketContextAdapter, "_run_cli", lambda self, cmd: FakeCLI(stale)(cmd))
+        stale_ticket = _dispatch(agent, "trace-stale")
+        monkeypatch.setattr(MarketContextAdapter, "_run_cli", lambda self, cmd: FakeCLI(rc=1, stdout="", stderr="ConnectionError")(cmd))
+        retry_ticket = _dispatch(agent, "trace-retry")
+    finally:
+        pkg.removeHandler(handler)
+        pkg.setLevel(old_level)
+
+    outcomes = [e for e in captured if e["event"] == "agent_outcome"]
+    assert len(outcomes) == 3 and all(e["level"] == "INFO" for e in outcomes)
+    ticket = agent.tickets.get(ticket_id)
+    first = outcomes[0]
+    assert first["trace_id"] == (ticket.get("correlation_id") or ticket_id)
+    assert cli.cmds[0][cli.cmds[0].index("--trace-id") + 1] == first["trace_id"], "the tool receives the same trace id"
+    assert first["ticket_id"] == ticket_id and first["request_id"] == "mctx_test" and first["tool_request"]["symbol"] == "000300"
+    assert first["snapshot_saved"] is True and first["counted_as_coverage"] is True and first["final_status"] == "success"
+    assert first["value"] == 4026.0 and first["data_date"] == AS_OF and first["is_fresh"] is True
+    assert {"request_id", "parent_request_id", "ingestion_run_id", "idempotency_key", "context_id", "context_type", "symbol"} <= set(first)
+    second = outcomes[1]
+    assert second["ticket_id"] == stale_ticket and second["snapshot_saved"] is True and second["counted_as_coverage"] is False and second["final_status"] == "stale"
+    third = outcomes[2]
+    assert third["ticket_id"] == retry_ticket and third["snapshot_saved"] is False and third["counted_as_coverage"] is False
+    assert third["final_status"] == "failed" and third["message_action"] == "retry" and third["error_codes"] == ["MARKET_CONTEXT_CLI_FAILED"]
+    # Tool stderr of the successful call was copied by the agent into its own log dir.
+    sunk = (tmp_path / "a" / "logs" / "tool_stderr.jsonl").read_text(encoding="utf-8").splitlines()
+    assert any(json.loads(l).get("event") == "request_summary" for l in sunk)
+    assert agent.market_context.debug is False, "package logger at INFO -> tool not asked for DEBUG"
+
+
+def test_agent_cli_debug_flag_enables_debug_and_tool_forwarding(tmp_path, monkeypatch):
+    import logging
+
+    from agent_trade_intel import logging_setup
+
+    monkeypatch.setattr(logging_setup, "_configured", False)
+    pkg = logging.getLogger(logging_setup.PACKAGE_LOGGER)
+    old_handlers, old_level = list(pkg.handlers), pkg.level
+    try:
+        pkg.handlers.clear()
+        logging_setup.setup_logging(tmp_path / "logs", level="INFO", debug=True)
+        assert pkg.level == logging.DEBUG and logging_setup.debug_enabled()
+        assert any(getattr(h, "baseFilename", "").endswith("agent.jsonl") for h in pkg.handlers)
+        agent = _agent(tmp_path / "a")
+        assert agent.market_context.debug is True and agent.market_context.log_sink is not None
+        logging_setup.emit(logging_setup.get_logger("t"), logging.INFO, "probe", trace_id="t-1", foo="bar")
+        for h in pkg.handlers:
+            h.flush()
+        lines = [json.loads(l) for l in (tmp_path / "logs" / "agent.jsonl").read_text(encoding="utf-8").splitlines()]
+        assert lines[-1]["event"] == "probe" and lines[-1]["trace_id"] == "t-1" and lines[-1]["foo"] == "bar" and lines[-1]["parent_request_id"] is None
+        rotating = next(h for h in pkg.handlers if getattr(h, "baseFilename", "").endswith("agent.jsonl"))
+        assert rotating.maxBytes == 20 * 1024 * 1024 and rotating.backupCount == 5
+    finally:
+        for h in pkg.handlers:
+            h.close()
+        pkg.handlers.clear()
+        pkg.handlers.extend(old_handlers)
+        pkg.setLevel(old_level)
+        monkeypatch.setattr(logging_setup, "_configured", False)
+
+
+# ---------------------------------------------------------------------------
 # Request center field ownership
 # ---------------------------------------------------------------------------
 def test_request_center_rejects_targets_without_business_identity(tmp_path):

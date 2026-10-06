@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from datetime import date, datetime, time
 from typing import Any, Callable, Iterable, Sequence
@@ -13,6 +14,7 @@ from stock_data_ingestion.adapters.base import BaseDataAdapter
 from stock_data_ingestion.adapters.joinquant_adapter import JoinQuantAdapter
 from stock_data_ingestion.adapters.tushare_adapter import TushareAdapter
 from stock_data_ingestion.config import AppConfig, KNOWN_PROVIDERS, parse_provider_list
+from stock_data_ingestion.logging_config import debug_enabled, emit, get_logger, log_context
 from stock_data_ingestion.normalization.datetime_utils import (
     build_quote_time_bucket,
     infer_bar_start_end,
@@ -23,7 +25,7 @@ from stock_data_ingestion.normalization.datetime_utils import (
 from stock_data_ingestion.normalization.ticker import infer_exchange, normalize_ticker
 from stock_data_ingestion.normalization.units import compute_vwap, normalize_amount, normalize_currency, normalize_turnover_rate, normalize_volume
 from stock_data_ingestion.schemas.errors import ErrorCode, ErrorRecord
-from stock_data_ingestion.schemas.quality import MergeMethod, QualityReport, SourceRole, ValidationStatus
+from stock_data_ingestion.schemas.quality import MergeMethod, QualityReport, SourceRole, ValidationStatus, is_blocking_validation_status
 from stock_data_ingestion.schemas.records import (
     AdjFactorRecord,
     AdapterFetchStatus,
@@ -58,6 +60,8 @@ from stock_data_ingestion.utils.hashing import sha256_json
 from stock_data_ingestion.validation.comparison import DEFAULT_BAR_FIELDS, build_comparison_key, compare_standard_records
 from stock_data_ingestion.validation.merge_policy import apply_canonical_merge_policy, mark_provider_specific_append
 from stock_data_ingestion.validation.quality_score import score_record
+
+logger = get_logger("services.ingestion_runner")
 
 PROVIDER_SPECIFIC_REQUEST_TYPES = {RequestType.industry_concept, RequestType.money_flow}
 PROVIDER_SPECIFIC_RECORD_TYPES = {"industry_membership", "concept_membership", "money_flow"}
@@ -380,6 +384,20 @@ class IngestionRunner:
     def run(self, request: StockDataRequest) -> StockDataResponse:
         request = self._request_with_configured_providers(request)
         ingestion_run_id = f"run_{now_asia_shanghai().strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:8]}"
+        ctx = dict(request.extra_params.get("market_context") or {})
+        with log_context(
+            request_id=request.request_id,
+            ingestion_run_id=ingestion_run_id,
+            idempotency_key=request.idempotency_key,
+            trace_id=ctx.get("trace_id"),
+            parent_request_id=ctx.get("parent_request_id"),
+            context_id=ctx.get("context_id"),
+            context_type=ctx.get("context_type"),
+            symbol=ctx.get("symbol"),
+        ):
+            return self._run(request, ingestion_run_id)
+
+    def _run(self, request: StockDataRequest, ingestion_run_id: str) -> StockDataResponse:
         created_at = now_asia_shanghai()
         provider_results: list[ProviderFetchResult] = []
         raw_indices: list[RawPayloadIndexRecord] = []
@@ -751,8 +769,14 @@ class IngestionRunner:
             return [], list(records)
         tables: list[str] = []
         retained: list[StandardRecord] = []
+        # Structured write events are collected here and only emitted once the outer
+        # transaction has committed, so a logged write is a durable write.
+        detailed = debug_enabled(logger)
+        write_events: list[dict[str, Any]] = []
+        link_events: list[dict[str, Any]] = []
+        links_written = 0
         try:
-            from stock_data_ingestion.storage.repositories import MARKET_CONTEXT_BUSINESS_KEYS, Repository
+            from stock_data_ingestion.storage.repositories import MARKET_CONTEXT_BUSINESS_KEYS, MARKET_CONTEXT_VALUE_FIELDS, Repository
 
             with self.database.session() as session:
                 repo = Repository(session)
@@ -771,19 +795,51 @@ class IngestionRunner:
                 rejected: dict[str, list[tuple[str, str]]] = {}
                 for record in records:
                     if record.record_type in MARKET_CONTEXT_BUSINESS_KEYS:
-                        kept, table, action = repo.upsert_market_context_record(record)
+                        outcome = repo.upsert_market_context_record(record)
+                        kept = outcome.record
                         retained.append(kept)  # type: ignore[arg-type]
-                        if action in {"inserted", "replaced"}:
-                            tables.append(table)
-                        if action == "replaced":
+                        if outcome.action in {"inserted", "replaced"}:
+                            tables.append(outcome.table)
+                        if outcome.action == "replaced":
                             tables.append("market_context_record_revisions")
-                        elif action == "kept_existing":
+                        elif outcome.action == "kept_existing":
                             rejected.setdefault(str(record.record_type), []).append((record.record_id, getattr(kept, "record_id", "?")))
+                        # Every retained record is tied to this request -- including a stored
+                        # record kept over a rejected older incoming value -- in the same
+                        # transaction, so a later idempotent read of this request finds it.
+                        if repo.link_request_record(request.request_id, str(record.record_type), str(kept.record_id)):
+                            links_written += 1
+                        if detailed:
+                            fields = MARKET_CONTEXT_VALUE_FIELDS.get(str(record.record_type), ())
+                            write_events.append(
+                                {
+                                    "record_type": str(record.record_type),
+                                    "table": outcome.table,
+                                    "action": outcome.action,
+                                    "business_key": outcome.business_key,
+                                    "incoming_record_id": outcome.incoming_record_id,
+                                    "incoming_values": {f: getattr(record, f, None) for f in fields},
+                                    "incoming_fetch_time": getattr(record, "fetch_time", None),
+                                    "incoming_provider_update_time": getattr(record, "provider_update_time", None),
+                                    "existing_record_id": outcome.existing_record_id,
+                                    "final_record_id": str(kept.record_id),
+                                    "final_values": {f: getattr(kept, f, None) for f in fields},
+                                    "final_fetch_time": getattr(kept, "fetch_time", None),
+                                    "final_provider_update_time": getattr(kept, "provider_update_time", None),
+                                    "comparison_basis": outcome.comparison_basis,
+                                    "archived_record_ids": outcome.archived_record_ids,
+                                    "final_raw_payload_id": getattr(kept, "raw_payload_id", None),
+                                    "incoming_raw_payload_id": getattr(record, "raw_payload_id", None),
+                                }
+                            )
+                            link_events.append({"record_type": str(record.record_type), "record_id": str(kept.record_id), "action": outcome.action})
                     else:
                         inserted, table = repo.insert_standard_record(record)
                         retained.append(record)
                         if inserted:
                             tables.append(table)
+                if links_written:
+                    tables.append("market_context_request_records")
                 if warnings is not None:
                     for record_type, pairs in rejected.items():
                         incoming, stored = pairs[0]
@@ -793,7 +849,21 @@ class IngestionRunner:
                         )
         except Exception as exc:  # noqa: BLE001
             errors.append(self._error_from_exception(exc, ErrorCode.STORAGE_FAILED, "sqlite_persistence"))
+            emit(
+                logger,
+                logging.ERROR,
+                "persist_failed",
+                stage="sqlite_persistence",
+                error_type=type(exc).__name__,
+                error=str(exc)[:500],
+                records_attempted=len(records),
+            )
             return tables, list(records)
+        # Transaction committed: now the writes and request->record links are facts.
+        for event in write_events:
+            emit(logger, logging.DEBUG, "record_write", **event)
+        for event in link_events:
+            emit(logger, logging.DEBUG, "request_record_link", linked_request_id=request.request_id, **event)
         return tables, retained
 
     # ------------------------------------------------------------------
@@ -847,10 +917,26 @@ class IngestionRunner:
             details.update({"daily_request_id": daily_request_id, "daily_bars_available": len(bars)})
             if daily_note:
                 details["daily_collection_note"] = daily_note
+            # The last two sessions (bars are already one-per-date, date-sorted) are the only
+            # admissible references; both are recorded in the evidence whatever the outcome.
+            reference_bars = bars[-2:] if len(bars) >= 2 else list(bars)
+            details["reference_bars"] = [self._bar_evidence(bar) for bar in reference_bars]
 
-            match = self._match_snapshot_to_last_session(snapshot, bars)
+            match, reason = self._match_snapshot_to_last_session(snapshot, bars)
+            resolution_event = {
+                "snapshot_record_id": snapshot.record_id,
+                "commodity": snapshot.commodity,
+                "contract": snapshot.contract,
+                "vendor_time_value": details.get("vendor_time_value"),
+                "observed_date_inferred_from_fetch": details.get("observed_date_inferred_from_fetch"),
+                "provisional_trade_date": snapshot.trade_date,
+                "snapshot_latest": snapshot.latest,
+                "snapshot_pre_settle": snapshot.pre_settle,
+                "daily_request_id": daily_request_id,
+                "daily_bars_available": len(bars),
+                "reference_bars": details["reference_bars"],
+            }
             if match is None:
-                reason = self._unconfirmed_reason(snapshot, bars)
                 details["confirmation_reason"] = reason
                 errors.append(
                     ErrorRecord(
@@ -866,6 +952,16 @@ class IngestionRunner:
                         suggested_action="Retry after the next session's daily bar is published, or use frequency=1d.",
                     )
                 )
+                emit(logger, logging.DEBUG, "snapshot_date_resolution", rule="unknown", decision="rejected", confirmed_date=None, reason=reason, **resolution_event)
+                emit(
+                    logger,
+                    logging.WARNING,
+                    "snapshot_date_unknown",
+                    snapshot_record_id=snapshot.record_id,
+                    raw_payload_id=snapshot.raw_payload_id,
+                    reason=reason,
+                    reference_bars=details["reference_bars"],
+                )
                 continue
             confirmed_date, last_bar, prev_bar = match
             observed_at = snapshot.observed_at
@@ -874,6 +970,7 @@ class IngestionRunner:
                 {
                     "confirmation_bar_record_ids": [str(last_bar.get("record_id")), str(prev_bar.get("record_id"))],
                     "confirmation_bar_dates": [str(last_bar.get("trade_date")), str(prev_bar.get("trade_date"))],
+                    "confirmation_bar_validation_status": [str(last_bar.get("validation_status")), str(prev_bar.get("validation_status"))],
                     "confirmation_reason": (
                         f"latest {snapshot.latest} == close of {last_bar.get('trade_date')} daily bar and "
                         f"pre_settle {snapshot.pre_settle} == settle of {prev_bar.get('trade_date')} daily bar"
@@ -885,18 +982,38 @@ class IngestionRunner:
                     f"snapshot_belongs_to_previous_session: {snapshot.commodity}/{snapshot.contract or 'spot'} snapshot matches the "
                     f"{confirmed_date.isoformat()} daily bar; data_date corrected from provisional {snapshot.trade_date.isoformat()}"
                 )
-            out.append(
-                snapshot.model_copy(
-                    update={
-                        "trade_date": confirmed_date,
-                        "observed_at": datetime.combine(confirmed_date, observed_at.timetz()),
-                        "date_confidence": "confirmed_last_session",
-                        "date_resolution_details": details,
-                    },
-                    deep=True,
-                )
+            confirmed = snapshot.model_copy(
+                update={
+                    "trade_date": confirmed_date,
+                    "observed_at": datetime.combine(confirmed_date, observed_at.timetz()),
+                    "date_confidence": "confirmed_last_session",
+                    "date_resolution_details": details,
+                },
+                deep=True,
+            )
+            out.append(confirmed)
+            emit(
+                logger,
+                logging.DEBUG,
+                "snapshot_date_resolution",
+                rule="confirmed_last_session",
+                decision="saved",
+                confirmed_date=confirmed_date,
+                confirmed_observed_at=confirmed.observed_at,
+                reason=details["confirmation_reason"],
+                **resolution_event,
             )
         return out
+
+    @staticmethod
+    def _bar_evidence(bar: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "record_id": bar.get("record_id"),
+            "trade_date": str(bar.get("trade_date")) if bar.get("trade_date") is not None else None,
+            "close": _float(bar, "close"),
+            "settle": _float(bar, "settle"),
+            "validation_status": str(bar.get("validation_status")) if bar.get("validation_status") is not None else None,
+        }
 
     def _daily_bars_for_snapshot(
         self, snapshot: CommodityPriceRecord, request: StockDataRequest, ctx: dict[str, Any]
@@ -918,6 +1035,7 @@ class IngestionRunner:
                 save_cleaned=request.save_cleaned,
                 export_parquet=request.export_parquet,
                 requested_by=request.requested_by,
+                trace_id=ctx.get("trace_id"),
             )
         except Exception as exc:  # noqa: BLE001
             return [], None, f"daily request could not be built: {exc}"
@@ -927,7 +1045,9 @@ class IngestionRunner:
             "instrument_type": snapshot.instrument_type,
             "frequency": "1d",
         }
-        daily_request = build_market_context_stock_request(self.config, daily, identity, list(request.provider_priority), request.canonical_provider)
+        daily_request = build_market_context_stock_request(
+            self.config, daily, identity, list(request.provider_priority), request.canonical_provider, parent_request_id=request.request_id
+        )
         response = self.run(daily_request)
         bars = list(response.data.commodity_prices)
         note = None
@@ -959,35 +1079,50 @@ class IngestionRunner:
         bars = [by_date[key] for key in sorted(by_date)]
         return bars, daily_request.request_id, note
 
-    @staticmethod
+    @classmethod
     def _match_snapshot_to_last_session(
-        snapshot: CommodityPriceRecord, bars: list[dict[str, Any]]
-    ) -> tuple[date, dict[str, Any], dict[str, Any]] | None:
-        if len(bars) < 2 or snapshot.latest is None or snapshot.pre_settle is None:
-            return None
+        cls, snapshot: CommodityPriceRecord, bars: list[dict[str, Any]]
+    ) -> tuple[tuple[date, dict[str, Any], dict[str, Any]] | None, str | None]:
+        """Match the snapshot to the last session using exactly the last two daily bars.
+
+        ``bars`` is one row per trading date, sorted ascending. Both reference bars must be
+        usable: a blocked ``validation_status`` (quarantined / manual_review_required /
+        conflicted_high / failed) on either one fails the confirmation outright -- an earlier
+        bar is never substituted for a blocked recent one.
+
+        Returns ``(match, None)`` or ``(None, reason)``.
+        """
+        if not bars:
+            return None, "vendor supplied a time of day only and no daily bars were available to confirm the session date"
+        if len(bars) < 2:
+            return None, "vendor supplied a time of day only and fewer than two daily bars were available"
         last, prev = bars[-1], bars[-2]
+        blocked = [
+            f"{label} daily bar {bar.get('record_id')} ({bar.get('trade_date')}) has validation_status={bar.get('validation_status')}"
+            for label, bar in (("last", last), ("previous", prev))
+            if is_blocking_validation_status(bar.get("validation_status"))
+        ]
+        if blocked:
+            return None, (
+                "reference daily bar(s) are blocked by upstream validation and cannot date the snapshot: " + "; ".join(blocked)
+                + "; no earlier bar is substituted for a blocked recent session"
+            )
+        if snapshot.latest is None or snapshot.pre_settle is None:
+            return None, "vendor supplied a time of day only and the snapshot lacks latest/pre_settle needed to match a session"
         last_close = _float(last, "close")
         prev_settle = _float(prev, "settle")
         last_date = _date(last, "trade_date")
         if last_close is None or prev_settle is None or last_date is None:
-            return None
+            return None, (
+                f"reference daily bars lack the fields needed to match (last {last.get('record_id')} close={last_close}, "
+                f"previous {prev.get('record_id')} settle={prev_settle})"
+            )
         if abs(snapshot.latest - last_close) < 1e-6 and abs(snapshot.pre_settle - prev_settle) < 1e-6:
-            return last_date, last, prev
-        return None
-
-    @staticmethod
-    def _unconfirmed_reason(snapshot: CommodityPriceRecord, bars: list[dict[str, Any]]) -> str:
-        if not bars:
-            return "vendor supplied a time of day only and no daily bars were available to confirm the session date"
-        if len(bars) < 2:
-            return "vendor supplied a time of day only and fewer than two daily bars were available"
-        if snapshot.latest is None or snapshot.pre_settle is None:
-            return "vendor supplied a time of day only and the snapshot lacks latest/pre_settle needed to match a session"
-        last, prev = bars[-1], bars[-2]
-        return (
+            return (last_date, last, prev), None
+        return None, (
             f"vendor supplied a time of day only and the snapshot (latest={snapshot.latest}, pre_settle={snapshot.pre_settle}) "
-            f"does not match the last daily bar {last.get('trade_date')} (close={_float(last, 'close')}) with previous settle "
-            f"{_float(prev, 'settle')} ({prev.get('trade_date')}); a live session cannot be dated from the collection clock"
+            f"does not match the last daily bar {last.get('record_id')} {last.get('trade_date')} (close={last_close}) with previous settle "
+            f"{prev_settle} ({prev.get('record_id')} {prev.get('trade_date')}); a live session cannot be dated from the collection clock"
         )
 
     def _export_parquet(self, records: Sequence[StandardRecord], errors: list[ErrorRecord]) -> list[str]:

@@ -17,13 +17,14 @@ so a stale research-pool config is visible instead of silently steering collecti
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 from typing import Any
 
 from .common import ToolResult
 from .stock_data_adapter import _parse_json_stdout
-from agent_trade_intel.logging_setup import get_logger
+from agent_trade_intel.logging_setup import ToolLogSink, emit, get_logger
 
 logger = get_logger("adapters.market_context")
 
@@ -58,26 +59,32 @@ class MarketContextAdapter:
         python_executable: str = "python",
         working_dir: str | None = None,
         timeout_seconds: int = 180,
+        debug: bool = False,
+        log_sink: ToolLogSink | None = None,
     ):
         self.config_dir = config_dir
         self.python_executable = python_executable
         self.working_dir = working_dir
         self.timeout_seconds = timeout_seconds
+        # ``debug`` is forwarded to the tool CLI (``--debug``) so its per-record DEBUG events are
+        # produced; ``log_sink`` receives the tool's structured stderr after every call.
+        self.debug = debug
+        self.log_sink = log_sink
 
     # ------------------------------------------------------------------
-    def collect_snapshot(self, *, context: dict[str, Any], as_of: str | None = None) -> ToolResult:
+    def collect_snapshot(self, *, context: dict[str, Any], as_of: str | None = None, trace_id: str | None = None) -> ToolResult:
         context_id = str(context.get("context_id") or context.get("target_id") or "")
         result = ToolResult(
             tool_name=self.tool_name,
             operation="market_context_snapshot",
-            request={"context_id": context_id, "context_type": context.get("context_type"), "symbol": context.get("symbol"), "as_of": as_of},
+            request={"context_id": context_id, "context_type": context.get("context_type"), "symbol": context.get("symbol"), "as_of": as_of, "trace_id": trace_id},
         )
         legacy_ignored = sorted(k for k in LEGACY_VENDOR_FIELDS if context.get(k) not in (None, "", {}, []))
         if legacy_ignored:
             logger.info("market_context %s: legacy vendor fields ignored (%s); bindings live in the stock tool config", context_id, ",".join(legacy_ignored))
 
         try:
-            cmd = self._build_command(context, as_of)
+            cmd = self._build_command(context, as_of, trace_id=trace_id)
         except ValueError as exc:
             return self._fail(result, "MARKET_CONTEXT_INVALID_TARGET", str(exc), retryable=False, legacy=legacy_ignored,
                               suggested_action="Fix the market_contexts entry in the research pool YAML (context_type + symbol are required).")
@@ -85,11 +92,15 @@ class MarketContextAdapter:
         try:
             proc = self._run_cli(cmd)
         except subprocess.TimeoutExpired as exc:
+            # Whatever the tool managed to log before the deadline is still evidence.
+            self._sink_stderr(getattr(exc, "stderr", None), trace_id=trace_id, outcome="timeout")
             return self._fail(result, "MARKET_CONTEXT_TIMEOUT", str(exc), retryable=True, legacy=legacy_ignored)
         except Exception as exc:  # noqa: BLE001
             return self._fail(result, "MARKET_CONTEXT_CLI_UNAVAILABLE", str(exc), retryable=False, legacy=legacy_ignored,
                               suggested_action="Check tools.python_executable / tools.stock_data_collector.working_dir; the stock_data_ingestion package must be importable.")
 
+        # The tool logs to stderr (stdout is business JSON only); copy them to disk on success too.
+        self._sink_stderr(proc.stderr, trace_id=trace_id, outcome=f"rc={proc.returncode}")
         payload = _parse_json_stdout(proc.stdout)
         if proc.returncode != 0 or not isinstance(payload, dict) or "result" not in payload:
             tail = (proc.stderr or proc.stdout or "")[-1000:]
@@ -105,7 +116,7 @@ class MarketContextAdapter:
         return self._map_response(result, context, payload, legacy_ignored, as_of)
 
     # ------------------------------------------------------------------
-    def _build_command(self, context: dict[str, Any], as_of: str | None) -> list[str]:
+    def _build_command(self, context: dict[str, Any], as_of: str | None, *, trace_id: str | None = None) -> list[str]:
         context_type = str(context.get("context_type") or "").strip()
         symbol = str(context.get("symbol") or "").strip()
         if not context_type or context_type == "market_context":
@@ -115,10 +126,14 @@ class MarketContextAdapter:
         cmd = [self.python_executable, "-m", "stock_data_ingestion.cli"]
         if self.config_dir:
             cmd += ["--config-dir", self.config_dir]
+        if self.debug:
+            cmd += ["--debug"]
         cmd += ["fetch", "market-context", "--context-type", context_type, "--symbol", symbol, "--compact"]
         context_id = context.get("context_id") or context.get("target_id")
         if context_id:
             cmd += ["--context-id", str(context_id)]
+        if trace_id:
+            cmd += ["--trace-id", str(trace_id)]
         if as_of:
             cmd += ["--as-of", str(as_of)[:10]]
         frequency = context.get("frequency")
@@ -246,6 +261,15 @@ class MarketContextAdapter:
         result.quality = {"usable": False, "status": "failed", "legacy_fields_ignored": legacy}
         logger.warning("market_context %s: %s", code, message[:300])
         return result.finish()
+
+    def _sink_stderr(self, stderr: str | bytes | None, *, trace_id: str | None, outcome: str) -> None:
+        if self.log_sink is None or not stderr:
+            return
+        try:
+            lines = self.log_sink.write(stderr, trace_id=trace_id, tool=self.tool_name, outcome=outcome)
+            emit(logger, logging.DEBUG, "tool_stderr_sunk", trace_id=trace_id, tool=self.tool_name, call_outcome=outcome, lines=lines, path=str(self.log_sink.path))
+        except Exception:  # noqa: BLE001 - logging must never break collection
+            logger.warning("failed to persist tool stderr for trace_id=%s", trace_id, exc_info=True)
 
     def _run_cli(self, cmd: list[str]) -> subprocess.CompletedProcess:
         """Subprocess boundary, kept separate so tests can fake the tool CLI."""

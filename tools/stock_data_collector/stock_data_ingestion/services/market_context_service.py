@@ -19,10 +19,12 @@ categories use ``request_type=market_context`` whose vendor bindings live in
 
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterable
 
+from stock_data_ingestion.logging_config import debug_enabled, emit, get_logger, log_context
 from stock_data_ingestion.normalization.datetime_utils import now_asia_shanghai
 from stock_data_ingestion.schemas.errors import ErrorCode, ErrorRecord
 from stock_data_ingestion.schemas.market_context import (
@@ -41,7 +43,7 @@ from stock_data_ingestion.schemas.market_context import (
     MarketContextSource,
 )
 from stock_data_ingestion.schemas.requests import StockDataRequest
-from stock_data_ingestion.schemas.quality import ValidationStatus
+from stock_data_ingestion.schemas.quality import BLOCKING_VALIDATION_STATUSES
 from stock_data_ingestion.schemas.responses import StockDataResponse
 from stock_data_ingestion.services.ingestion_runner import IngestionRunner
 from stock_data_ingestion.services.market_context_requests import build_market_context_stock_request
@@ -91,14 +93,11 @@ _PERIOD_UNIT_BY_TYPE: dict[str, str] = {
     ContextType.interest_rate: "observation",
 }
 
-# These are decisions already made by the ingestion pipeline. The market-context
-# summary must not turn an isolated or failed record into an automatically usable value.
-_BLOCKING_VALIDATION_STATUSES = frozenset({
-    ValidationStatus.quarantined,
-    ValidationStatus.manual_review_required,
-    ValidationStatus.conflicted_high,
-    ValidationStatus.failed,
-})
+# Decisions already made by the ingestion pipeline (shared definition in schemas.quality):
+# the market-context summary must not turn an isolated or failed record into a usable value.
+_BLOCKING_VALIDATION_STATUSES = BLOCKING_VALIDATION_STATUSES
+
+logger = get_logger("services.market_context")
 
 
 def _f(value: Any) -> float | None:
@@ -155,6 +154,43 @@ class MarketContextService:
     # Public entry
     # ------------------------------------------------------------------
     def fetch(self, request: MarketContextRequest) -> MarketContextResponse:
+        with log_context(
+            trace_id=request.trace_id,
+            context_id=request.context_id,
+            context_type=str(request.context_type),
+            symbol=request.symbol,
+        ):
+            started = now_asia_shanghai()
+            response = self._fetch(request)
+            self._log_request_summary(request, response, started)
+            return response
+
+    def _log_request_summary(self, request: MarketContextRequest, response: MarketContextResponse, started: datetime) -> None:
+        r = response.result
+        emit(
+            logger,
+            logging.INFO,
+            "request_summary",
+            market_context_request_id=request.request_id,
+            status=response.status,
+            value=r.value,
+            unit=r.unit,
+            metric=r.metric,
+            data_date=r.data_date,
+            observed_at=r.observed_at,
+            is_fresh=r.quality.is_fresh,
+            staleness_days=r.quality.staleness_days,
+            usable=r.quality.usable,
+            quality_status=r.quality.status,
+            provider=r.source.provider,
+            source_api=r.source.source_api,
+            stock_data_request_id=r.provenance.stock_data_request_id,
+            record_ids=list(r.provenance.record_ids),
+            error_codes=[str(e.error_code) for e in response.errors],
+            duration_ms=round((now_asia_shanghai() - started).total_seconds() * 1000, 1),
+        )
+
+    def _fetch(self, request: MarketContextRequest) -> MarketContextResponse:
         created_at = now_asia_shanghai()
         context_type = str(request.context_type)
         warnings: list[str] = []
@@ -174,13 +210,25 @@ class MarketContextService:
                     suggested_action="Register the symbol under providers.<provider>.<context_type>.symbols.",
                 )
             )
+            emit(logger, logging.WARNING, "business_param_rejected", reason="unknown_symbol", error=errors[-1].error_message)
             return self._failed(request, created_at, errors, warnings, entry={})
         entry = entry or {"name": request.symbol}
         # The symbol decides what is fetched; extra business parameters may only confirm the
         # identity bound to it. A mismatch is rejected before any vendor call or write.
-        mismatch = self._validate_business_params(request, entry)
+        mismatch, conflicts = self._validate_business_params(request, entry)
+        requested_identity = {k: getattr(request, k) for k in ("market", "contract", "instrument_type", "tenor", "rate_type") if getattr(request, k) is not None}
+        emit(
+            logger,
+            logging.DEBUG,
+            "identity_check",
+            requested_identity=requested_identity,
+            configured_identity=self._configured_identity(context_type, entry),
+            decision="rejected" if mismatch is not None else "accepted",
+            conflicting_fields=conflicts,
+        )
         if mismatch is not None:
             errors.append(mismatch)
+            emit(logger, logging.WARNING, "business_param_rejected", reason="identity_mismatch", conflicting_fields=conflicts, error=mismatch.error_message)
             return self._failed(request, created_at, errors, warnings, entry=entry)
         identity = self._identity(request, entry)
 
@@ -217,8 +265,18 @@ class MarketContextService:
         observations = self._observations(records, context_type)
         unknown_date = self._unknown_date_observations(records, context_type, observations, errors, warnings)
 
-        result = self._build_result(request, entry, identity, observations, stock_response, records, warnings, unknown_date)
+        with log_context(request_id=stock_request.request_id, idempotency_key=stock_request.idempotency_key):
+            result = self._build_result(request, entry, identity, observations, stock_response, records, warnings, unknown_date)
         status = self._status(result, errors)
+        if unknown_date and result.data_date is None:
+            emit(
+                logger,
+                logging.WARNING,
+                "snapshot_date_unknown",
+                stock_data_request_id=stock_response.request_id,
+                quality_status=result.quality.status,
+                error_codes=[str(e.error_code) for e in errors],
+            )
         return MarketContextResponse(
             request_id=request.request_id,
             status=status,
@@ -288,13 +346,15 @@ class MarketContextService:
             }
         return {}
 
-    def _validate_business_params(self, request: MarketContextRequest, entry: dict[str, Any]) -> ErrorRecord | None:
+    def _validate_business_params(self, request: MarketContextRequest, entry: dict[str, Any]) -> tuple[ErrorRecord | None, list[dict[str, Any]]]:
         """Request parameters may only agree with the identity bound to the symbol.
 
         * not provided            -> configured value is used;
         * provided and identical  -> allowed;
         * provided but different  -> INVALID_REQUEST (not retryable);
         * provided but the configuration does not define it -> INVALID_REQUEST.
+
+        Returns ``(error_or_None, conflicting_fields)``.
         """
         context_type = str(request.context_type)
         configured = self._configured_identity(context_type, entry)
@@ -309,6 +369,7 @@ class MarketContextService:
         else:
             fields = ()
         problems: list[str] = []
+        conflicts: list[dict[str, Any]] = []
         for field in fields:
             requested = getattr(request, field, None)
             if requested is None or str(requested).strip() == "":
@@ -320,13 +381,15 @@ class MarketContextService:
                     f"symbol={request.symbol} 的 {field} 未在 market_context_sources.yaml 中声明，"
                     f"无法校验请求 {field}={requested}。请补充配置或去掉该参数。"
                 )
+                conflicts.append({"field": field, "requested": requested, "configured": None, "problem": "not_configured"})
             elif str(bound).strip().lower() != requested.lower():
                 problems.append(
                     f"symbol={request.symbol} 的 {field} 配置为 {bound}，请求 {field}={requested}，与 symbol 绑定不一致。"
                     f"请使用已注册的 {requested} symbol。"
                 )
+                conflicts.append({"field": field, "requested": requested, "configured": bound, "problem": "mismatch"})
         if not problems:
-            return None
+            return None, []
         return ErrorRecord(
             error_code=ErrorCode.INVALID_REQUEST,
             error_message=" ".join(problems),
@@ -335,7 +398,7 @@ class MarketContextService:
                 "symbol 决定取数对象；market/contract/instrument_type/tenor/rate_type 只能与配置一致。"
                 "如需其他合约或期限，先在 config/market_context_sources.yaml 注册对应 symbol，再请求该 symbol。"
             ),
-        )
+        ), conflicts
 
     def _identity(self, request: MarketContextRequest, entry: dict[str, Any]) -> dict[str, Any]:
         """Business identity used for DB look-ups, idempotency and the result (configuration only)."""
@@ -399,10 +462,42 @@ class MarketContextService:
             with self.runner.database.session() as session:  # type: ignore[union-attr]
                 original = Repository(session).get_successful_request_by_idempotency_key(stock_request.idempotency_key or "")
                 if original is None:
+                    emit(logger, logging.DEBUG, "store_replay", original_request_id=None, outcome="no_successful_request_for_key")
                     return []
-                return QueryService(session).get_market_context_records_for_request(context_type, str(original.request_id))
-        except Exception:  # noqa: BLE001 - read-back is best effort; the run errors are already reported
+                resolved = QueryService(session).resolve_request_records(context_type, str(original.request_id))
+        except Exception as exc:  # noqa: BLE001 - read-back is best effort; the run errors are already reported
+            emit(logger, logging.WARNING, "store_replay", outcome="read_back_failed", error=str(exc)[:300])
             return []
+        rows = resolved["rows"]
+        if debug_enabled(logger):
+            date_field = _DATE_FIELD_BY_TYPE[context_type]
+            emit(
+                logger,
+                logging.DEBUG,
+                "store_replay",
+                original_request_id=str(original.request_id),
+                original_ingestion_run_id=getattr(original, "ingestion_run_id", None),
+                resolution_source=resolved["source"],
+                linked_record_ids=resolved["links"],
+                replacement_chains=resolved["chains"],
+                missing_record_ids=resolved["missing"],
+                final_records=[
+                    {
+                        "record_id": r.get("record_id"),
+                        "date": r.get(date_field),
+                        "observed_at": r.get("observed_at"),
+                        "values": {k: r.get(k) for k in ("rate", "rate_value", "close", "settle", "latest") if r.get(k) is not None},
+                        "effective_provider": r.get("effective_provider"),
+                        "source_api": r.get("source_api"),
+                        "raw_payload_id": r.get("raw_payload_id"),
+                        "collecting_request_id": r.get("request_id"),
+                        "validation_status": r.get("validation_status"),
+                        "date_confidence": r.get("date_confidence"),
+                    }
+                    for r in rows
+                ],
+            )
+        return rows
 
     def _unknown_date_observations(
         self,
@@ -617,6 +712,34 @@ class MarketContextService:
 
         daily_bars = self._daily_bars_for_realtime(request, identity, head) if (realtime and head is not None and context_type == ContextType.commodity) else []
         changes = self._changes(context_type, metric, eligible, head, realtime, daily_bars)
+
+        if blocked:
+            emit(
+                logger,
+                logging.WARNING,
+                "upstream_validation_blocked",
+                head_record_id=head.record_id if head else None,
+                validation_status=head.validation_status if head else None,
+                data_date=data_date,
+                value=value,
+            )
+        emit(
+            logger,
+            logging.DEBUG,
+            "quality_decision",
+            head_record_id=head.record_id if head else None,
+            head_validation_status=head.validation_status if head else None,
+            block_reason=(f"upstream_validation_blocked: {head.validation_status}" if blocked else None),
+            critical_anomalies=[a.get("code") for a in critical],
+            unknown_date=bool(head is None and unknown_date),
+            quality_status=quality.status,
+            usable=quality.usable,
+            is_fresh=quality.is_fresh,
+            staleness_days=quality.staleness_days,
+            data_quality_score=quality.data_quality_score,
+            observations=quality.observations,
+            uncomputed_changes={k: c.reason for k, c in changes.items() if c.value is None},
+        )
 
         source = self._source(stock_response, head, context_type, entry)
         if head is not None and (source.source_site is None or source.adapter_version is None):

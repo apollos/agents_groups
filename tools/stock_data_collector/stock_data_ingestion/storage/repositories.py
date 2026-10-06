@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
-from typing import Any, Iterable, Type
+from typing import Any, Iterable, NamedTuple, Type
 
 from pydantic import BaseModel
 from sqlalchemy import select, update
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -75,6 +76,30 @@ MARKET_CONTEXT_BUSINESS_KEYS: dict[str, tuple[str, ...]] = {
     "commodity_price": ("commodity", "instrument_type", "market", "contract", "frequency", "trade_date", "observed_at", "effective_provider"),
 }
 _MODEL_AUDIT_COLUMNS = {"id", "created_at", "updated_at"}
+# Domain value columns reported in record_write events (per record type).
+MARKET_CONTEXT_VALUE_FIELDS: dict[str, tuple[str, ...]] = {
+    "fx_rate": ("rate",),
+    "interest_rate": ("rate_value",),
+    "index_bar": ("close", "open", "high", "low"),
+    "commodity_price": ("close", "settle", "latest", "pre_settle"),
+}
+
+
+class MarketContextUpsertOutcome(NamedTuple):
+    """Result of :meth:`Repository.upsert_market_context_record`.
+
+    ``record`` is the record the store holds after the call (the incoming one for
+    ``inserted``/``replaced``, the stored one for ``kept_existing``); callers must report it.
+    """
+
+    record: BaseModel
+    table: str
+    action: str  # inserted | replaced | kept_existing
+    incoming_record_id: str
+    existing_record_id: str | None
+    archived_record_ids: list[str]
+    comparison_basis: str | None  # provider_update_time | fetch_time | None (insert)
+    business_key: dict[str, Any]
 
 
 def _as_aware(value: Any) -> datetime:
@@ -214,14 +239,18 @@ class Repository:
         return rows[0] if rows else None
 
     @staticmethod
-    def _is_newer(incoming: dict[str, Any], existing: Base) -> bool:
-        """Compare provider_update_time when both sides have it, otherwise fetch_time."""
+    def _comparison_basis(incoming: dict[str, Any], existing: Base) -> str:
         inc_put, cur_put = incoming.get("provider_update_time"), getattr(existing, "provider_update_time", None)
-        if inc_put is not None and cur_put is not None:
-            return _as_aware(inc_put) > _as_aware(cur_put)
+        return "provider_update_time" if inc_put is not None and cur_put is not None else "fetch_time"
+
+    @classmethod
+    def _is_newer(cls, incoming: dict[str, Any], existing: Base) -> bool:
+        """Compare provider_update_time when both sides have it, otherwise fetch_time."""
+        if cls._comparison_basis(incoming, existing) == "provider_update_time":
+            return _as_aware(incoming["provider_update_time"]) > _as_aware(existing.provider_update_time)
         return _as_aware(incoming.get("fetch_time")) > _as_aware(getattr(existing, "fetch_time", None))
 
-    def upsert_market_context_record(self, record: BaseModel) -> tuple[BaseModel, str, str]:
+    def upsert_market_context_record(self, record: BaseModel) -> MarketContextUpsertOutcome:
         """Save one fx_rate / interest_rate / index_bar / commodity_price record.
 
         * no row for the business key            -> insert;
@@ -230,8 +259,7 @@ class Repository:
           quality, request/run ids, raw refs, provenance, fetch/provider times) atomically;
         * incoming is older or same age           -> keep the existing row untouched.
 
-        Returns ``(retained_record, table_name, action)`` with action in
-        ``inserted | replaced | kept_existing``; callers must report *this* record.
+        Returns a :class:`MarketContextUpsertOutcome`; callers must report ``outcome.record``.
         """
         record_type = str(getattr(record, "record_type", ""))
         if record_type not in MARKET_CONTEXT_BUSINESS_KEYS:
@@ -239,16 +267,21 @@ class Repository:
         model_cls = STANDARD_MODEL_BY_RECORD_TYPE[record_type]
         kwargs = self._to_model_kwargs(model_cls, record)
         table = model_cls.__tablename__
+        business_key = {key: kwargs.get(key) for key in MARKET_CONTEXT_BUSINESS_KEYS[record_type]}
         with self.session.begin_nested():
             rows = self._find_market_context_rows(model_cls, record_type, kwargs)
             if not rows:
                 self.session.add(model_cls(**kwargs))
                 self.session.flush()
-                return record, table, "inserted"
+                return MarketContextUpsertOutcome(record, table, "inserted", kwargs["record_id"], None, [], None, business_key)
             existing = rows[0]
+            basis = self._comparison_basis(kwargs, existing)
             if not self._is_newer(kwargs, existing):
-                return self._row_to_record(record_type, existing), table, "kept_existing"
+                return MarketContextUpsertOutcome(
+                    self._row_to_record(record_type, existing), table, "kept_existing", kwargs["record_id"], existing.record_id, [], basis, business_key
+                )
             archived_at = now_asia_shanghai()
+            archived_record_ids = [row.record_id for row in rows]  # before the in-place update refreshes rows[0]
             for row in rows:
                 # Every replaced row (including legacy duplicates of the key) is archived in full.
                 archived = {col.name: getattr(row, col.name) for col in row.__table__.columns if col.name not in _MODEL_AUDIT_COLUMNS}
@@ -269,7 +302,24 @@ class Repository:
                 self.session.delete(duplicate)
             self.session.execute(update(model_cls).where(model_cls.id == existing.id).values(**kwargs, updated_at=archived_at))
             self.session.flush()
-            return record, table, "replaced"
+            return MarketContextUpsertOutcome(
+                record, table, "replaced", kwargs["record_id"], archived_record_ids[0], archived_record_ids, basis, business_key
+            )
+
+    def link_request_record(self, request_id: str, record_type: str, record_id: str) -> bool:
+        """Associate a request with a record it finally adopted (idempotent; same transaction as the record write)."""
+        stmt = (
+            sqlite_insert(models.MarketContextRequestRecordModel)
+            .values(request_id=request_id, record_type=record_type, record_id=record_id)
+            .on_conflict_do_nothing()
+        )
+        return bool(self.session.execute(stmt).rowcount)
+
+    def get_request_record_links(self, request_id: str, record_type: str | None = None) -> list[models.MarketContextRequestRecordModel]:
+        stmt = select(models.MarketContextRequestRecordModel).where(models.MarketContextRequestRecordModel.request_id == request_id)
+        if record_type:
+            stmt = stmt.where(models.MarketContextRequestRecordModel.record_type == record_type)
+        return list(self.session.execute(stmt).scalars().all())
 
     def get_market_context_revision(self, record_id: str) -> models.MarketContextRecordRevisionModel | None:
         stmt = select(models.MarketContextRecordRevisionModel).where(models.MarketContextRecordRevisionModel.record_id == record_id)

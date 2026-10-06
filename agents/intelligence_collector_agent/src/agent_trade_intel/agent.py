@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import traceback
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
@@ -21,7 +22,7 @@ from .demand import DemandRegistry
 from .errors import QueueEmpty
 from .heartbeat import HeartbeatRecorder
 from .ids import make_idempotency_key, new_id, stable_hash, utc_now_iso
-from .logging_setup import get_logger
+from .logging_setup import debug_enabled, emit, get_logger, get_tool_log_sink
 from .market_features import MarketFeatureBuilder, should_emit_feature_ticket
 from .memory import AgentMemory
 from .persistence import ResultPersister
@@ -123,11 +124,15 @@ class IntelligenceCollectorAgent:
         )
         # Market background (indices / FX / commodities / rates) is collected by the stock
         # tool too; the agent only issues business requests over the same CLI boundary.
+        # ``--debug`` on the agent CLI (package logger at DEBUG) is forwarded to the tool CLI; the
+        # tool's structured stderr is copied by the agent itself to <log_dir>/tool_stderr.jsonl.
         self.market_context = MarketContextAdapter(
             config_dir=config.tools.stock_config_dir,
             python_executable=config.tools.python_executable,
             working_dir=config.tools.stock_working_dir,
             timeout_seconds=int(config.get("tools.market_context_collector.timeout_seconds", 180)),
+            debug=debug_enabled(),
+            log_sink=get_tool_log_sink(config.runtime.log_dir),
         )
         self.capabilities = ToolCapabilityVerifier(self.state_store, self.stock, config.raw)
         self.heartbeats = HeartbeatRecorder(self.state_store, config.runtime.agent_id)
@@ -790,8 +795,47 @@ class IntelligenceCollectorAgent:
             return self._handle_circuit_open(
                 ticket, tool_name=self.market_context.tool_name, ticker=None, target_id=context_id
             )
+        # One trace per ticket chain: the tool stamps it on every log event of the request and
+        # of the internal sub-requests it spawns (e.g. the daily bars used to date a snapshot).
+        trace_id = str(ticket.get("correlation_id") or ticket["ticket_id"])
         self._keepalive()
-        result = self.market_context.collect_snapshot(context=target, as_of=task.get("as_of"))
+        result = self.market_context.collect_snapshot(context=target, as_of=task.get("as_of"), trace_id=trace_id)
+        outcome = self._handle_market_context_result(ticket, task, context_id, result)
+        tool_data = result.result if isinstance(result.result, dict) else {}
+        emit(
+            logger,
+            logging.INFO,
+            "agent_outcome",
+            trace_id=trace_id,
+            request_id=tool_data.get("tool_request_id"),
+            context_id=context_id,
+            context_type=target.get("context_type"),
+            symbol=target.get("symbol"),
+            idempotency_key=(tool_data.get("provenance") or {}).get("idempotency_key"),
+            ticket_id=ticket["ticket_id"],
+            correlation_id=ticket.get("correlation_id"),
+            task_type=task.get("task_type"),
+            as_of=task.get("as_of"),
+            tool_request=result.request,
+            tool_status=tool_data.get("tool_status"),
+            tool_result_status=result.status,
+            run_id=outcome.get("run_id"),
+            snapshot_saved=outcome["status"] in {"success", "stale"},
+            counted_as_coverage=outcome["status"] == "success",
+            final_status=outcome["status"],
+            message_action=outcome.get("_message_action"),
+            quality_status=result.quality.get("status"),
+            is_fresh=result.quality.get("is_fresh"),
+            usable=result.quality.get("usable"),
+            data_date=result.quality.get("data_date"),
+            value=tool_data.get("value"),
+            unit=tool_data.get("unit"),
+            error_codes=[e.get("error_code") for e in result.errors],
+            manual_action=outcome.get("manual_action"),
+        )
+        return outcome
+
+    def _handle_market_context_result(self, ticket: dict[str, Any], task: dict[str, Any], context_id: str, result: ToolResult) -> dict[str, Any]:
         # A tool answer that is "usable but stale" or "no binding configured" is not a tool
         # outage: only transport/tool failures count towards the circuit breaker.
         breaker_status = result.status if not result.errors or any(e.get("retryable") for e in result.errors) else "success"

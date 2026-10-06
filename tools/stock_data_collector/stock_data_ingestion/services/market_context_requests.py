@@ -63,6 +63,8 @@ def build_market_context_stock_request(
     identity: dict[str, Any],
     providers: list[str],
     canonical: str,
+    *,
+    parent_request_id: str | None = None,
 ) -> StockDataRequest:
     context_type = str(request.context_type)
     start, end = market_context_window(config, request)
@@ -79,6 +81,10 @@ def build_market_context_stock_request(
         "tenor": identity.get("tenor"),
         "rate_type": identity.get("rate_type"),
         "metrics": list(request.metrics),
+        # Log correlation: the caller's trace id and, for internal sub-requests (daily bars
+        # collected to confirm a snapshot date), the request that spawned them.
+        "trace_id": request.trace_id,
+        "parent_request_id": parent_request_id,
     }
     if context_type == ContextType.equity_index:
         request_type = RequestType.index_data

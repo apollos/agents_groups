@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import inspect
+import logging
 import math
 import os
 import re
@@ -12,6 +13,7 @@ from typing import Any, Callable, Iterable, Iterator
 
 from stock_data_ingestion.adapters.base import BaseDataAdapter
 from stock_data_ingestion.config import MarketContextSourcesConfig, load_market_context_sources
+from stock_data_ingestion.logging_config import emit, get_logger
 from stock_data_ingestion.normalization.datetime_utils import now_asia_shanghai, normalize_trade_date
 from stock_data_ingestion.normalization.ticker import is_hk_ticker, normalize_ticker, to_akshare_symbol
 from stock_data_ingestion.schemas.errors import ErrorCode
@@ -19,6 +21,8 @@ from stock_data_ingestion.schemas.records import AdapterFetchStatus, ProviderFet
 from stock_data_ingestion.schemas.requests import Frequency, StockDataRequest
 from stock_data_ingestion.utils.deadline import with_deadline
 from stock_data_ingestion.utils.network import apply_ipv4_preference_if_configured
+
+logger = get_logger("adapters.akshare")
 
 
 class AKShareAdapter(BaseDataAdapter):
@@ -1433,7 +1437,10 @@ class AKShareAdapter(BaseDataAdapter):
             func = getattr(ak, func_name, None)
             if func is None:
                 failures.append(f"{func_name}: not available in installed akshare")
+                emit(logger, logging.DEBUG, "provider_call", provider=self.provider_name, function=func_name, outcome="unavailable", error="not available in installed akshare")
                 continue
+            call_started = now_asia_shanghai()
+            kwargs: dict[str, Any] = {}
             try:
                 kwargs = self._render_market_context_args(source, entry, request)
                 frame = with_deadline(
@@ -1441,10 +1448,42 @@ class AKShareAdapter(BaseDataAdapter):
                     config.call_deadline_seconds,
                     f"akshare {func_name}",
                 )
-                rows = self._market_context_rows(source, entry, ctx, request, self._records(frame), fetched_at=now_asia_shanghai())
+                raw_rows = self._records(frame)
+                rows = self._market_context_rows(source, entry, ctx, request, raw_rows, fetched_at=now_asia_shanghai())
             except Exception as exc:  # noqa: BLE001 - try the next configured source
                 failures.append(f"{func_name}: {type(exc).__name__}: {exc}")
+                call_ended = now_asia_shanghai()
+                emit(
+                    logger,
+                    logging.DEBUG,
+                    "provider_call",
+                    provider=self.provider_name,
+                    function=func_name,
+                    call_args=kwargs,
+                    started_at=call_started,
+                    ended_at=call_ended,
+                    duration_ms=round((call_ended - call_started).total_seconds() * 1000, 1),
+                    rows_returned=None,
+                    outcome="error",
+                    error=f"{type(exc).__name__}: {str(exc)[:300]}",
+                )
                 continue
+            call_ended = now_asia_shanghai()
+            emit(
+                logger,
+                logging.DEBUG,
+                "provider_call",
+                provider=self.provider_name,
+                function=func_name,
+                call_args=kwargs,
+                started_at=call_started,
+                ended_at=call_ended,
+                duration_ms=round((call_ended - call_started).total_seconds() * 1000, 1),
+                rows_returned=len(raw_rows),
+                rows_in_window=len(rows),
+                outcome="ok" if rows else "empty",
+                error=None,
+            )
             if rows:
                 if failures:
                     for row in rows:

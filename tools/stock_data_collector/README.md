@@ -361,6 +361,10 @@ corporate-action
 
 `market-context` 为市场背景数据统一入口（A 股指数 / 港股指数 / 汇率 / 商品 / 利率，见 §6.16）。
 
+全局参数（放在子命令之前）：`--config-dir`、`--debug`（DEBUG 级结构化日志，默认 INFO）、`--log-file`
+（本次调用的 JSONL 日志文件，默认 `storage.log_path`）。日志在 `main()` 入口初始化一次；stdout 永远只有业务 JSON，
+日志走 stderr 与文件（20 MiB × 5 轮转）。字段与事件见 §6.17。
+
 其中 `hk-connect` 为港股通结构化快照（南向持股/资格/1/5/10 日市值变化，东财数据源，
 可选依赖 akshare），**只返回结构化 JSON、不落本工具库**——快照属研究域数据，由调用方
 （如 intelligence_collector_agent）自行入库。反爬处理（`EASTMONEY_COOKIE` 注入、浏览器
@@ -703,10 +707,23 @@ python -m stock_data_ingestion.cli --config-dir config fetch market-context \
   错误 `SNAPSHOT_DATE_UNCONFIRMED`（可重试）。采集机时间与请求日永远不被当作确认日期。记录列
   `commodity_prices.date_confidence`（`vendor_timestamp | confirmed_last_session | unknown`，旧记录 NULL 一律按未知处理，
   不按 `vendor_timestamp`）与 `date_resolution_details`（供应商原始时间、是否由采集时间推断、确认用日线 record_id、原因）。
-  确认所需日线走本工具自己的日线采集链（同一 runner、同一幂等与落库），日线请求本身不进入确认步骤。
+  确认所需日线走本工具自己的日线采集链（同一 runner、同一幂等与落库），日线请求本身不进入确认步骤；内部日线请求继承
+  外层请求的 `trace_id` 并记录 `parent_request_id`。
+  **参考日线先按日期去重**（同一 `trade_date` 多行取最新 `fetch_time`），再取最近两个交易日作为参考；两条参考日线中
+  任一条 `validation_status` 处于阻断集合 `{quarantined, manual_review_required, conflicted_high, failed}`
+  （定义在 `schemas/quality.py: BLOCKING_VALIDATION_STATUSES`，与汇总层判断共用同一处）→ 确认**立即失败**，
+  不跳过被隔离的近期日线去找更早日期；结果同"日期未知"（raw 保留、不写 realtime 标准记录、`unknown_date`、
+  `usable=false`、`is_fresh=null`），`SNAPSHOT_DATE_UNCONFIRMED` 的消息与 `date_resolution_details` 带参考记录 ID 与阻断状态。
 - 幂等：相同 `(类别, 代码, 市场/合约/期限/口径, 频率, 窗口, provider)` 当天重复请求不重复抓取，只有命中已成功的
-  `idempotency_key` 时才从库回放（`warnings` 含 `served_from_store`），回放的是原成功 run 关联的记录；失败的采集不会把
+  `idempotency_key` 时才从库回放（`warnings` 含 `served_from_store`）；失败的采集不会把
   旧记录当成功复用。realtime 幂等粒度为分钟，`latest` 模式当日为小时。
+- **请求—记录关联**：新表 `market_context_request_records(request_id, record_type, record_id)`（联合主键）。
+  `_persist()` 为本次请求**最终采用**的每条记录保存关联——不论写入动作是 `inserted / replaced / kept_existing`——
+  关联与记录更新在同一事务提交。幂等回放（`QueryService.resolve_request_records`）先查关联表，关联到的记录若已被归档
+  则沿 `market_context_record_revisions.superseded_by_record_id` 替换链追到当前记录；关联表无数据（升级前的旧请求）
+  才回退到按记录自身 `request_id` 的旧查询。记录自身的 `request_id` **不改**，仍指向采集到它的请求。因此 10 点请求 A
+  保存 86.59、11 点请求 B 收到旧数据被拒后首次响应给 86.59，其后 B 的同幂等键重复请求与重启后重复请求都通过关联表
+  取回同一条 86.59，记录的 `request_id` 仍是 A。
 - **同日更新**：`fx_rates / interest_rates / index_bars / commodity_prices` 每个业务键（即各表 UNIQUE 约束）只保留一条
   **当前记录**；新一轮采集到的值更新时（两边都有 `provider_update_time` 比较它，否则比较 `fetch_time`）把旧记录
   **整条**归档到 `market_context_record_revisions`（`record_id / record_type / table_name / business_key / record_json /
@@ -746,6 +763,33 @@ python -m stock_data_ingestion.cli --config-dir config query market-context --co
 `PROVIDER_UNAVAILABLE`（akshare 未安装）。
 本机验收记录见 `agents/intelligence_collector_agent/docs/acceptance/collector_acceptance_20261006_market_context.md`
 （含 2026-10-06 评审四项修改的验收，区分"模拟数据回归通过"与"真实供应商采集通过"）。
+
+### 6.17 结构化日志（JSONL）
+
+`stock_data_ingestion/logging_config.py`。每行一个 JSON 事件，固定字段：`event, timestamp, level, trace_id, request_id,
+parent_request_id, ingestion_run_id, context_id, context_type, symbol, idempotency_key`（缺失为 `null`），另有
+`data_mode`（默认 `live`，模拟驱动可用 `set_default_log_fields(data_mode="simulated")` 标记）、`logger` 与事件各自的
+明细字段。关联字段由 `log_context()`（`contextvars`）维护：`MarketContextService.fetch()` 写入 `trace_id / context_*`，
+`IngestionRunner.run()` 写入 `request_id / ingestion_run_id / idempotency_key / parent_request_id`，内部日线子请求自动
+继承 `trace_id`。`--trace-id` 由调用方（Agent）传入。凭证在格式化时脱敏。
+
+默认 INFO 只输出请求级事件；**明细事件仅在 `--debug` 下产生**，且未开启 DEBUG 时不构造逐记录明细。写成功类事件在
+外层事务提交之后才打印。
+
+| 位置 | 事件 / 级别 | 内容 |
+|---|---|---|
+| `MarketContextService.fetch()` 身份校验后 | `identity_check` / DEBUG | 请求身份、配置身份、accepted / rejected、冲突字段 |
+| 同上，拒绝时 | `business_param_rejected` / WARNING | `reason=unknown_symbol \| identity_mismatch`、冲突字段 |
+| `AKShareAdapter.fetch_market_context()` 每次供应商调用 | `provider_call` / DEBUG | 函数、业务调用参数、开始 / 结束、`duration_ms`、返回行数、窗口内行数、错误 |
+| `IngestionRunner._confirm_snapshot_dates()` | `snapshot_date_resolution` / DEBUG | 原始时间、是否由采集时间推断、两条参考日线的 ID / 日期 / close / settle / 状态、采用规则、确认日期、`decision=saved \| rejected` |
+| 同上，确认失败 | `snapshot_date_unknown` / WARNING | 原因、参考日线 |
+| `IngestionRunner._persist()` 事务提交后 | `record_write` / DEBUG | 业务键、`action`、传入 / 原有 / 最终记录 ID 与数值、`comparison_basis`、归档 ID、最终 raw_payload_id |
+| 同一提交点 | `request_record_link` / DEBUG | `linked_request_id`、最终采用记录 ID、动作（含 `kept_existing`） |
+| 事务失败 | `persist_failed` / ERROR | 异常 |
+| `MarketContextService._records_from_database()` | `store_replay` / DEBUG | 命中的原请求、`resolution_source`、关联记录 ID、替换链、最终数值 / 日期 / 来源 |
+| 汇总层质量判断 | `quality_decision` / DEBUG | 头记录状态、阻断原因、质量分、未计算的涨跌幅及原因 |
+| 同上，被隔离拦截 | `upstream_validation_blocked` / WARNING | 头记录 ID 与状态 |
+| `MarketContextService.fetch()` 返回前 | `request_summary` / INFO | 状态、数值、单位、数据日期、新鲜度、可用性、来源、`duration_ms` |
 
 ---
 
@@ -1053,12 +1097,14 @@ Agent 用它判断：
 | `market_context` commodity | `commodity_prices` | `commodity_prices` | `commodity_price` | `commodity + instrument_type + contract + market + frequency + trade_date(+observed_at) + effective_provider` |
 | `market_context` interest_rate | `interest_rates` | `interest_rates` | `interest_rate` | `rate_type + market + tenor + rate_date + effective_provider` |
 | `market_context` 被替换记录 | `market_context_record_revisions` | —（仅 SQLite） | — | `record_id`（被替换记录的原 id，唯一）；`business_key / record_json / superseded_by_record_id / archived_at` |
+| `market_context` 请求—记录关联 | `market_context_request_records` | —（仅 SQLite） | — | 联合主键 `request_id + record_type + record_id`；每次请求最终采用的记录（含 `kept_existing`） |
 | `corporate_action` | `corporate_actions` | `corporate_actions` | `corporate_actions` | `normalized_ticker + action_type + announcement_date + ex_date + effective_provider` |
 
 元数据表包括：`source_fetch_logs`、`provider_comparisons`、`data_quality_conflicts`、`raw_payload_index`、`ingestion_requests`、`ingestion_runs`、`ticker_mappings` 等。
 
 四张市场背景表（`fx_rates / interest_rates / index_bars / commodity_prices`）每个业务键只保留一条当前记录，被替换的整条
-记录进入 `market_context_record_revisions`（见 §6.16 "同日更新"）；`commodity_prices` 另有 `date_confidence /
+记录进入 `market_context_record_revisions`（见 §6.16 "同日更新"）；每次请求最终采用的记录写入
+`market_context_request_records`（幂等回放先查它，再沿替换链找当前记录）；`commodity_prices` 另有 `date_confidence /
 date_resolution_details` 列记录 realtime 快照日期的确认依据。
 
 ### 11.2 标准记录公共字段

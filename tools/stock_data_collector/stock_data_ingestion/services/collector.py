@@ -273,6 +273,7 @@ class StockDataCollector:
         save_cleaned: bool = True,
         export_parquet: bool = True,
         requested_by: str = "manual",
+        trace_id: str | None = None,
     ) -> MarketContextResponse:
         """Market background data (A-share/HK indices, FX, commodities, rates) by business request.
 
@@ -305,6 +306,7 @@ class StockDataCollector:
             save_cleaned=save_cleaned,
             export_parquet=export_parquet,
             requested_by=requested_by,
+            trace_id=trace_id,
         )
         return MarketContextService(self.runner).fetch(request)
 

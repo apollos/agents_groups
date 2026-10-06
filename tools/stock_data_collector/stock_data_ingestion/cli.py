@@ -42,8 +42,8 @@ def _build_database(config):  # type: ignore[no-untyped-def]
 
 
 def _build_collector(config_dir: str | None = None) -> StockDataCollector:
+    # Logging is initialised once in main(); re-initialising here would reset the level.
     config = load_config(config_dir)
-    setup_logging(config.storage.log_path)
     raw_store = RawObjectStore(config.storage.raw_object_root)
     db = _build_database(config)
     db.init()
@@ -210,6 +210,7 @@ def cmd_fetch_market_context(args: argparse.Namespace) -> None:
         save_cleaned=not args.no_save,
         export_parquet=not args.no_save and not args.no_parquet,
         requested_by=args.requested_by,
+        trace_id=args.trace_id,
         **_provider_args(args),
     )
     if args.compact:
@@ -545,6 +546,8 @@ def cmd_verify_eastmoney_cookie(args: argparse.Namespace) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="stock_data_ingestion", description="A-share structured data ingestion CLI")
     parser.add_argument("--config-dir", default=None)
+    parser.add_argument("--debug", action="store_true", help="DEBUG-level structured logs (per-record detail); default INFO")
+    parser.add_argument("--log-file", default=None, help="JSONL log file for this invocation (20 MiB x 5 rotation); default storage.log_path")
     sub = parser.add_subparsers(dest="command", required=True)
 
     init_db = sub.add_parser("init-db", help="Initialize SQLite database and tables")
@@ -646,6 +649,7 @@ def build_parser() -> argparse.ArgumentParser:
     mctx.add_argument("--no-parquet", action="store_true")
     mctx.add_argument("--compact", action="store_true", help="Omit the embedded stock_data_response details")
     mctx.add_argument("--requested-by", default="manual")
+    mctx.add_argument("--trace-id", default=None, help="Caller's correlation id; propagated to every log event of this request and its internal sub-requests")
     mctx.set_defaults(func=cmd_fetch_market_context)
 
     status = fetch_sub.add_parser("trading-status")
@@ -715,7 +719,19 @@ def main(argv: list[str] | None = None) -> None:
     # CLI entry point: load all .env variables before command handlers construct
     # config, database, collectors, or provider adapters.
     ensure_env_loaded(config_dir=getattr(args, "config_dir", None))
+    _init_logging(args)
     args.func(args)
+
+
+def _init_logging(args: argparse.Namespace) -> None:
+    """Single logging initialisation per process: stdout stays business JSON, logs go to stderr/file."""
+    log_file = getattr(args, "log_file", None)
+    if not log_file:
+        try:
+            log_file = load_config(getattr(args, "config_dir", None)).storage.log_path
+        except Exception:  # noqa: BLE001 - commands that cannot load config still get stderr logging
+            log_file = None
+    setup_logging(log_file, debug=bool(getattr(args, "debug", False)))
 
 
 if __name__ == "__main__":

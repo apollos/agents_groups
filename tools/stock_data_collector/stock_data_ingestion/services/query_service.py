@@ -320,41 +320,101 @@ class QueryService:
         rows = self.session.execute(stmt).scalars().all()
         return [{col.name: getattr(row, col.name) for col in row.__table__.columns} for row in rows]
 
-    def get_market_context_records_for_request(self, context_type: str, request_id: str) -> list[dict[str, Any]]:
-        """Current standard records produced by one ingestion request.
+    MARKET_CONTEXT_RECORD_TYPE: dict[str, str] = {
+        "equity_index": "index_bar",
+        "hk_index": "index_bar",
+        "fx": "fx_rate",
+        "commodity": "commodity_price",
+        "interest_rate": "interest_rate",
+    }
 
-        Rows that a newer same-key record has since replaced are archived in
-        ``market_context_record_revisions``; their ``superseded_by_record_id`` chain is
-        followed to the row that currently represents that business key, so an idempotent
-        re-read stays tied to the original successful run instead of picking any row.
+    def _follow_replacement_chain(self, model_cls: Any, record_id: str) -> tuple[dict[str, Any] | None, list[str]]:
+        """Resolve a (possibly archived) record id to the current row of its business key.
+
+        Returns ``(row_or_None, chain)`` where ``chain`` lists the record ids visited after the
+        starting id (empty when the id is itself current).
+        """
+        revision_model = models.MarketContextRecordRevisionModel
+        chain: list[str] = []
+        current_id: str | None = record_id
+        hops = 0
+        while current_id and hops < 64:
+            obj = self.session.execute(select(model_cls).where(model_cls.record_id == current_id)).scalar_one_or_none()
+            if obj is not None:
+                return {col.name: getattr(obj, col.name) for col in obj.__table__.columns}, chain
+            nxt = self.session.execute(select(revision_model).where(revision_model.record_id == current_id)).scalar_one_or_none()
+            current_id = nxt.superseded_by_record_id if nxt is not None else None
+            if current_id:
+                chain.append(current_id)
+            hops += 1
+        return None, chain
+
+    def resolve_request_records(self, context_type: str, request_id: str) -> dict[str, Any]:
+        """Records one ingestion request finally adopted, with how they were located.
+
+        1. ``market_context_request_records`` (written with every retained record, including
+           ``kept_existing``) is consulted first; archived ids are followed along the
+           ``superseded_by_record_id`` chain to the current row.
+        2. Requests older than that table fall back to the legacy association by the record's
+           own ``request_id`` (plus archived rows of that request followed to their successor).
+
+        Returns ``{"rows", "source", "links", "chains", "missing"}``.
         """
         model_cls = self.MARKET_CONTEXT_MODELS.get(str(context_type))
         if model_cls is None:
             raise ValueError(f"INVALID_REQUEST: unsupported context_type {context_type}")
-        date_column = getattr(model_cls, self.MARKET_CONTEXT_DATE_COLUMN[str(context_type)])
-        current = self.session.execute(select(model_cls).where(model_cls.request_id == request_id).order_by(date_column.asc())).scalars().all()
-        rows = [{col.name: getattr(row, col.name) for col in row.__table__.columns} for row in current]
-        seen = {r["record_id"] for r in rows}
-
-        revision_model = models.MarketContextRecordRevisionModel
-        archived = self.session.execute(
-            select(revision_model).where(revision_model.request_id == request_id, revision_model.table_name == model_cls.__tablename__)
+        record_type = self.MARKET_CONTEXT_RECORD_TYPE[str(context_type)]
+        date_col = self.MARKET_CONTEXT_DATE_COLUMN[str(context_type)]
+        link_model = models.MarketContextRequestRecordModel
+        links = self.session.execute(
+            select(link_model.record_id).where(link_model.request_id == request_id, link_model.record_type == record_type)
         ).scalars().all()
-        for revision in archived:
-            successor_id = revision.superseded_by_record_id
-            hops = 0
-            while successor_id and hops < 64:
-                obj = self.session.execute(select(model_cls).where(model_cls.record_id == successor_id)).scalar_one_or_none()
-                if obj is not None:
-                    if obj.record_id not in seen:
-                        rows.append({col.name: getattr(obj, col.name) for col in obj.__table__.columns})
-                        seen.add(obj.record_id)
-                    break
-                nxt = self.session.execute(select(revision_model).where(revision_model.record_id == successor_id)).scalar_one_or_none()
-                successor_id = nxt.superseded_by_record_id if nxt is not None else None
-                hops += 1
-        rows.sort(key=lambda r: (str(r.get(self.MARKET_CONTEXT_DATE_COLUMN[str(context_type)])), str(r.get("observed_at") or "")))
-        return rows
+
+        rows: list[dict[str, Any]] = []
+        chains: dict[str, list[str]] = {}
+        missing: list[str] = []
+        seen: set[str] = set()
+        if links:
+            for linked_id in links:
+                row, chain = self._follow_replacement_chain(model_cls, linked_id)
+                if chain:
+                    chains[linked_id] = chain
+                if row is None:
+                    missing.append(linked_id)
+                elif row["record_id"] not in seen:
+                    rows.append(row)
+                    seen.add(row["record_id"])
+            source = "request_record_links"
+        else:
+            source = "legacy_record_request_id"
+            date_column = getattr(model_cls, date_col)
+            current = self.session.execute(select(model_cls).where(model_cls.request_id == request_id).order_by(date_column.asc())).scalars().all()
+            for obj in current:
+                rows.append({col.name: getattr(obj, col.name) for col in obj.__table__.columns})
+                seen.add(obj.record_id)
+            revision_model = models.MarketContextRecordRevisionModel
+            archived = self.session.execute(
+                select(revision_model).where(revision_model.request_id == request_id, revision_model.table_name == model_cls.__tablename__)
+            ).scalars().all()
+            for revision in archived:
+                row, chain = self._follow_replacement_chain(model_cls, revision.record_id)
+                chains[revision.record_id] = chain
+                if row is None:
+                    missing.append(revision.record_id)
+                elif row["record_id"] not in seen:
+                    rows.append(row)
+                    seen.add(row["record_id"])
+        rows.sort(key=lambda r: (str(r.get(date_col)), str(r.get("observed_at") or "")))
+        return {"rows": rows, "source": source, "links": list(links), "chains": chains, "missing": missing}
+
+    def get_market_context_records_for_request(self, context_type: str, request_id: str) -> list[dict[str, Any]]:
+        """Current standard records one ingestion request adopted (see :meth:`resolve_request_records`)."""
+        return self.resolve_request_records(context_type, request_id)["rows"]
+
+    def get_request_record_links(self, request_id: str) -> list[dict[str, Any]]:
+        link_model = models.MarketContextRequestRecordModel
+        rows = self.session.execute(select(link_model).where(link_model.request_id == request_id)).scalars().all()
+        return [{"request_id": r.request_id, "record_type": r.record_type, "record_id": r.record_id} for r in rows]
 
     def get_market_context_revisions(self, record_id: str | None = None, *, superseded_by_record_id: str | None = None) -> list[dict[str, Any]]:
         """Archived (replaced) market-context records, newest archive first."""

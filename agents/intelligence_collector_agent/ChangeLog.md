@@ -4,6 +4,37 @@
 
 ---
 
+## V0.11.2 — 2026-10-06：请求—记录关联、隔离日线阻断确认、结构化日志
+
+评审两项补齐 + 全链路 JSONL 日志。工具侧 `stock_data_collector`，Agent 侧日志与 `--debug` 转发。
+
+- **请求—记录关联**（工具）：新表 `market_context_request_records(request_id, record_type, record_id)` 联合主键。
+  `IngestionRunner._persist()` 为本次请求最终采用的每条记录保存关联（`inserted / replaced / kept_existing` 都保存），
+  与记录更新同一事务提交。幂等回放 `QueryService.resolve_request_records()` 先查关联表，关联记录已归档则沿
+  `superseded_by_record_id` 替换链追到当前记录；无关联（旧请求）回退到按记录 `request_id` 的旧查询。记录自身
+  `request_id` 不改。修复：11 点请求 B 迟到旧数据被拒后，B 的同幂等键重复请求 / 重启后重复请求都返回 86.59
+  及对应记录来源（新增测试断言与 `test_request_record_links_cover_insert_replace_and_keep`）。
+- **快照日期确认不得使用已隔离日线**（工具）：阻断状态集合 `{quarantined, manual_review_required, conflicted_high, failed}`
+  提取到 `schemas/quality.py: BLOCKING_VALIDATION_STATUSES`，日期确认与汇总层共用。参考日线先按日期去重、取最近两个
+  交易日，任一条处于阻断状态 → 立即 `SNAPSHOT_DATE_UNCONFIRMED`（不跳过被隔离近期日线找更早日期），raw 保留、不写
+  realtime 标准记录、`unknown_date / usable=false / is_fresh=null`，错误消息与 `date_resolution_details` 含参考记录 ID
+  与阻断状态。新增"最后一条日线被隔离""前一条日线被隔离"两个场景测试，均确认失败。
+- **结构化日志**（工具 `logging_config.py`）：JSONL，固定字段 `event, timestamp, level, trace_id, request_id,
+  parent_request_id, ingestion_run_id, context_id, context_type, symbol, idempotency_key`（缺失 `null`）+ `data_mode`。
+  事件：`identity_check / provider_call / snapshot_date_resolution / record_write / request_record_link / store_replay /
+  quality_decision`（DEBUG），`request_summary`（INFO），`business_param_rejected / snapshot_date_unknown /
+  upstream_validation_blocked`（请求级 WARNING），`persist_failed`（ERROR）。写成功事件在外层事务提交后打印；未开 DEBUG
+  不构造逐记录明细。CLI 新增全局 `--debug`、`--log-file`，`fetch market-context --trace-id`；日志在 `main()` 初始化一次，
+  删除 `_build_collector()` 内的重复初始化；内部日线子请求继承 `trace_id` 并记录 `parent_request_id`。文件 20 MiB × 5 轮转。
+- **Agent 侧**：`logging_setup.py` 新增 `agent.jsonl`（结构化事件，20 MiB × 5）与 `ToolLogSink`（`tool_stderr.jsonl`，
+  Agent 进程内串行写盘，子进程不共用文件）；CLI 全局 `--debug`；`MarketContextAdapter(debug, log_sink)` 向工具传
+  `--debug` / `--trace-id`，每次调用后（成功、失败、`TimeoutExpired` 的部分 stderr）都把工具 stderr 转存到磁盘；
+  `_execute_market_context_task()` 以 ticket `correlation_id`（无则 `ticket_id`）为 `trace_id`，处理完成后发出
+  `agent_outcome`（INFO：ticket、工具请求 ID、是否保存快照、是否计入有效覆盖、最终状态、错误码）。
+- 测试：工具 `tests/test_market_context.py` 61 项（全套 187 passed）；Agent `tests/test_v09_market_context.py` 20 项
+  （全套 245 passed）。七类本地验证材料见
+  `docs/acceptance/evidence/market_context_review_20261006/` 与验收文档 §7。
+
 ## V0.11.1 — 2026-10-06：市场背景评审四项修改（快照日期确认 / 业务参数校验 / 同日更新 / 隔离数据）
 
 按评审意见逐项修改，均在工具侧 `stock_data_collector`，Agent 侧只补映射测试与验收记录。

@@ -463,6 +463,21 @@ class MarketContextRecordRevisionModel(AuditMixin, Base):
     archived_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=now_asia_shanghai)
 
 
+class MarketContextRequestRecordModel(Base):
+    """Which market-context record each ingestion request finally adopted.
+
+    Written in the same transaction as the record itself for *every* retained record
+    (inserted, replaced, or kept_existing when an older incoming value was rejected), so an
+    idempotent re-read of a request resolves to exactly the records its first response used,
+    even when the record's own ``request_id`` points to the request that actually collected it.
+    """
+
+    __tablename__ = "market_context_request_records"
+    request_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    record_type: Mapped[str] = mapped_column(String(64), primary_key=True)
+    record_id: Mapped[str] = mapped_column(String(80), primary_key=True, index=True)
+
+
 class InterestRateModel(StandardColumnsMixin, Base):
     __tablename__ = "interest_rates"
     __table_args__ = (

@@ -22,6 +22,21 @@ class ValidationStatus(StrEnum):
     failed = "failed"
 
 
+# Records in these states were rejected or isolated by the ingestion pipeline. Every consumer
+# inside the tool (market-context summary, snapshot-date confirmation, ...) must treat them as
+# unusable references; nothing may silently turn them back into usable values.
+BLOCKING_VALIDATION_STATUSES: frozenset[str] = frozenset({
+    ValidationStatus.quarantined,
+    ValidationStatus.manual_review_required,
+    ValidationStatus.conflicted_high,
+    ValidationStatus.failed,
+})
+
+
+def is_blocking_validation_status(status: Any) -> bool:
+    return status is not None and str(status) in BLOCKING_VALIDATION_STATUSES
+
+
 class MergeMethod(StrEnum):
     canonical_only = "canonical_only"
     canonical_validated = "canonical_validated"

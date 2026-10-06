@@ -535,6 +535,52 @@ def test_snapshot_date_live_session_time_only_is_unknown_even_with_daily_bars(ru
     assert _rows(runner, "select count(*) as n from commodity_prices where frequency='1d'")[0]["n"] == 30
 
 
+@pytest.mark.parametrize("blocked_date, label", [(LAST_TRADING, "last"), (date(2026, 9, 29), "previous")])
+def test_snapshot_date_blocked_reference_bar_fails_confirmation(runner, fake_ak, clock, monkeypatch, blocked_date, label):
+    """A quarantined reference bar (last or previous session) cannot date the snapshot; no
+    earlier bar is substituted; the snapshot ends as unknown_date with the evidence recorded."""
+    original = runner._rescore_record
+
+    def mark(record, conflicts):
+        record = original(record, conflicts)
+        if getattr(record, "frequency", None) == "1d" and record.trade_date == blocked_date:
+            return record.model_copy(update={"validation_status": "quarantined"})
+        return record
+
+    monkeypatch.setattr(runner, "_rescore_record", mark)
+    resp = MarketContextService(runner).fetch(_cu_realtime())
+    _assert_unknown_date(resp)
+    err = next(e for e in resp.errors if e.error_code == "SNAPSHOT_DATE_UNCONFIRMED")
+    blocked_row = _rows(runner, f"select record_id from commodity_prices where frequency='1d' and trade_date='{blocked_date}'")[0]
+    assert blocked_row["record_id"] in err.error_message and "validation_status=quarantined" in err.error_message
+    assert f"{label} daily bar" in err.error_message and "no earlier bar is substituted" in err.error_message
+    assert _rows(runner, "select count(*) as n from commodity_prices where frequency='realtime'")[0]["n"] == 0
+    assert _rows(runner, "select count(*) as n from commodity_prices where frequency='1d'")[0]["n"] == 30
+    assert _rows(runner, "select count(*) as n from raw_payload_index")[0]["n"] >= 1
+
+
+def test_blocking_statuses_are_shared_between_confirmation_and_summary():
+    from stock_data_ingestion.schemas.quality import BLOCKING_VALIDATION_STATUSES, is_blocking_validation_status
+    from stock_data_ingestion.services import market_context_service as svc
+
+    assert set(BLOCKING_VALIDATION_STATUSES) == {"quarantined", "manual_review_required", "conflicted_high", "failed"}
+    assert svc._BLOCKING_VALIDATION_STATUSES is BLOCKING_VALIDATION_STATUSES
+    assert is_blocking_validation_status("quarantined") and not is_blocking_validation_status("conflicted_low")
+    bars = [
+        {"record_id": "a", "trade_date": date(2026, 9, 29), "close": 1.0, "settle": 109180.0, "validation_status": "validated"},
+        {"record_id": "b", "trade_date": LAST_TRADING, "close": 109290.0, "settle": 2.0, "validation_status": "manual_review_required"},
+    ]
+    from stock_data_ingestion.schemas.records import CommodityPriceRecord
+
+    snap = SimpleNamespace(latest=109290.0, pre_settle=109180.0)
+    match, reason = IngestionRunner._match_snapshot_to_last_session(snap, bars)  # type: ignore[arg-type]
+    assert match is None and "b (2026-09-30) has validation_status=manual_review_required" in reason
+    bars[1]["validation_status"] = "validated"
+    match, reason = IngestionRunner._match_snapshot_to_last_session(snap, bars)  # type: ignore[arg-type]
+    assert reason is None and match[0] == LAST_TRADING
+    assert CommodityPriceRecord  # imported for type parity with the runner
+
+
 def test_snapshot_date_legacy_record_without_confidence_is_unknown_not_vendor_timestamp(runner, fake_ak, clock):
     from sqlalchemy import text
 
@@ -741,6 +787,64 @@ def test_same_day_update_late_arriving_older_result_does_not_overwrite(runner, f
     assert len(_rows(runner, "select record_id from market_context_record_revisions")) == revisions_before, "nothing new archived"
     assert set(late.result.provenance.record_ids) == set(ten.result.provenance.record_ids)
 
+    # Request B (the rejected one) is linked to the records it finally adopted, so its idempotent
+    # replays -- same process and after a restart -- return 86.59 with that record's provenance,
+    # although the record's own request_id still names the 10:00 request that collected it.
+    late_request_id = late.result.provenance.stock_data_request_id
+    links = _rows(runner, f"select record_type, record_id from market_context_request_records where request_id='{late_request_id}'")
+    assert {l["record_id"] for l in links} >= {current["record_id"]} and {l["record_type"] for l in links} == {"fx_rate"}
+    assert after["request_id"] == ten.result.provenance.stock_data_request_id != late_request_id
+    calls = len(fake_ak.calls)
+    monkeypatch.setattr(adapter_base, "now_asia_shanghai", lambda: datetime(2026, 10, 6, 11, 30, tzinfo=timezone(timedelta(hours=8))))
+    repeat = service.fetch(_fx_latest())
+    restarted = MarketContextService(_restart(runner)).fetch(_fx_latest())
+    assert len(fake_ak.calls) == calls, "same-hour replays of request B are idempotent hits"
+    for resp in (repeat, restarted):
+        assert any(w.startswith("served_from_store") for w in resp.warnings)
+        assert resp.result.value == 86.59 and resp.result.data_date == AS_OF
+        assert current["record_id"] in resp.result.provenance.record_ids
+        assert current["raw_payload_id"] in resp.result.provenance.raw_payload_ids
+        assert resp.result.source.source_api == "currency_boc_sina"
+        assert set(resp.result.provenance.record_ids) == set(late.result.provenance.record_ids)
+        assert 85.59 not in {o.values.get("rate") for o in resp.result.series}
+
+
+def test_request_record_links_cover_insert_replace_and_keep(runner, fake_ak, clock):
+    """Every retained record is linked to the request, whatever the write action was."""
+    service = MarketContextService(runner)
+    clock(9)
+    nine = service.fetch(_fx_latest())
+    nine_id = nine.result.provenance.stock_data_request_id
+    inserted_links = _rows(runner, f"select record_id from market_context_request_records where request_id='{nine_id}' and record_type='fx_rate'")
+    assert len(inserted_links) == len(nine.result.provenance.record_ids) > 0
+    assert {l["record_id"] for l in inserted_links} == set(nine.result.provenance.record_ids)
+    assert "market_context_request_records" in nine.result.provenance.tables_written
+
+    clock(10)
+    fake_ak.fx_shift = 1.0
+    ten = service.fetch(_fx_latest())
+    ten_id = ten.result.provenance.stock_data_request_id
+    replaced_links = {l["record_id"] for l in _rows(runner, f"select record_id from market_context_request_records where request_id='{ten_id}'")}
+    assert replaced_links == set(ten.result.provenance.record_ids) and not (replaced_links & {l["record_id"] for l in inserted_links})
+
+    # Request 9's links point at archived ids: resolving them follows the chain to the current rows.
+    with runner.database.session() as session:
+        resolved = QueryService(session).resolve_request_records("fx", nine_id)
+    assert resolved["source"] == "request_record_links" and resolved["missing"] == []
+    assert {r["record_id"] for r in resolved["rows"]} == set(ten.result.provenance.record_ids)
+    assert all(chain and chain[-1] in replaced_links for chain in resolved["chains"].values())
+    assert len(resolved["chains"]) == len(inserted_links)
+
+    # Legacy request without links (pre-upgrade database) still resolves by record.request_id.
+    with runner.database.session() as session:
+        from sqlalchemy import text
+
+        session.execute(text(f"delete from market_context_request_records where request_id='{ten_id}'"))
+        session.commit()
+    with runner.database.session() as session:
+        legacy = QueryService(session).resolve_request_records("fx", ten_id)
+    assert legacy["source"] == "legacy_record_request_id" and {r["record_id"] for r in legacy["rows"]} == set(ten.result.provenance.record_ids)
+
 
 def test_repository_upsert_rules_direct(runner, fake_ak, clock):
     from stock_data_ingestion.storage.repositories import Repository
@@ -756,18 +860,20 @@ def test_repository_upsert_rules_direct(runner, fake_ak, clock):
         row = session.execute(select(FxRateModel).where(FxRateModel.rate_type == "spot_sell", FxRateModel.rate_date == AS_OF)).scalar_one()
         base = repo._row_to_record("fx_rate", row)
         older = base.model_copy(update={"record_id": "old_late", "rate": 1.0, "fetch_time": base.fetch_time - timedelta(hours=1)}, deep=True)
-        retained, table, action = repo.upsert_market_context_record(older)
-        assert action == "kept_existing" and table == "fx_rates" and retained.rate == base.rate and retained.record_id == base.record_id
+        out = repo.upsert_market_context_record(older)
+        assert out.action == "kept_existing" and out.table == "fx_rates" and out.record.rate == base.rate and out.record.record_id == base.record_id
+        assert out.incoming_record_id == "old_late" and out.existing_record_id == base.record_id and out.comparison_basis == "fetch_time"
         same_age = base.model_copy(update={"record_id": "same_age", "rate": 2.0}, deep=True)
-        assert repo.upsert_market_context_record(same_age)[2] == "kept_existing"
+        assert repo.upsert_market_context_record(same_age).action == "kept_existing"
         newer = base.model_copy(update={"record_id": "newer", "rate": 3.0, "fetch_time": base.fetch_time + timedelta(hours=1)}, deep=True)
-        retained, _, action = repo.upsert_market_context_record(newer)
-        assert action == "replaced" and retained.record_id == "newer" and retained.rate == 3.0
+        out = repo.upsert_market_context_record(newer)
+        assert out.action == "replaced" and out.record.record_id == "newer" and out.record.rate == 3.0 and out.archived_record_ids == [base.record_id]
         # provider_update_time wins over fetch_time when both sides carry it
-        with_put = retained.model_copy(update={"record_id": "put_a", "rate": 4.0, "provider_update_time": base.fetch_time, "fetch_time": base.fetch_time + timedelta(hours=2)}, deep=True)
-        assert repo.upsert_market_context_record(with_put)[2] == "replaced"
+        with_put = out.record.model_copy(update={"record_id": "put_a", "rate": 4.0, "provider_update_time": base.fetch_time, "fetch_time": base.fetch_time + timedelta(hours=2)}, deep=True)
+        assert repo.upsert_market_context_record(with_put).action == "replaced"
         older_put = with_put.model_copy(update={"record_id": "put_b", "rate": 5.0, "provider_update_time": base.fetch_time - timedelta(hours=1), "fetch_time": base.fetch_time + timedelta(hours=3)}, deep=True)
-        assert repo.upsert_market_context_record(older_put)[2] == "kept_existing"
+        out = repo.upsert_market_context_record(older_put)
+        assert out.action == "kept_existing" and out.comparison_basis == "provider_update_time"
         session.commit()
         assert QueryService(session).get_raw_ref_by_record_id(base.record_id)["archived"] is True
 
@@ -802,6 +908,116 @@ def test_legacy_duplicate_rows_collapse_into_one_current_record(runner, fake_ak,
 
     resp = MarketContextService(runner).fetch(_cu_realtime())
     _assert_confirmed_last_session(resp)
+
+
+# ---------------------------------------------------------------------------
+# Structured logging
+# ---------------------------------------------------------------------------
+REQUIRED_LOG_FIELDS = {"event", "timestamp", "level", "trace_id", "request_id", "parent_request_id", "ingestion_run_id", "context_id", "context_type", "symbol", "idempotency_key"}
+
+
+@pytest.fixture
+def jsonl_log():
+    import io
+    import logging as _logging
+
+    from stock_data_ingestion.logging_config import PACKAGE_LOGGER, setup_logging
+
+    buffer = io.StringIO()
+    setup_logging(None, debug=True, stream=buffer)
+
+    def events():
+        return [json.loads(line) for line in buffer.getvalue().splitlines() if line.strip()]
+
+    yield events
+    _logging.getLogger(PACKAGE_LOGGER).handlers.clear()
+
+
+def test_logging_events_carry_correlation_fields_and_trace(runner, fake_ak, clock, jsonl_log):
+    from stock_data_ingestion.logging_config import set_default_log_fields
+
+    set_default_log_fields(data_mode="simulated")
+    try:
+        resp = MarketContextService(runner).fetch(_req(context_type="commodity", symbol="CU0", frequency="realtime", as_of=AS_OF, trace_id="trace-abc"))
+    finally:
+        set_default_log_fields(data_mode="live")
+    events = jsonl_log()
+    assert events, "DEBUG run must produce events"
+    for ev in events:
+        assert REQUIRED_LOG_FIELDS <= set(ev), ev
+        assert ev["trace_id"] == "trace-abc" and ev["data_mode"] == "simulated"
+    names = [e["event"] for e in events]
+    for required in ("identity_check", "provider_call", "snapshot_date_resolution", "record_write", "request_record_link", "quality_decision", "request_summary"):
+        assert required in names, required
+    # The daily sub-request inherits the trace and names its parent.
+    outer_id = resp.result.provenance.stock_data_request_id
+    daily = [e for e in events if e["event"] == "record_write" and e["record_type"] == "commodity_price" and e["business_key"]["frequency"] == "1d"]
+    assert daily and all(e["parent_request_id"] == outer_id and e["request_id"] != outer_id for e in daily)
+    snap_write = next(e for e in events if e["event"] == "record_write" and e["business_key"]["frequency"] == "realtime")
+    assert snap_write["request_id"] == outer_id and snap_write["parent_request_id"] is None and snap_write["action"] == "inserted"
+    resolution = next(e for e in events if e["event"] == "snapshot_date_resolution")
+    assert resolution["decision"] == "saved" and resolution["confirmed_date"] == LAST_TRADING.isoformat()
+    assert len(resolution["reference_bars"]) == 2 and resolution["reference_bars"][-1]["trade_date"] == LAST_TRADING.isoformat()
+    summary = next(e for e in events if e["event"] == "request_summary")
+    assert summary["level"] == "INFO" and summary["status"] == "partial_success" and summary["value"] == 109290 and summary["data_date"] == LAST_TRADING.isoformat()
+    # A store replay logs the original request and the chain it followed.
+    MarketContextService(runner).fetch(_req(context_type="commodity", symbol="CU0", frequency="realtime", as_of=AS_OF, trace_id="trace-def"))
+    replay = [e for e in jsonl_log() if e["event"] == "store_replay"]
+    assert replay and replay[-1]["original_request_id"] == outer_id and replay[-1]["resolution_source"] == "request_record_links"
+    assert replay[-1]["trace_id"] == "trace-def"
+
+
+def test_logging_warnings_for_rejection_unknown_date_and_block(runner, fake_ak, clock, jsonl_log, monkeypatch):
+    service = MarketContextService(runner)
+    service.fetch(_req(context_type="commodity", symbol="CU0", contract="CU2612", as_of=AS_OF))
+    fake_ak.fail.add("futures_zh_daily_sina")
+    service.fetch(_cu_realtime())
+    fake_ak.fail.discard("futures_zh_daily_sina")
+    original = runner._rescore_record
+    monkeypatch.setattr(runner, "_rescore_record", lambda r, c: original(r, c).model_copy(update={"validation_status": "quarantined"}))
+    service.fetch(_req(context_type="hk_index", symbol="HSTECH", as_of=AS_OF))
+    warnings = [(e["event"], e["level"]) for e in jsonl_log() if e["level"] == "WARNING"]
+    assert ("business_param_rejected", "WARNING") in warnings
+    assert ("snapshot_date_unknown", "WARNING") in warnings
+    assert ("upstream_validation_blocked", "WARNING") in warnings
+
+
+def test_logging_info_level_has_no_per_record_detail(runner, fake_ak, clock):
+    import io
+    import logging as _logging
+
+    from stock_data_ingestion.logging_config import PACKAGE_LOGGER, setup_logging
+
+    buffer = io.StringIO()
+    setup_logging(None, debug=False, stream=buffer)
+    try:
+        MarketContextService(runner).fetch(_fx_latest())
+    finally:
+        _logging.getLogger(PACKAGE_LOGGER).handlers.clear()
+    events = [json.loads(l) for l in buffer.getvalue().splitlines() if l.strip()]
+    assert [e["event"] for e in events] == ["request_summary"]
+    assert all(e["level"] in {"INFO", "WARNING", "ERROR"} for e in events)
+
+
+def test_cli_debug_and_log_file_flags(runner, monkeypatch, tmp_path, capsys):
+    import logging as _logging
+
+    from stock_data_ingestion import cli
+    from stock_data_ingestion.logging_config import PACKAGE_LOGGER
+
+    collector = StockDataCollector(runner)
+    monkeypatch.setattr(cli, "_build_collector", lambda config_dir=None: collector)
+    monkeypatch.setattr(cli, "load_config", lambda config_dir=None: runner.config)
+    log_file = tmp_path / "logs" / "debug.jsonl"
+    try:
+        cli.main(["--debug", "--log-file", str(log_file), "fetch", "market-context", "--context-type", "fx", "--symbol", "HKDCNY", "--as-of", "2026-10-06", "--trace-id", "cli-trace", "--compact"])
+    finally:
+        _logging.getLogger(PACKAGE_LOGGER).handlers.clear()
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "success", "stdout stays business JSON"
+    events = [json.loads(l) for l in log_file.read_text(encoding="utf-8").splitlines() if l.strip()]
+    assert any(e["event"] == "record_write" for e in events) and all(e["trace_id"] == "cli-trace" for e in events)
+    assert {e["level"] for e in events} >= {"DEBUG", "INFO"}
 
 
 def test_request_validation_rules():

@@ -387,6 +387,17 @@ intel-agent --config config/intelligence_collector.yaml agent run-until-idle --m
 intel-agent --config config/intelligence_collector.yaml agent status
 ```
 
+日志（V0.11.2）：全局 `--debug`（放在子命令之前）把 Agent 包日志切到 DEBUG，并在调用 `stock_data_ingestion.cli`
+时带上 `--debug`，让工具产出逐记录明细事件。`<log_dir>/intelligence_collector.log` 为可读日志（按日轮转，不变）；
+`<log_dir>/agent.jsonl` 为结构化事件（`agent_outcome` 等，20 MiB × 5 轮转）；`<log_dir>/tool_stderr.jsonl` 是 Agent
+自己写盘的工具子进程 stderr 结构化日志（成功、失败、超时都转存；工具 stdout 只有业务 JSON）。每个市场背景任务用
+ticket 的 `correlation_id`（无则 `ticket_id`）作为 `trace_id` 传给工具，工具及其内部子请求的所有事件都带同一个
+`trace_id`，`agent_outcome` 事件记录 ticket、工具请求 ID、是否保存快照、是否计入有效覆盖、最终状态。
+
+```bash
+intel-agent --config config/intelligence_collector.yaml --debug agent run-once
+```
+
 状态输出包括：
 
 - state / bus / data DB 路径。

@@ -103,6 +103,8 @@ class MarketContextRequest(BaseModel):
     save_cleaned: bool = True
     export_parquet: bool = True
     requested_by: str = "manual"
+    # Correlation id handed over by the caller (the agent); inherited by internal sub-requests.
+    trace_id: Optional[str] = None
     created_at: datetime = Field(default_factory=now_asia_shanghai)
 
     @field_validator("as_of", "start_date", "end_date", mode="before")
