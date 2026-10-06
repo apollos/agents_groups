@@ -337,6 +337,21 @@ def test_agent_fresh_snapshot_counts_as_coverage(tmp_path, monkeypatch):
     assert _issues(agent, "market_context_stale") == [] and _issues(agent, "market_context_collect_failed") == []
 
 
+def test_agent_upstream_quarantined_value_does_not_count_as_coverage(tmp_path, monkeypatch):
+    agent = _agent(tmp_path / "a")
+    payload = tool_payload(value=4026.0, data_date=AS_OF, status="failed", quality={
+        "usable": False, "status": "failed", "is_fresh": True,
+        "warnings": ["upstream_validation_blocked: quarantined; value retained for inspection only"],
+    })
+    cli = FakeCLI(payload)
+    monkeypatch.setattr(MarketContextAdapter, "_run_cli", lambda self, cmd: cli(cmd))
+    ticket_id = _dispatch(agent, "quarantined")
+    assert agent.tickets.get(ticket_id)["status"] == "failed"
+    cov = CoverageEvaluator(agent.data_store).market_context_coverage(trade_date=AS_OF)
+    assert cov["contexts_with_snapshot"] == 0 and cov["contexts_fresh"] == 0
+    assert _issues(agent, "market_context_collect_failed")
+
+
 def test_agent_stale_snapshot_is_saved_but_flagged(tmp_path, monkeypatch):
     agent = _agent(tmp_path / "a")
     payload = tool_payload(value=4357.6, data_date="2026-06-30", status="partial_success",

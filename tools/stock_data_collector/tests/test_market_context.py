@@ -324,6 +324,61 @@ def test_service_as_of_before_first_observation_is_missing(runner):
     assert resp.result.value is None and resp.result.data_date is None
 
 
+@pytest.mark.parametrize("validation_status", ["quarantined", "manual_review_required", "conflicted_high", "failed"])
+def test_service_blocks_upstream_validation_on_fetch_and_store_replay(runner, monkeypatch, validation_status):
+    original = runner._rescore_record
+
+    def mark_blocked(record, conflicts):
+        return original(record, conflicts).model_copy(update={"validation_status": validation_status})
+
+    monkeypatch.setattr(runner, "_rescore_record", mark_blocked)
+    service = MarketContextService(runner)
+    first = service.fetch(_req(context_type="hk_index", symbol="HSTECH", as_of=AS_OF))
+    second = service.fetch(_req(context_type="hk_index", symbol="HSTECH", as_of=AS_OF))
+    assert any(w.startswith("served_from_store") for w in second.warnings)
+    for resp in (first, second):
+        assert resp.result.value is not None, "retain the rejected value and provenance for inspection"
+        assert resp.result.provenance.record_ids
+        assert resp.result.quality.is_fresh, "freshness and validity are independent"
+        assert resp.status == "failed" and resp.result.quality.status == "failed"
+        assert not resp.result.quality.usable
+        assert resp.result.series[-1].validation_status == validation_status
+        assert any(validation_status in w for w in resp.result.quality.warnings)
+        assert all(c.value is None for c in resp.result.changes.values())
+
+
+def test_service_does_not_compute_change_from_quarantined_reference(runner, monkeypatch):
+    original = runner._rescore_record
+
+    def mark_reference(record, conflicts):
+        record = original(record, conflicts)
+        if record.trade_date == date(2026, 10, 2):
+            return record.model_copy(update={"validation_status": "quarantined"})
+        return record
+
+    monkeypatch.setattr(runner, "_rescore_record", mark_reference)
+    resp = MarketContextService(runner).fetch(_req(context_type="hk_index", symbol="HSTECH", as_of=AS_OF))
+    assert resp.status == "success" and resp.result.quality.usable
+    assert resp.result.changes["1p"].value is None
+    assert "quarantined" in resp.result.changes["1p"].reason
+    assert resp.result.changes["5p"].value is not None
+
+
+def test_service_fx_aggregation_preserves_blocking_status(runner, monkeypatch):
+    original = runner._rescore_record
+
+    def mark_quote(record, conflicts):
+        record = original(record, conflicts)
+        status = "quarantined" if record.rate_type == "spot_sell" else "conflicted_low"
+        return record.model_copy(update={"validation_status": status})
+
+    monkeypatch.setattr(runner, "_rescore_record", mark_quote)
+    resp = MarketContextService(runner).fetch(_req(context_type="fx", symbol="HKDCNY", as_of=AS_OF))
+    assert resp.result.value == 85.59
+    assert resp.result.series[-1].validation_status == "quarantined"
+    assert resp.status == "failed" and not resp.result.quality.usable
+
+
 def test_service_unknown_symbol_fails_without_vendor_call(runner, fake_ak):
     resp = MarketContextService(runner).fetch(_req(context_type="commodity", symbol="UNKNOWN"))
     assert resp.status == "failed" and fake_ak.calls == []
