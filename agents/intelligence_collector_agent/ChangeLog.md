@@ -33,7 +33,7 @@
   `agent_outcome`（INFO：ticket、工具请求 ID、是否保存快照、是否计入有效覆盖、最终状态、错误码）。
 - 测试：工具 `tests/test_market_context.py` 61 项（全套 187 passed）；Agent `tests/test_v09_market_context.py` 20 项
   （全套 245 passed）。七类本地验证材料见
-  `docs/acceptance/evidence/market_context_review_20261006/` 与验收文档 §7。
+  `logs/acceptance/market_context_review_20261006/`（运行产物一律放 `logs/`，已 gitignore，本地保留）与验收文档 §7。
 
 ## V0.11.1 — 2026-10-06：市场背景评审四项修改（快照日期确认 / 业务参数校验 / 同日更新 / 隔离数据）
 

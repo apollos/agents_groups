@@ -54,7 +54,7 @@
 python tools/collector_acceptance.py replay-events --workspace ~/.local/state/agents_groups/codex-e2e-20261005-140117-361081759
 ```
 
-输出 `docs/acceptance/20261005/codex-run_1b8ec1dde3b5/replay-events-with-fixed-code.json`：
+输出 `logs/acceptance/20261005/codex-run_1b8ec1dde3b5/replay-events-with-fixed-code.json`：
 
 | 业务事项 | 来源行 |
 | --- | --- |
@@ -76,7 +76,7 @@ python tools/collector_acceptance.py replay-events --workspace ~/.local/state/ag
 ```
 agents/intelligence_collector_agent/
 ├── docs/acceptance/collector_acceptance_20261005_round4.md                        本报告
-├── docs/acceptance/20261005/codex-run_1b8ec1dde3b5/replay-events-with-fixed-code.json
+├── logs/acceptance/20261005/codex-run_1b8ec1dde3b5/replay-events-with-fixed-code.json
 ├── src/agent_trade_intel/event_identity.py      EntityAliases、project_name、头部式 project_key、business_identity
 ├── src/agent_trade_intel/persistence.py         别名组、business_identity 入 payload、_rekey_business_events
 ├── tools/collector_acceptance.py                replay-events 子命令

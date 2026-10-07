@@ -75,7 +75,7 @@ T4：`fact_b24346cb8be2` 原句、"与另一标段相比更低"、"约为钠电�
 
 ### 2.1 Codex 真实运行离线重验
 
-`docs/acceptance/20261005/codex-693b3df-offline-revalidation-with-fixed-code.json`：复核工作区 `run_3549da9f8002` 的两篇原始模型输出（只读 `model_output`）用修复后代码重新校验并经生产 `ResultPersister` 写入临时库——`metric_d40a8a1b598e → 100 MW + energy 400 MWh`，`metric_8faafc286d45 → 10 MW + 40 MWh`，两条公示事件均 `energy_mwh=400`，`fact_b24346cb8be2` 附 `comparison_evidence 1.035@p2` 与 `usable_as_price_benchmark=false`；持久化 `events=2, events_linked=2`。
+`logs/acceptance/20261005/codex-693b3df-offline-revalidation-with-fixed-code.json`：复核工作区 `run_3549da9f8002` 的两篇原始模型输出（只读 `model_output`）用修复后代码重新校验并经生产 `ResultPersister` 写入临时库——`metric_d40a8a1b598e → 100 MW + energy 400 MWh`，`metric_8faafc286d45 → 10 MW + 40 MWh`，两条公示事件均 `energy_mwh=400`，`fact_b24346cb8be2` 附 `comparison_evidence 1.035@p2` 与 `usable_as_price_benchmark=false`；持久化 `events=2, events_linked=2`。
 
 ## 3. 真实端到端（复核 §6）
 
@@ -117,7 +117,8 @@ brief：`why_it_matters` 为"…可观察其钠电储能产品的投标价格带
 ```
 agents/intelligence_collector_agent/docs/acceptance/
 ├── collector_acceptance_20261005_round3.md                  本报告
-└── 20261005/
+└── （下列运行产物现位于 agents/intelligence_collector_agent/logs/acceptance/20261005/，本地保留、不入库）
+    20261005/
     ├── codex-693b3df-offline-revalidation-with-fixed-code.json   复核原始输出用最终代码重验 + 生产持久化
     ├── batch-v5/{acceptance-manifest,acceptance-summary}.json
     ├── batch-v5/run-1/{started,steps,result,mic-report,content-review,redeliver,next-cycle}.json

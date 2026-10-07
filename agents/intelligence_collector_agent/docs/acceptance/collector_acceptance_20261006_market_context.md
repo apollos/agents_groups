@@ -22,7 +22,7 @@
 | 回归 | **通过**。Agent 239 passed（含既有 MIC / 股票 / 港股通 / 日报 / 看板），工具 145 passed（126 既有 + 19 新增） |
 | 未验证 | 东财 `stock_zh_index_daily_em`、`stock_hk_index_daily_em`（本机被 WAF `RemoteDisconnected`，未配置 `EASTMONEY_COOKIE`）；`bond_zh_us_rate` 兜底、`futures_zh_spot` 盘中时段快照（验收时为休市，仅验证了休市快照归属日校正）；BaoStock 对 `index_data` 的第二源交叉校验 |
 | 评审四项修改（同日晚） | 见 **§6**：快照日期入库前确认 / 业务参数只校验 / 同日更新 + 历史表 / 隔离数据，逐项区分"模拟数据回归通过"与"真实供应商采集通过"。回归：工具 179 passed，Agent 242 passed |
-| 评审补齐两项 + 日志 + 七类本地验证（10-07 凌晨） | 见 **§7**：请求—记录关联表、隔离日线阻断快照日期确认、JSONL 结构化日志；七类场景（3 类真实采集 `data_mode=live`、4 类模拟 `data_mode=simulated`）全部通过，材料在 `docs/acceptance/evidence/market_context_review_20261006/`。回归：工具 187 passed，Agent 245 passed |
+| 评审补齐两项 + 日志 + 七类本地验证（10-07 凌晨） | 见 **§7**：请求—记录关联表、隔离日线阻断快照日期确认、JSONL 结构化日志；七类场景（3 类真实采集 `data_mode=live`、4 类模拟 `data_mode=simulated`）全部通过，材料在 `logs/acceptance/market_context_review_20261006/`。回归：工具 187 passed，Agent 245 passed |
 
 ## 1. 工具侧真实样本（CLI 直接调用，2026-10-06）
 
@@ -207,9 +207,11 @@ source_api / tool_request_id / quality_json / provenance_json`（`provenance.ing
 
 ### 7.2 七类场景材料索引
 
+材料位置：`agents/intelligence_collector_agent/logs/acceptance/market_context_review_20261006/<scenario>/`
+（运行产物放 `logs/`，`logs/` 已在 `.gitignore`，本地保留、不入库；审查时按下表目录名在本机打开）。
 每个目录：`inputs.json`（输入参数、commit、每次调用的摘要、`checks` 核对表）、`response_N.json`（每次调用完整响应）、
 `debug.jsonl`（工具 DEBUG 日志；07 场景为 Agent 转存的工具 stderr）、`agent.jsonl`（涉及 Agent 时）、`db_export.json`
-（仅该场景的当前记录、归档记录、请求—记录关联、快照日期确认依据）。驱动脚本在 `_drivers/`。
+（仅该场景的当前记录、归档记录、请求—记录关联、快照日期确认依据）。驱动脚本在同目录 `_drivers/`（可重跑；输出目录即本 `logs/acceptance/` 路径）。
 
 | 场景 | 模式 | 目录 | 调用 | 结果 | 核对 |
 | --- | --- | --- | --- | --- | --- |

@@ -131,7 +131,8 @@ brief（非正式记录）：`why_it_matters` 原含可比与量级措辞，现�
 agents/intelligence_collector_agent/docs/acceptance/
 ├── collector_acceptance_20261004.md                第一轮报告
 ├── collector_acceptance_20261004_round2.md         本报告
-└── 20261004/
+└── （下列运行产物现位于 agents/intelligence_collector_agent/logs/acceptance/20261004/，本地保留、不入库）
+    20261004/
     ├── batch-v3/{acceptance-manifest,acceptance-summary}.json
     ├── batch-v3/run-1/{started,steps,result,mic-report,content-review,redeliver,next-cycle}.json
     ├── batch-v3/run-1/offline-revalidation-with-v4-code.json   v3 原始模型输出用最终代码离线重验

@@ -45,7 +45,7 @@
 
 ### 2.3 批次 v2 运行后的改动（诚实披露）
 
-v2 run-1 之后只改了：`collector_acceptance.py`（`next-cycle` 的同日检查改到任务层并选择不同分钟；`code_fingerprint` 改为递归遍历未跟踪目录；`content_review` 导出补充 `model_requests`）、`docs/COMMANDS.md`、本报告与 `docs/acceptance/20261004/*` 产物。MIC / Agent 生产代码与 v2 manifest 指纹一致。注意 v1/v2 manifest 的 `untracked_python_sha256` 用的是修复前算法（未遍历未跟踪目录，因此不含验收工具自身）。
+v2 run-1 之后只改了：`collector_acceptance.py`（`next-cycle` 的同日检查改到任务层并选择不同分钟；`code_fingerprint` 改为递归遍历未跟踪目录；`content_review` 导出补充 `model_requests`）、`docs/COMMANDS.md`、本报告与 `logs/acceptance/20261004/*` 产物。MIC / Agent 生产代码与 v2 manifest 指纹一致。注意 v1/v2 manifest 的 `untracked_python_sha256` 用的是修复前算法（未遍历未跟踪目录，因此不含验收工具自身）。
 
 ## 3. 离线回归
 
@@ -152,7 +152,8 @@ p2 "二标段为钠电池储能系统，10MW/40MWh钠离子储能系统，宁德
 ```
 agents/intelligence_collector_agent/docs/acceptance/
 ├── collector_acceptance_20261004.md            本报告
-└── 20261004/
+└── （下列运行产物现位于 agents/intelligence_collector_agent/logs/acceptance/20261004/，本地保留、不入库）
+    20261004/
     ├── bjx-pinpoint-read-probe.json             §5.1 定点读取（非发现式，0 模型调用）
     ├── batch-v1/{acceptance-manifest,acceptance-summary}.json
     ├── batch-v1/run-1/{started,steps,result,mic-report,content-review}.json   失败批次完整记录
