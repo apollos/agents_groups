@@ -30,6 +30,7 @@ from mic.run_context import RunContext, TargetIdentity, config_fingerprint
 from mic.schemas import CoverageGap, SearchHit, TriageResult
 from mic.search import build_search_provider
 from mic.store import Repository, get_database
+from mic.task_questions import parse_task_questions, question_terms, task_context
 from mic.triage import SearchHitTriage
 from mic.utils import canonicalize_url, domain_of, new_id
 from mic.validate import BundleValidator
@@ -68,6 +69,9 @@ class RunStats:
     # rules, keyed by reason, plus candidates kept only as related-company information.
     read_gate_demoted: dict[str, int] = field(default_factory=dict)
     read_gate_related_only: int = 0
+    # Read candidates left unattempted because the http/browser attempt budgets ran out
+    # (failed reads do not consume max_links_to_read slots, attempt budgets do).
+    read_queue_stopped_by_budget: int = 0
     search_outcomes: dict[str, int] = field(default_factory=dict)
     search_errors: list[dict] = field(default_factory=list)
     read_failures: dict[str, int] = field(default_factory=dict)
@@ -143,6 +147,7 @@ class Pipeline:
         """
         run_options = dict(run_options or {})
         window = PublicationWindow.from_value(task_profile.get("time_window"))
+        questions = parse_task_questions(task_profile)  # validated before any run record
         profile_cfg = self.config.get_target_profile(target_id)
         if profile_cfg is None:
             raise ValueError(f"Unknown target_id: {target_id}")
@@ -165,6 +170,11 @@ class Pipeline:
         self._source_feedback = self.repo.source_type_feedback_weights()
 
         self.triage.for_profile(profile).set_source_feedback(self._source_feedback)
+        # Explicit research questions steer SERP triage and passage selection for this run
+        # (the planner reads them from task_profile itself; the model gets task_context).
+        terms = question_terms(questions, exclude=profile.all_entity_terms())
+        self.triage.set_task_terms(terms)
+        self.reader.set_task_terms(terms)
 
         budget_profile = task_profile.get("budget_profile", {})
         gov = (self.config.call_governance or {}).get("budgets", {})
@@ -190,9 +200,13 @@ class Pipeline:
             max_batch_triage_calls=gov.get("max_batch_triage_calls", max(1, run_calls // 6)),
         )
         call_planner = ModelCallPlanner(self.config, self.registry, call_budget)
+        call_planner.task_context = task_context(questions)
 
         logger.info("collect_start run_id=%s target_id=%s attempt_id=%s browser=%s",
                     run_id, target_id, context.attempt_id, self._browser_run)
+        if questions:
+            logger.info("task_questions run_id=%s questions=%s terms=%s", run_id,
+                        [q.describe() for q in questions], terms)
         cleanup: dict[str, Any] = {}
         try:
             try:
@@ -298,6 +312,39 @@ class Pipeline:
                 self.repo.mark_interrupted_page_attempts(context.run_id)
             except Exception:  # noqa: BLE001
                 pass
+
+    @staticmethod
+    def _reserve_first_hand_slot(read_queue: list[tuple[str, SearchHit, TriageResult]]
+                                 ) -> list[tuple[str, SearchHit, TriageResult]]:
+        """Move the best first-hand candidate to the head of the read queue.
+
+        Triage scores reward what the SERP snippet already shows (amounts, strong-fact
+        words), which favours media rewrites over the primary document whose snippet is
+        boilerplate ("2025年年度报告摘要" on the company site). Mirroring coverage-first
+        query planning, one read slot is reserved for the highest-scoring candidate that
+        triage marked ``high_credibility_source`` (exchange / regulator / official / the
+        target's own domain); everything else keeps its score order. Related-only
+        candidates never take the slot.
+        """
+        for idx, (_lid, _hit, tri) in enumerate(read_queue):
+            if RELATED_ONLY_SIGNAL in tri.matched_signals:
+                break
+            if "high_credibility_source" in tri.matched_signals:
+                if idx == 0:
+                    return read_queue
+                head = read_queue[idx]
+                return [head, *read_queue[:idx], *read_queue[idx + 1:]]
+        return read_queue
+
+    @staticmethod
+    def _read_attempt_possible(context: RunContext) -> bool:
+        """True while at least one fetch transport still has attempt budget.
+
+        Non-browser runs carry effectively unlimited transport counters (``_build_context``),
+        so this only ever stops the queue on the browser route.
+        """
+        budget = context.budget
+        return budget.can("http_read_attempts") or budget.can("browser_read_attempts")
 
     @staticmethod
     def _apply_read_gate(hit: SearchHit, tri: TriageResult, stats: RunStats) -> TriageResult:
@@ -541,14 +588,37 @@ class Pipeline:
         read_queue = [(lid, h, t) for lid, h, t in triaged
                       if t.triage_decision == "read"]
         read_queue.sort(key=lambda x: (RELATED_ONLY_SIGNAL in x[2].matched_signals, -x[2].read_priority))
-        read_queue = read_queue[:max_links_to_read]
-        stats.links_selected_for_read = len(read_queue)
-        context.budget.record("links_selected_for_read", len(read_queue))
+        read_queue = self._reserve_first_hand_slot(read_queue)
+        # ``max_links_to_read`` counts links whose article was actually obtained. A candidate
+        # that yields no article (anti-bot page, listing, unresolved scope, duplicate body)
+        # does not use up a slot: the queue moves on to the next candidate while the
+        # transport attempt budgets (http / browser) still allow a fetch. Previously two
+        # unlucky top picks ended the read stage with nothing to analyse.
         seen_final_canonical: set[str] = set()
+        read_ok = 0
 
-        for link_id, hit, tri in read_queue:
+        for qi, (link_id, hit, tri) in enumerate(read_queue):
+            if read_ok >= max_links_to_read:
+                break
             self._check_alive(context)
+            if not self._read_attempt_possible(context):
+                stats.read_queue_stopped_by_budget = len(read_queue) - qi
+                logger.info("read_queue_stopped run_id=%s reason=attempt_budget_exhausted "
+                            "attempted=%s read=%s remaining=%s", run_id,
+                            stats.links_selected_for_read, read_ok, stats.read_queue_stopped_by_budget)
+                break
+            stats.links_selected_for_read += 1
+            context.budget.record("links_selected_for_read")
             read = self.reader.read(link_id, hit.url, profile, context=context)
+            stop_after_this = bool(read.fetch_diagnostics.get("budget_exhausted"))
+            if stop_after_this:
+                # Every transport this URL may use is out of attempts; later candidates share
+                # the same budgets, so the queue stops after recording this attempt instead
+                # of failing the remaining candidates one by one.
+                stats.read_queue_stopped_by_budget = len(read_queue) - qi - 1
+                logger.info("read_queue_stopped run_id=%s reason=attempt_budget_exhausted "
+                            "attempted=%s read=%s remaining=%s", run_id,
+                            stats.links_selected_for_read, read_ok, stats.read_queue_stopped_by_budget)
             # Right after the read returns, before any branch may ``continue`` (review: a
             # cancel / deadline during the *last* read, which then failed, was never seen).
             self._check_alive(context)
@@ -562,6 +632,8 @@ class Pipeline:
             if read.read_status == "read" and final_canonical in seen_final_canonical:
                 read.read_status, read.failure_reason = "failed", "duplicate_final_url"
             seen_final_canonical.add(final_canonical)
+            if read.read_status == "read":
+                read_ok += 1
             freshness = window.assess(read.publication_time)
             read.fetch_diagnostics["time_window"] = freshness
             self.repo.save_read_attempt({
@@ -581,6 +653,8 @@ class Pipeline:
                     link_id, "failed", None, None,
                     document_type=read.document_type,
                     access_profile_id=self.reader.access_profile_id)
+                if stop_after_this:
+                    break
                 continue
             stats.links_read += 1
             if window.days is not None:
@@ -1063,6 +1137,8 @@ class Pipeline:
             # "宁德时代新能源科技股份有限公司" and "宁德时代" as one event subject.
             "target_aliases": [str(a) for a in (profile.get("aliases") or [])],
             "time_window": task_profile.get("time_window", ""),
+            # Explicit research questions of this run (task_profile.questions), as planned.
+            "task_questions": [q.describe() for q in parse_task_questions(task_profile)],
             "log_file": stats.log_file,
             "collection_diagnostics": diagnostics,
             "summary": {
@@ -1080,6 +1156,7 @@ class Pipeline:
                 "links_selected_for_read": stats.links_selected_for_read,
                 "read_gate_demoted": dict(stats.read_gate_demoted),
                 "read_gate_related_only": stats.read_gate_related_only,
+                "read_queue_stopped_by_budget": stats.read_queue_stopped_by_budget,
                 "search_hits": stats.search_hits,
                 "unique_source_links": stats.unique_source_links,
                 "links_read": stats.links_read,

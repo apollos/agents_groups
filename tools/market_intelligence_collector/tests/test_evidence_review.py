@@ -18,7 +18,9 @@ def price(value=1.035, unit="元/Wh", **fields):
 
 
 class QualityTests(unittest.TestCase):
-    def test_price_is_not_total_and_preserves_source(self):
+    def test_amount_with_a_price_unit_is_a_format_hold_not_a_reclassification(self):
+        # Total-vs-unit-price assignment belongs to the model; the program neither
+        # moves the number into unit_price nor searches the passage to decide.
         for value in (1.035, 0.518):
             with self.subTest(value=value):
                 raw = price(value)
@@ -26,37 +28,42 @@ class QualityTests(unittest.TestCase):
                 report = run(raw, f"中标合单价{value}元/Wh。")
                 fields = report.bundle.facts[0].metrics
                 self.assertIsNone(fields["amount"])
-                self.assertEqual(fields["unit_price"], value)
-                self.assertEqual(fields["unit_price_evidence"]["quote"], f"{value}元/Wh")
+                self.assertEqual((fields["amount_candidate"], fields["amount_status"]), (value, "format_pending"))
+                self.assertNotIn("unit_price", fields)
+                self.assertEqual(report.quality_reviews[0]["action"], "hold_amount_format")
                 self.assertEqual(raw, before)
+
+    def test_model_supplied_unit_price_is_kept(self):
+        raw = {"facts": [{"fact_type": "price", "metrics": {
+            "unit_price": 1.035, "unit_price_unit": "元/Wh", "currency": "CNY"},
+            "evidence_locator": {"passage_id": "p1"}}]}
+        fields = run(raw, "中标合单价1.035元/Wh。").bundle.facts[0].metrics
+        self.assertEqual((fields["unit_price"], fields.get("amount")), (1.035, None))
 
     def test_total_and_quantity_unit_are_unchanged(self):
         raw = {"facts": [{"fact_type": "order", "metrics": {
-            "amount": 4141.622, "currency": "CNY", "volume": 40, "unit": "MWh"},
+            "amount": 4141.622, "currency": "CNY", "amount_unit": "万元", "volume": 40, "unit": "MWh"},
             "evidence_locator": {"passage_id": "p1"}}]}
         fields = run(raw, "中标金额4141.622万元，规模40MWh。").bundle.facts[0].metrics
         self.assertEqual(fields["amount"], 41416220)
         self.assertEqual(fields["unit"], "MWh")
         self.assertNotIn("unit_price", fields)
 
-    def test_price_substring_is_not_a_match(self):
-        fields = run(price(1.035), "报价11.035元/Wh。").bundle.facts[0].metrics
+    def test_missing_currency_is_a_format_hold(self):
+        raw = {"events": [{"metrics": {"amount": 4141.622, "amount_unit": "万元"},
+                           "evidence_locator": {"passage_id": "p1"}}]}
+        fields = run(raw, "中标金额4141.622万元。").bundle.events[0].metrics
         self.assertIsNone(fields["amount"])
-        self.assertNotIn("unit_price", fields)
-        self.assertEqual(fields["amount_candidate"], 1.035)
+        self.assertEqual((fields["amount_candidate"], fields["amount_status"]), (4141.622, "format_pending"))
 
-    def test_missing_currency_cannot_be_filled(self):
-        fields = run(price(currency=None), "合单价1.035元/Wh。").bundle.facts[0].metrics
-        self.assertIsNone(fields["amount"])
-        self.assertIsNone(fields["currency"])
-        self.assertNotIn("unit_price", fields)
-
-    def test_unsupported_amount_is_removed_from_canonical_field(self):
-        raw = {"events": [{"metrics": {"amount": 999, "currency": "CNY"},
+    def test_passage_text_does_not_veto_an_amount_in_the_legacy_path(self):
+        # Without content review there is no evidence to apply either way; the
+        # strict pass checks structure, not whether the number appears in the text.
+        raw = {"events": [{"metrics": {"amount": 999, "currency": "CNY", "amount_unit": "万元"},
                            "evidence_locator": {"passage_id": "p1"}}]}
         report = run(raw, "实际合同金额100万元。")
-        self.assertIsNone(report.bundle.events[0].metrics["amount"])
-        self.assertEqual(report.bundle.events[0].metrics["amount_candidate"], 999)
+        self.assertEqual(report.bundle.events[0].metrics["amount"], 9990000)
+        self.assertFalse(any(r["path"].endswith(".amount") for r in report.quality_reviews))
 
     def test_false_unit_price_metadata_cannot_certify_value(self):
         raw = price()

@@ -81,6 +81,9 @@ class ModelCallPlanner:
         self.max_input_chars = self.budgets_cfg.get("max_input_chars_per_model_call", 8000)
         self.output_limits = (config.output_schema or {}).get("limits", {})
         self.triage_results: list[ModelCallResult] = []
+        # Run-level research questions (mic.task_questions.task_context); set by the
+        # pipeline per run and attached to every extraction / arbitration prompt.
+        self.task_context: dict | None = None
 
     # --- decision ----------------------------------------------------------
 
@@ -157,7 +160,7 @@ class ModelCallPlanner:
                                    outputs=outputs, was_split=True)
 
         messages = build_bundle_messages(profile, source_metadata, read.passages,
-                                         self.output_limits)
+                                         self.output_limits, task_context=self.task_context)
         outputs = self._dispatch(call_mode, policy, messages)
         return LinkModelResult(read.source_link_id, task, call_mode, outputs=outputs)
 
@@ -293,7 +296,8 @@ class ModelCallPlanner:
         if not policy or not self.budget.can_call(1):
             return []
         messages = build_arbitration_messages(
-            profile, source_metadata, read.passages, self.output_limits, conflicts)
+            profile, source_metadata, read.passages, self.output_limits, conflicts,
+            task_context=self.task_context)
         return self._priority_fallback(policy, messages)
 
     @staticmethod
@@ -348,7 +352,7 @@ class ModelCallPlanner:
             if not self.budget.can_call(1):
                 break
             messages = build_bundle_messages(profile, source_metadata, chunk,
-                                             self.output_limits)
+                                             self.output_limits, task_context=self.task_context)
             res = adapter.complete(messages)
             self.budget.record(1)
             results.append(res)

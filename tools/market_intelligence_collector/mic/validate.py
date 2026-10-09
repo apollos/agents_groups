@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pydantic import ValidationError
 
 from mic.schemas import BundleExtraction, Passage
-from mic.money import cny_amount_supported, normalize_bundle_amounts
+from mic.money import normalize_bundle_amounts
 from mic.quantity_units import normalize_bundle_quantities, repair_metric_value_strings
 from mic.relation_evidence import quarantine_relations
 from mic.evidence_review import EvidenceReview, date_supported, quantity_supported
@@ -78,9 +78,7 @@ class BundleValidator:
         valid_pids = set(passage_text)
         self._check_evidence(bundle, valid_pids, warnings)
         review = EvidenceReview(bundle, passages, warnings, target_names=self.target_names) if strict else None
-        if review:
-            review.separate_prices()
-        normalize_bundle_amounts(bundle, passage_text, warnings)
+        normalize_bundle_amounts(bundle, warnings)
         normalize_bundle_quantities(bundle, passage_text, warnings)
         quality_reviews = review.apply() if review else []
         if strict:
@@ -182,7 +180,12 @@ class BundleValidator:
                 return False
             token_str = str(token).rstrip("0").rstrip(".") if isinstance(token, float) \
                 else str(token)
-            return token_str not in txt and str(token) not in txt
+            forms = {token_str, str(token)}
+            if isinstance(token, (int, float)) and not isinstance(token, bool):
+                forms.add(f"{token:,}")  # thousands grouping as printed in tables
+                if float(token).is_integer():
+                    forms.add(f"{int(token):,}")
+            return not any(form in txt for form in forms)
 
         def discount(item, why: str) -> None:
             warnings.append(why)
@@ -191,7 +194,9 @@ class BundleValidator:
 
         for f in bundle.facts:
             amt = (f.metrics or {}).get("amount")
-            if unsupported(f, amt) and not cny_amount_supported(f.metrics, text_for(f) or ""):
+            # A converted amount is checked through the number the model took from the source.
+            raw = (f.metrics or {}).get("amount_raw")
+            if unsupported(f, amt) and (raw is None or unsupported(f, raw)):
                 discount(f, f"fact amount {amt} not found in cited passage")
         for mtr in bundle.metrics:
             derived_supported = self.limits.get("strict_evidence_review") is True and quantity_supported(

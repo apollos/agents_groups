@@ -13,7 +13,7 @@ import json
 
 from mic.content_review_policy import (CORE_FIELDS, GROUPS, METADATA_FIELDS,
                                        NARRATIVE_FIELDS, PROTOCOL, STATES, field_kinds)
-from mic.money import normalize_cny_fields, normalize_quoted_price
+from mic.money import normalize_cny_fields, normalize_quoted_price, reason_status
 
 
 def _present(value):
@@ -207,19 +207,27 @@ class ContentReview:
                 continue
             money_path = path + "/" + name
             ids = self.ids(money_path + "/amount", self.ids(money_path, record_ids))
+            # The amount survived field review only because its claims are
+            # source_supported. The model's reviewed decomposition (currency,
+            # value, unit, citations) is applied as-is; code checks structure,
+            # citation membership and does the Decimal arithmetic. Claims that
+            # are inference / pending_review / unsupported stay in the audit
+            # record and never supply an amount.
             specifications = [self.claims[cid]["amount"] for cid in ids
-                              if cid in self.claims and isinstance(self.claims[cid].get("amount"), dict)
+                              if cid in self.claims and self.claims[cid].get("amount") is not None
                               and self.state(cid) == "source_supported"]
-            # The semantic model identifies the currency/unit and ownership;
-            # deterministic code verifies source numbers and performs conversion.
             pid = before.get("evidence_locator", {}).get("passage_id")
             updated, reason = normalize_quoted_price(values, self.passages, pid, specifications)
             if reason == "not_unit_price":
-                updated, reason = normalize_cny_fields(values, self.passages, pid, specifications)
+                updated, reason = normalize_cny_fields(values, self.passages, specifications)
             if updated is not None:
                 out[name] = updated
+                if updated.get("amount_conversion"):
+                    self.fields[money_path + "/amount"] = {
+                        "claim_ids": ids, "states": {cid: self.state(cid) for cid in ids},
+                        "status": "source_supported", "conversion": updated["amount_conversion"]}
             else:
-                status = "pending_review" if reason == "amount_not_supported_by_citation" else "format_pending"
+                status = "pending_review" if reason == "amount_not_supported_by_citation" else reason_status(reason)
                 self.hold(money_path + "/amount", values, reason, ids, status)
                 self.fields[money_path + "/amount"] = {
                     "claim_ids": ids, "states": {cid: self.state(cid) for cid in ids},

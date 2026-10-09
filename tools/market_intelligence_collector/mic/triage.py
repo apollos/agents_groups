@@ -29,6 +29,8 @@ class SearchHitTriage:
     def __init__(self, config: MICConfig):
         self.config = config
         self.entity_terms: list[str] = []
+        self.official_domains: list[str] = []
+        self.task_terms: list[str] = []
         self.strong_fact_keywords = config.strong_fact_keywords or []
         self.source_type_by_domain = config.source_type_by_domain or {}
         self.source_feedback: dict[str, float] = {}
@@ -38,6 +40,21 @@ class SearchHitTriage:
 
     def for_profile(self, profile: TargetProfile) -> SearchHitTriage:
         self.entity_terms = profile.all_entity_terms()
+        self.official_domains = list(profile.official_domains)
+        self.task_terms = []
+        return self
+
+    def is_official_domain(self, domain: str) -> bool:
+        d = (domain or "").lower()
+        return any(d == od or d.endswith("." + od) for od in self.official_domains)
+
+    def set_task_terms(self, terms: list[str] | None) -> SearchHitTriage:
+        """Keywords of the task's explicit research questions (``task_profile.questions``).
+
+        A hit naming them is what the caller asked for, so it is ordered ahead of generic
+        family hits in the read queue. Bounded bonus, no threshold change.
+        """
+        self.task_terms = [t for t in (terms or []) if t]
         return self
 
     def set_source_feedback(self, weights: dict[str, float]) -> SearchHitTriage:
@@ -49,6 +66,8 @@ class SearchHitTriage:
         for known_domain, stype in self.source_type_by_domain.items():
             if domain == known_domain or domain.endswith("." + known_domain):
                 return stype
+        if self.is_official_domain(domain):
+            return "company"  # the target's own site: first-hand disclosure
         return "media" if domain else "unknown"
 
     def triage(self, hit: SearchHit, source_link_id: str,
@@ -58,6 +77,12 @@ class SearchHitTriage:
         score = 0.0
 
         matched_entities = [t for t in self.entity_terms if t and t in text]
+        # A document on the target's own domain is about the target even when its title /
+        # snippet omit the name ("2025年年度报告摘要" on the company site). Same rule as the
+        # browser relevance judge (design 6.3), so triage and the read gate agree.
+        if self.is_official_domain(hit.domain):
+            signals.append("target_official_domain")
+            matched_entities = [*matched_entities, f"domain:{hit.domain}"]
         if matched_entities:
             signals.append("target_entity_match")
             score += 30 + 5 * min(len(matched_entities), 3)
@@ -71,6 +96,11 @@ class SearchHitTriage:
             signals.append("strong_fact_keyword")
             score += 6 * min(len(matched_strong), 4)
 
+        matched_task = [t for t in self.task_terms if t in text]
+        if matched_task:
+            signals.append("task_question_match")
+            score += 6 * min(len(matched_task), 3)
+
         for kw, sig in (("客户", "customer_keyword"), ("供应商", "supplier_keyword"),
                         ("订单", "order_keyword"), ("中标", "tender_keyword"),
                         ("政策", "policy_keyword"), ("处罚", "risk_keyword")):
@@ -79,7 +109,8 @@ class SearchHitTriage:
                 score += 6
 
         stype = self.source_type(hit.domain)
-        if stype in ("official", "exchange", "regulator"):
+        if stype in ("official", "exchange", "regulator") or "target_official_domain" in signals:
+            # Target's own disclosures are first-hand (rubric 85-100), like exchange filings.
             signals.append("high_credibility_source")
             score += 20
         elif stype == "company":
@@ -112,7 +143,7 @@ class SearchHitTriage:
         # value floor. A very high rule score never suppresses the call; it only
         # routes to a stronger (e.g. parallel-ensemble) policy downstream.
         need_model = decision == "read" and score >= self.thresholds.model_lo
-        reason = self._reason(matched_entities, matched_strong, stype, score)
+        reason = self._reason(matched_entities, matched_strong, stype, score, matched_task)
 
         return TriageResult(
             source_link_id=source_link_id, triage_decision=decision,
@@ -121,12 +152,15 @@ class SearchHitTriage:
         )
 
     @staticmethod
-    def _reason(entities: list[str], strong: list[str], stype: str, score: float) -> str:
+    def _reason(entities: list[str], strong: list[str], stype: str, score: float,
+                task_terms: list[str] | None = None) -> str:
         bits = []
         if entities:
             bits.append(f"命中目标实体({', '.join(entities[:2])})")
         if strong:
             bits.append(f"含强事实词({', '.join(strong[:2])})")
+        if task_terms:
+            bits.append(f"命中任务问题词({', '.join(task_terms[:3])})")
         bits.append(f"来源类型={stype}")
         bits.append(f"score={score:.0f}")
         return "；".join(bits)

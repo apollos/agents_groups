@@ -365,11 +365,46 @@ report = api.collect_intelligence("company_300750", {
 })
 ```
 
+#### 带明确研究问题的采集（`task_profile.questions`）
+
+`focus` 只决定 query family，**不会**把一句自然语言问题变成定向检索。若本次采集带有具体业务问题
+（例如“某公司 2025 年全年营业收入、归母净利润、经营活动现金流量净额及同比”），需显式放进 `questions`：
+
+```python
+report = api.collect_intelligence("company_300750", {
+    "focus": ["financial_leading_indicator"],
+    "time_window": "",                       # 空串 = 不按发布时间过滤（年报类问题通常不要加窗口）
+    "questions": [{
+        "question": "宁德时代2025年全年营业收入、归母净利润、经营活动现金流量净额及同比；明确报告期、单位、来源",
+        "search_terms": ["2025年年度报告 营业收入 归母净利润 经营活动产生的现金流量净额 同比"],  # 可选，省略时用问题原文检索
+        "period": "2025年度",                # 可选
+    }],
+    "budget_profile": {"max_queries": 2, "max_links_to_read": 2, "max_model_calls": 3},
+})
+```
+
+CLI 等价写法：`mic collect company_300750 --question "…" --time-window ""`，或 `--task-file task.json`
+（JSON 内容合并进 `task_profile`，`budget_profile` 逐键合并）。
+
+`questions` 的作用贯穿整条流水线（通用机制，不含任何公司/关键词特判）：
+
+- 规划：每个问题生成 `task_question` family 的 query，排在 `focus` 推导 query 之前，一起受 `max_queries` 约束；
+- 初筛：命中问题词的 hit 加分（`task_question_match`），画像里 `official_domains` 列出的官网域名视作目标身份命中（`target_official_domain`），即使标题/摘要不含公司名；
+- 读取队列：`max_links_to_read` 计的是**读成功**的链接数，读失败（反爬、正文范围无法确定、HTTP 失败）不占名额，队列继续下一个候选，直到传输预算（`max_http_read_attempts` / `max_browser_read_attempts`）耗尽；队列头部保留一个一手来源（公告 / 官网）名额；`summary["read_queue_stopped_by_budget"]` 给出因传输预算未尝试的候选数；
+- 正文：PDF 抽取保留表格块（`section` 以 `表格` 开头的 passage），问题词参与段落打分；
+- 模型：`task_context` 随 bundle 提示一起下发，要求优先回答问题并按原文数值/单位/报告期输出，不得推断替代年份或口径；
+- 复核：来源原文直接给出的同比属于 comparability claim，可为 `source_supported`；模型自行计算的比较仍为 inference。
+
+`report["task_questions"]` 回显解析后的问题（含实际使用的检索短语）。
+
 返回 dict 的关键字段（取数时注意字段名）：
 
 | 路径 | 含义 |
 |---|---|
 | `report["search_run_id"]` | 本次 run id |
+| `report["task_questions"]` | 本次采集携带的研究问题（解析后） |
+| `report["summary"]["links_selected_for_read"]` / `["links_read"]` | 尝试读取 / 读取成功的链接数；差值即读失败数 |
+| `report["summary"]["read_queue_stopped_by_budget"]` | 因传输预算耗尽未尝试的读取候选数 |
 | `report["summary"]["queries_executed"]` | 实际执行 query 数 |
 | `report["summary"]["queries_skipped_by_hit_budget"]` | 因 hit 预算被跳过的 query 数（>0 说明预算偏紧） |
 | `report["summary"]["search_hits"]` / `["links_read"]` / `["model_calls"]` | 命中 / 读取 / 模型调用计数 |
@@ -480,3 +515,6 @@ python tools/check_release_clean.py .      # 交付/打包前检查是否混入 
 `query_families`、`query_scoring`、`source_packs`、`model_registry`、
 `model_policies`、`merge_policy`、`call_governance`、`output_schema`、
 `storage_policy`。
+
+`target_profiles` 中每个目标可选配置 `official_domains`（如 `[catl.com]`）：这些域名及其子域下的链接在初筛阶段
+按目标身份命中处理并视为高可信一手来源（`source_type=company`），用于公告/官网 PDF 这类标题里没有公司名的页面。

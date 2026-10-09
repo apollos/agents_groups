@@ -15,7 +15,6 @@ import hashlib
 import json
 import re
 
-from mic.money import cny_amount_supported
 from mic.relation_evidence import _title
 from mic.schemas import CoverageGap
 from mic.statement_review import BASE_FIGURE, StatementReview
@@ -139,37 +138,34 @@ class EvidenceReview:
                 gap_type="extraction_quality_review", description=description, priority="high"))
             self.descriptions.add(description)
 
-    def separate_prices(self):
-        for index, fact in enumerate(self.bundle.facts):
-            fields = fact.metrics
-            unit = fields.get("unit_price_unit") or fields.get("unit")
-            if fact.fact_type != "price" or unit not in PRICE_UNITS:
-                continue
-            amount, existing = fields.get("amount"), fields.get("unit_price")
-            if amount is None:
-                continue
-            quote = numeric_quote(self.text(fact), amount, unit)
-            conflict = existing is not None and decimal(existing) != decimal(amount)
-            # CNY only; an unqualified currency must not be silently guessed.
-            cny = str(fields.get("currency") or "").upper() in ("CNY", "RMB", "人民币")
-            if not quote or conflict or not cny or fields.get("amount_unit"):
-                continue  # unresolved money is quarantined after normalization
-            fields.update({"amount": None, "unit_price": amount, "unit_price_unit": unit,
-                           "unit_price_evidence": {"passage_id": fact.evidence_locator.passage_id,
-                                                   "quote": quote},
-                           "amount_reclassified_as": "unit_price"})
-
     def check_money(self):
+        """Structure and number format only.
+
+        Whether an amount is supported by the source, and whether a number is a
+        contract total or a unit price, are the model's extraction decisions
+        (enforced by the shared content review). This pass does not re-derive
+        them from passage text or wording and does not reclassify fields.
+        """
         for group, attr in (("facts", "metrics"), ("events", "metrics"), ("relations", "qualifiers")):
             for index, item in enumerate(getattr(self.bundle, group)):
                 fields = getattr(item, attr)
                 amount = fields.get("amount")
-                if amount is None or cny_amount_supported(fields, self.text(item)):
+                if amount is None:
                     continue
-                self.record(f"{group}[{index}].{attr}.amount", "金额或币种缺少可验证依据",
-                            dict(fields), "clear_amount")
+                reason = None
+                if decimal(amount) is None:
+                    reason = "金额不是有效数值"
+                elif not str(fields.get("currency") or "").strip():
+                    reason = "金额缺少币种"
+                elif (isinstance(fields.get("amount_unit"), str) and fields["amount_unit"].strip() in PRICE_UNITS) or (
+                        fields.get("unit_price") is None and isinstance(fields.get("unit"), str)
+                        and fields["unit"].strip() in PRICE_UNITS):
+                    reason = "金额字段带有单价单位，总金额与单价归属需由抽取方明确"
+                if reason is None:
+                    continue
+                self.record(f"{group}[{index}].{attr}.amount", reason, dict(fields), "hold_amount_format")
                 fields["amount_candidate"] = amount
-                fields["amount_status"] = "pending_review"
+                fields["amount_status"] = "format_pending"
                 fields["amount"] = None
         for index, fact in enumerate(self.bundle.facts):
             fields = fact.metrics

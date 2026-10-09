@@ -15,8 +15,12 @@ from typing import Any
 
 from mic.config import MICConfig
 from mic.profile import TargetProfile
+from mic.task_questions import QUESTION_FAMILY, TaskQuestion, parse_task_questions
 
 _PLACEHOLDER_RE = re.compile(r"\{(\w+)\}")
+# Fixed plan score for explicit task questions: above any template score so the plan
+# order / records make the "asked for explicitly" origin visible.
+QUESTION_SCORE = 200.0
 
 # Source packs are another way to ask the same research question. In particular,
 # a tender source-pack query must not use a second coverage slot after orders_tender.
@@ -68,8 +72,17 @@ class QueryPlanner:
         budget = task_profile.get("budget_profile", {})
         max_queries = budget.get("max_queries", 80)
 
+        # Explicit research questions come first: the caller asked for exactly these
+        # searches, so they are not scored against templates and never dropped by the
+        # score floor. They do consume the same query budget (no inflation).
+        question_queries = self._expand_questions(profile, parse_task_questions(task_profile))
+        question_queries = question_queries[:max_queries]
+        taken = {_normalize_query(q.query_text) for q in question_queries}
+        remaining = max_queries - len(question_queries)
+
         candidates = self._expand_families(profile, focus)
         candidates += self._expand_source_packs(profile, focus)
+        candidates = [c for c in candidates if _normalize_query(c.query_text) not in taken]
 
         entity_terms = profile.all_entity_terms()
         scored = self._score_all(candidates, entity_terms)
@@ -99,10 +112,35 @@ class QueryPlanner:
                     seen_groups.add(group)
                     q.why.append(f"覆盖优先：{group} 类最高分查询")
                     heads.append(q)
-            return (heads + variants)[:max_queries]
-        return eligible[:max_queries]
+            return question_queries + (heads + variants)[:remaining]
+        return question_queries + eligible[:remaining]
 
     # --- expansion ---------------------------------------------------------
+
+    def _expand_questions(self, profile: TargetProfile,
+                          questions: list[TaskQuestion]) -> list[PlannedQuery]:
+        """One query per search phrase; the target name is prefixed when the phrase
+        names no profile entity (so the engine still anchors on the target)."""
+        entity_terms = [t for t in profile.all_entity_terms() if t]
+        out: list[PlannedQuery] = []
+        seen: set[str] = set()
+        for qi, question in enumerate(questions, start=1):
+            for phrase in question.search_phrases():
+                text = phrase
+                if not any(t.casefold() in phrase.casefold() for t in entity_terms):
+                    text = f"{profile.primary_name} {phrase}".strip()
+                norm = _normalize_query(text)
+                if norm in seen:
+                    continue
+                seen.add(norm)
+                why = [f"任务问题 {qi}：{question.question}"]
+                if question.period:
+                    why.append(f"报告期：{question.period}")
+                why.append("显式检索词" if question.search_terms else "以问题原文作为检索词")
+                out.append(PlannedQuery(
+                    query_text=text, query_family=QUESTION_FAMILY, base_priority=100.0,
+                    score=QUESTION_SCORE, why=why))
+        return out
 
     def _selected_families(self, focus: list[str]) -> dict[str, dict]:
         families = self.config.query_families.get("families", {})

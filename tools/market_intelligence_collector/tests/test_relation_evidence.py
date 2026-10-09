@@ -111,7 +111,7 @@ class RelationEvidenceTests(unittest.TestCase):
     def test_original_data_event_amount_and_existing_gap_preserved(self):
         raw = {"relations": [candidate("competitor_of", "title")],
                "events": [{"entities": {"subject": "宁德时代"},
-                           "metrics": {"amount": 4141.622, "currency": "CNY"},
+                           "metrics": {"amount": 4141.622, "currency": "CNY", "amount_unit": "万元"},
                            "evidence_locator": {"passage_id": "p3"}}],
                "coverage_gaps": [{"gap_type": "missing_date", "description": "日期待确认"}]}
         before = copy.deepcopy(raw)

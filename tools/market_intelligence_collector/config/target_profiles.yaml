@@ -11,6 +11,8 @@ target_profiles:
     - CATL
     - Contemporary Amperex Technology
     - '300750'
+    official_domains:
+    - catl.com
     markets:
     - A股
     products:

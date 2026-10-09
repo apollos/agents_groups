@@ -206,14 +206,19 @@ def test_deadline_expiry_reports_timed_out(strict_cfg, monkeypatch):
     assert session.navigations == []
 
 
-def _count_model_completions(monkeypatch) -> dict:
-    """Count every ModelAdapter.complete call (mock or real) made during a run."""
+def _count_model_completions(monkeypatch, only_when=None) -> dict:
+    """Count every ModelAdapter.complete call (mock or real) made during a run.
+
+    ``only_when`` (optional predicate) restricts the count, e.g. to calls made after the
+    cancel signal: a SERP batch-triage call issued *before* the cancel is legitimate.
+    """
     from mic.modeling.adapter import ModelAdapter
     counter = {"n": 0}
     orig = ModelAdapter.complete
 
     def counting(self, messages, max_tokens=None, json_mode=None):
-        counter["n"] += 1
+        if only_when is None or only_when():
+            counter["n"] += 1
         return orig(self, messages, max_tokens=max_tokens, json_mode=json_mode)
 
     monkeypatch.setattr(ModelAdapter, "complete", counting)
@@ -225,8 +230,8 @@ def test_cancel_during_body_read_sends_no_model_request(strict_cfg, monkeypatch)
     next loop head, after the model request for that body had already gone out."""
     loader = FixtureLoader(default=_echo(P1))
     pipe = _pipeline(strict_cfg, loader, monkeypatch)
-    calls = _count_model_completions(monkeypatch)
     flag = {"cancel": False}
+    calls = _count_model_completions(monkeypatch, only_when=lambda: flag["cancel"])
 
     class CancelDuringRead(FakeBrowserSession):
         def navigate(self, page, url, timeout_seconds):

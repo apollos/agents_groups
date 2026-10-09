@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import typer
 from rich.console import Console
@@ -48,7 +49,14 @@ def collect(
     focus: str = typer.Option(
         "operating_update,customer_change,supply_chain,policy,risk",
         help="Comma-separated focus areas"),
-    time_window: str = typer.Option("30d", help="e.g. 7d, 30d, 90d"),
+    time_window: str = typer.Option("30d", help="e.g. 7d, 30d, 90d; empty string = no publication-time filter"),
+    question: list[str] = typer.Option(
+        None, "--question", "-q",
+        help="Explicit research question (repeatable). Plain text is used as the search phrase; "
+             "use --task-file to attach search_terms / period."),
+    task_file: Path | None = typer.Option(
+        None, "--task-file",
+        help="JSON file merged into task_profile (keys: focus, time_window, questions, budget_profile)."),
     max_queries: int = typer.Option(80),
     max_search_hits: int = typer.Option(800, "--max-search-hits", help="Maximum raw search hits to persist/process"),
     max_links: int = typer.Option(40),
@@ -56,7 +64,7 @@ def collect(
     json_out: bool = typer.Option(False, "--json", help="Print raw JSON report"),
 ) -> None:
     """Run a full collection pipeline for a target."""
-    task_profile = {
+    task_profile: dict = {
         "focus": [f.strip() for f in focus.split(",") if f.strip()],
         "time_window": time_window,
         "budget_profile": {
@@ -64,6 +72,16 @@ def collect(
             "max_links_to_read": max_links, "max_model_calls": max_model_calls,
         },
     }
+    if task_file is not None:
+        extra = json.loads(Path(task_file).read_text(encoding="utf-8"))
+        if not isinstance(extra, dict):
+            raise typer.BadParameter("--task-file must contain a JSON object")
+        budget_extra = extra.pop("budget_profile", None)
+        task_profile.update(extra)
+        if isinstance(budget_extra, dict):
+            task_profile["budget_profile"].update(budget_extra)
+    if question:
+        task_profile["questions"] = [*task_profile.get("questions", []), *question]
     api = _api()
     with console.status(f"Collecting intelligence for {target_id}..."):
         report = api.collect_intelligence(target_id, task_profile)
@@ -406,6 +424,9 @@ def _print_report(report: dict) -> None:
     console.print(f"\n[bold]Batch Report[/bold] — {report['target']} "
                   f"(window={report['time_window']})")
     console.print(f"run_id: {report['search_run_id']}")
+    for tq in report.get("task_questions") or []:
+        console.print(f"question: {tq['question']} (period={tq.get('period')}) "
+                      f"search={tq.get('search_phrases')}")
     diag = report.get("collection_diagnostics") or {}
     if diag:
         console.print(

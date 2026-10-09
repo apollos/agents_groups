@@ -72,6 +72,15 @@ class TargetProfile:
             return self.products[0]
         return self.canonical_name
 
+    @property
+    def official_domains(self) -> list[str]:
+        """The target's own web domains (profile ``official_domains``), lower-cased.
+
+        A page on one of them is the target's first-hand disclosure (design 6.3): the
+        browser relevance judge and SERP triage both treat it as a target-identity match.
+        """
+        return [str(d).lower().strip() for d in (self.raw.get("official_domains") or []) if d]
+
     def all_entity_terms(self) -> list[str]:
         """Every term that should count as a 'target entity match' in triage."""
         terms = [self.canonical_name, *self.aliases, *self.products,

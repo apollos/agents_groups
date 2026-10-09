@@ -34,6 +34,73 @@ _DATE_RE = re.compile(r"\d{4}[-/年]\d{1,2}([-/月]\d{1,2})?|20\d{2}Q[1-4]|近\d
 _MAX_PDF_PAGES = 20
 _MAX_TABLES = 5
 _MAX_TABLE_ROWS = 30
+_PDF_PAGE_NUMBER_RE = re.compile(r"[-–—]?\s*\d{1,4}\s*[-–—]?")
+_PDF_PUA_RE = re.compile(r"[\ue000-\uf8ff\U000F0000-\U0010FFFD]")
+# A table row in PDF text: at least two numeric cells ("423,701,834", "17.04%", "(1,234)", "16.14").
+_PDF_NUM_CELL_RE = re.compile(r"^[-(（]?\d[\d,]*(\.\d+)?%?[)）]?$")
+_PDF_TABLE_MIN_ROWS = 2
+_PDF_TABLE_LABEL_MAX_CHARS = 30
+
+
+def _pdf_is_row(line: str) -> bool:
+    """A table row: >=2 numeric cells that dominate the line (prose quoting a few
+    numbers inside a long sentence is not a row)."""
+    tokens = line.split()
+    numeric = [t for t in tokens if _PDF_NUM_CELL_RE.fullmatch(t)]
+    if len(numeric) < 2:
+        return False
+    label_chars = sum(len(t) for t in tokens if t not in numeric)
+    return len(numeric) * 2 >= len(tokens) or label_chars <= 24
+
+
+def _pdf_label_like(line: str) -> bool:
+    """A wrapped row label / header fragment: short, no sentence punctuation."""
+    return 0 < len(line) <= _PDF_TABLE_LABEL_MAX_CHARS and not re.search(r"[。；;！？]", line)
+
+
+def pdf_table_blocks(lines: list[str]) -> list[str]:
+    """Rebuild table blocks from a PDF line stream (``_extract_pdf`` output).
+
+    ``page.extract_text()`` yields one visual line per row and splits wrapped row
+    labels ("归属于上市公司股东的" / "净利润 72,201,282 ..."), while the unit line
+    ("单位：千元") and the header ("项目 2025 年 2024 年 ...") sit a few lines above.
+    Scored line by line these fragments never beat prose paragraphs, so the key
+    financial table of an annual-report summary was not passed to the model. A block
+    is a run of numeric rows plus the label fragments between them, extended upwards
+    over header / unit / label lines; blocks are joined with newlines as one passage.
+    Pure text structure, no field names involved.
+    """
+    blocks: list[str] = []
+    n = len(lines)
+    i = 0
+    while i < n and len(blocks) < _MAX_TABLES:
+        if not _pdf_is_row(lines[i]):
+            i += 1
+            continue
+        # Extend upwards: wrapped labels, header rows ("项目 ..."), unit lines.
+        start = i
+        while start - 1 >= 0 and _pdf_label_like(lines[start - 1]) and i - start < 6:
+            start -= 1
+        # Extend downwards: rows, allowing wrapped label fragments between rows
+        # (a label can wrap over three lines: "归属于上市公司股东的 / 扣除非经常性损益的净 / 利润").
+        end = i
+        rows = 0
+        gap = 0
+        j = i
+        while j < n and rows < _MAX_TABLE_ROWS:
+            if _pdf_is_row(lines[j]):
+                rows += 1
+                end = j
+                gap = 0
+            elif _pdf_label_like(lines[j]) and gap < 3:
+                gap += 1
+            else:
+                break
+            j += 1
+        if rows >= _PDF_TABLE_MIN_ROWS:
+            blocks.append("\n".join(lines[start:end + 1]))
+        i = max(end + 1, i + 1)
+    return blocks
 
 # HTML image candidates for vision rescue: obvious chrome/ads are skipped by
 # URL pattern; tiny images are skipped via width/height attributes when present.
@@ -101,10 +168,17 @@ class LinkReader:
         gov = (config.call_governance or {}).get("budgets", {})
         self.max_passages = gov.get("max_selected_passages_per_link", 8)
         self.max_chars = gov.get("max_input_chars_per_model_call", 8000)
+        self.task_terms: list[str] = []
         self.browser_fetch_cfg = dict(getattr(config, "browser_fetch", {}) or {})
         self.article_scope_version = "article_scope_v1"
 
     # --- public entry ---------------------------------------------------------
+
+    def set_task_terms(self, terms: list[str] | None) -> LinkReader:
+        """Keywords of the run's explicit research questions; they count like the
+        profile keyword terms in passage selection (same weight, same cap)."""
+        self.task_terms = [t for t in (terms or []) if t]
+        return self
 
     def read(self, source_link_id: str, url: str, profile: TargetProfile,
              context=None, strategy: str | None = None) -> ReadResult:
@@ -157,7 +231,11 @@ class LinkReader:
                 budget.reserve(counter)
             except BudgetExceeded as exc:
                 attempts.append({"transport": transport, "skipped": str(exc.counter), "reason": "budget"})
-                break
+                if exc.counter in ("cancelled", "max_run_seconds"):
+                    break  # the run is over, not just this transport
+                # This transport's attempt budget is spent; the next transport in the plan
+                # has its own budget and is the remaining way to obtain the article.
+                continue
             if transport == "http":
                 fetched = self._fetch_http_result(url)
             else:
@@ -183,15 +261,18 @@ class LinkReader:
                 attempts.append({"transport": order[idx + 1], "skipped": "not_applicable", "reason": reason})
                 break
         if last is None:
+            budget_only = bool(attempts) and all(a.get("reason") == "budget" for a in attempts)
             last = ReadResult(source_link_id=source_link_id, read_status="failed",
-                              failure_reason="fetch_failed")
+                              failure_reason="read_budget_exhausted" if budget_only else "fetch_failed")
         last.fetch_diagnostics = self._diag(plan, attempts)
         return last
 
     @staticmethod
     def _diag(plan: dict, attempts: list[dict]) -> dict:
         return {"strategy": plan["mode"], "host": plan["host"], "allow_scope_retry": plan["allow_scope_retry"],
-                "attempts": attempts, "parser_version": "article_scope_v1"}
+                "attempts": attempts, "parser_version": "article_scope_v1",
+                # True when no transport could even be tried (every attempt budget-skipped).
+                "budget_exhausted": bool(attempts) and all(a.get("reason") == "budget" for a in attempts)}
 
     def _may_try_next(self, transport: str, fetched, result: ReadResult, plan: dict) -> bool:
         if fetched.blocked_reason in _NO_RETRY_FETCH:
@@ -323,7 +404,9 @@ class LinkReader:
         if isinstance(raw, bytes):
             document_type = "pdf"
             title, publish_time, body = self._extract_pdf(raw)
-            tables: list[str] = []
+            # Table blocks (financial statements, 主要会计数据) rebuilt from the line stream
+            # so that unit line, header, wrapped labels and values travel as one passage.
+            tables: list[str] = pdf_table_blocks(body.split("\n"))
             # Vision rescue: scanned/image-only PDF -> render pages, transcribe
             # via the multimodal gateway, continue with the transcription.
             if self.vision is not None and self.vision.available and \
@@ -543,8 +626,15 @@ class LinkReader:
             except Exception:
                 continue
             for line in text.splitlines():
-                line = normalize_ws(line)
-                if len(line) >= 8:
+                # Symbol-font glyphs (Wingdings checkboxes in "□适用 ☑不适用") arrive as
+                # private-use codepoints that models do not reproduce in quotes; the
+                # review then rejects every claim depending on that line ("单位：千元").
+                # Render them as a visible marker so the passage text survives a JSON
+                # round-trip unchanged.
+                line = normalize_ws(_PDF_PUA_RE.sub("■", line))
+                # Keep short lines: "单位：千元", wrapped row labels ("利润") and checkbox
+                # answers carry meaning. Only bare page numbers are dropped.
+                if len(line) >= 2 and not _PDF_PAGE_NUMBER_RE.fullmatch(line):
                     lines.append(line)
         body = "\n".join(lines)
         # A date in PDF prose may be an event/reporting period, not publication.
@@ -566,33 +656,71 @@ class LinkReader:
             + ["客户", "供应商", "政策", "订单", "中标", "处罚", "涨价", "降价",
                "毛利率", "产能", "库存", "开工率", "风险"]
         )
-        paragraphs = [p for p in body.split("\n") if p.strip()]
-        scored: list[tuple[float, int, str]] = []
-        for idx, para in enumerate(paragraphs):
+        task_terms = list(self.task_terms)
+
+        def _score_text(text: str, idx: int | None = None) -> float:
             score = 0.0
             if idx == 0:
                 score += 5  # first paragraph
-            if any(t and t in para for t in entity_terms):
+            if any(t and t in text for t in entity_terms):
                 score += 8
-            if any(t in para for t in keyword_terms):
+            if any(t in text for t in keyword_terms):
                 score += 4
-            if _AMOUNT_RE.search(para):
+            if any(t in text for t in task_terms):
+                score += 6  # speaks to the task's explicit question
+            if _AMOUNT_RE.search(text):
                 score += 6
-            if _DATE_RE.search(para):
+            if _DATE_RE.search(text):
                 score += 3
-            if any(w in para for w in ("综上", "总体", "预计", "影响", "因此")):
+            if any(w in text for w in ("综上", "总体", "预计", "影响", "因此")):
                 score += 2
+            return score
+
+        # Tables carry dense metrics (spec 10.2 "表格行"). Relevant ones get reserved
+        # passage slots: previously they were appended only after the paragraph cap,
+        # which the paragraphs always filled, so tables were in practice never sent.
+        relevant_tables: list[tuple[float, int, str]] = []
+        for ti, table_text in enumerate(tables, start=1):
+            relevant = (
+                _AMOUNT_RE.search(table_text)
+                or any(t and t in table_text for t in entity_terms)
+                or any(t in table_text for t in keyword_terms)
+                or any(t in table_text for t in task_terms)
+            )
+            if relevant:
+                relevant_tables.append((_score_text(table_text), ti, table_text))
+        relevant_tables.sort(key=lambda x: (-x[0], x[1]))
+        table_slots = min(len(relevant_tables), max(1, self.max_passages // 3))
+        relevant_tables = relevant_tables[:table_slots]
+        relevant_tables.sort(key=lambda x: x[1])  # document order
+        table_lines = {ln for _s, _i, t in relevant_tables for ln in t.split("\n")}
+
+        paragraphs = [p for p in body.split("\n") if p.strip()]
+        scored: list[tuple[float, int, str]] = []
+        for idx, para in enumerate(paragraphs):
+            if para in table_lines:
+                continue  # already carried by a table passage
+            score = _score_text(para, idx)
             if score > 0:
                 scored.append((score, idx, para))
 
         scored.sort(key=lambda x: (-x[0], x[1]))
-        selected = scored[: self.max_passages - 1]  # leave room for title passage
+        # Leave room for the title passage and the reserved table slots.
+        selected = scored[: max(0, self.max_passages - 1 - table_slots)]
         selected.sort(key=lambda x: x[1])  # restore document order
 
         passages: list[Passage] = []
         if title:
             passages.append(Passage(passage_id="title", section="标题", text=title))
         budget = self.max_chars
+        # Tables first within the character budget: they are the densest evidence.
+        for _score, ti, table_text in relevant_tables:
+            if budget <= 0:
+                break
+            text = table_text[: max(0, budget)]
+            passages.append(Passage(
+                passage_id=f"t{ti}", section=f"表格{ti}", text=text))
+            budget -= len(text)
         for _score, idx, para in selected:
             text = para[: max(0, budget)]
             if not text:
@@ -602,23 +730,6 @@ class LinkReader:
             budget -= len(text)
             if budget <= 0:
                 break
-
-        # Tables carry dense metrics; include relevant ones within remaining
-        # budget and passage cap (spec 10.2 "表格行").
-        for ti, table_text in enumerate(tables, start=1):
-            if budget <= 0 or len(passages) >= self.max_passages:
-                break
-            relevant = (
-                _AMOUNT_RE.search(table_text)
-                or any(t and t in table_text for t in entity_terms)
-                or any(t in table_text for t in keyword_terms)
-            )
-            if not relevant:
-                continue
-            text = table_text[: max(0, budget)]
-            passages.append(Passage(
-                passage_id=f"t{ti}", section=f"表格{ti}", text=text))
-            budget -= len(text)
 
         # Vision transcriptions of embedded images (e.g. announcement
         # screenshots) are included as their own passages for traceability.

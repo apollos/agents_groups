@@ -73,6 +73,20 @@ SYSTEM_PROMPT = """你是一名服务于股票/行业研究分析师的信息抽
    verdict = new（没有同一事项或进展匹配；可存在 related）| same_event | follow_up | uncertain；
    无法排除是同一事件时用 uncertain。缺少项目上下文时不得补全猜测。
    reviewed=true 表示完成上述比较；current_evidence 和 reason 在候选为空时也必须填写。
+11. 如 task_context.questions 非空，本次采集带有明确的研究问题。优先抽取能直接回答这些问题的
+   facts / metrics：每条写明报告期 period（如 2025年度 / 2025Q3 / 2025H1，不得把上年、季度、
+   半年度数据当作全年）、单位 unit（按原文单位，如 千元 / 万元 / 亿元，不做换算）、口径 scope
+   （归母 / 扣非、合并 / 母公司、含税 / 不含税等），同比等比较值放入 comparison。来源没有回答的
+   部分不要推断、不要用其他年份或口径代替，在 coverage_gaps 中说明缺失。来源只给近似或四舍五入
+   数值时按原文输出。task_context 是任务说明，不是证据；不能把问题中的名词当作来源事实。
+12. 输出前自查（按下方统一内容审核规则）：逐一检查所有准备发布的非空内容是否具有有效审核绑定，
+   尤其是每条事件记录（/events/i 只绑定该事项的 observation）、事件主体（/events/i/entities 绑定
+   identity claim 并给出 field_values.entities）、影响分析（/events/i/impact 绑定 analysis claim 并
+   给出 field_values.impact）和一句话摘要（/brief/one_sentence 绑定的 claim.statement 必须完整等于
+   这句话，含全部数值、单位、报告期、同比，并通过 depends_on 引用各前提）。
+   缺少依据的字段保持默认值（空串、null、空数组、unclear/unknown），不要为了填满而写入；
+   有依据的内容必须同时输出对应 claim 和 binding，缺一不可。程序不会替你挑选"看起来相关"的
+   claim 补绑定，缺绑定或绑定不匹配的内容会被搁置，不会入库或展示。
 """
 
 # Admission threshold stated in the rubric above. Must stay equal to
@@ -201,12 +215,18 @@ def _profile_block(profile: TargetProfile) -> dict[str, Any]:
 
 
 def build_bundle_messages(profile: TargetProfile, source_metadata: dict,
-                          passages: list[Passage], output_limits: dict) -> list[dict]:
-    """Messages for a single-link bundle_extraction call."""
+                          passages: list[Passage], output_limits: dict,
+                          task_context: dict | None = None) -> list[dict]:
+    """Messages for a single-link bundle_extraction call.
+
+    ``task_context`` (optional) carries the run's explicit research questions
+    (``mic.task_questions.task_context``); the system prompt rule 11 applies to it.
+    """
     user_payload = {
         "task": "bundle_extraction",
         "schema_version": SCHEMA_VERSION,
         "target_profile": _profile_block(profile),
+        "task_context": task_context,
         "source_metadata": source_metadata,
         "selected_passages": [p.model_dump() for p in passages],
         "required_output": ["content_review", "brief", "facts", "metrics", "events", "relations",
@@ -250,12 +270,14 @@ analyst_questions 中标注需人工/官方确认。"""
 
 def build_arbitration_messages(profile: TargetProfile, source_metadata: dict,
                                passages: list[Passage], output_limits: dict,
-                               conflicts: list[dict]) -> list[dict]:
+                               conflicts: list[dict],
+                               task_context: dict | None = None) -> list[dict]:
     """Messages for an arbitration call over a single link's conflicting output."""
     user_payload = {
         "task": "arbitration",
         "schema_version": SCHEMA_VERSION,
         "target_profile": _profile_block(profile),
+        "task_context": task_context,
         "source_metadata": source_metadata,
         "selected_passages": [p.model_dump() for p in passages],
         "field_conflicts": conflicts,

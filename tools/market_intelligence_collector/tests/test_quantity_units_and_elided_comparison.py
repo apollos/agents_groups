@@ -152,7 +152,9 @@ EXPLICIT = "磷酸铁锂储能系统中标单价0.518元/Wh，低于钠电二标
 
 
 def price_fact(statement):
-    return fact(statement, {"amount": 0.518, "currency": "CNY", "unit": "元/Wh"}, "p1", fact_type="price")
+    # Total-vs-unit-price assignment is the model's extraction; the program does not reclassify.
+    return fact(statement, {"unit_price": 0.518, "unit_price_unit": "元/Wh", "currency": "CNY", "unit": "元/Wh"},
+                "p1", fact_type="price")
 
 
 def test_t4_elided_comparison_resolves_the_other_quotation_with_the_same_evidence_as_explicit():

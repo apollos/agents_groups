@@ -7,8 +7,8 @@ unit="MW/400MWh"``, event ``capacity=100, volume=400`` without units, or a fact
 code that treats "the first number" as MWh then compares 100 against 400 for
 the same project.
 
-This pass works like ``money.normalize_bundle_amounts``: the cited passage is
-the only authority. Every power and energy quantity in that passage is parsed
+This pass runs only on the legacy (no content_review) path, where the cited
+passage is the only authority. Every power and energy quantity in that passage is parsed
 with its unit; a numeric field is mapped to canonical ``power_mw`` /
 ``energy_mwh`` only when the passage states that exact number with a power /
 energy unit. The original fields are kept (``unit_raw``, ``*_unit``); nothing

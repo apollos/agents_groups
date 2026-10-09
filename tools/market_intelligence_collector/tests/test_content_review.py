@@ -169,9 +169,10 @@ def test_format_problem_is_not_misreported_as_unsupported_evidence():
 @pytest.mark.parametrize("currency,unit,expected", [("CNY万元", None, 41416220), ("CNY", "万元", 41416220),
                                                     ("RMB万元", None, 41416220)])
 def test_currency_scale_syntax_keeps_original_evidence(currency, unit, expected):
+    spec = case()["content_review"]["claims"][3]["amount"]
     values = {"amount": 4141.622, "currency": currency}
     if unit: values["amount_unit"] = unit
-    result, reason = normalize_cny_fields(values, TEXT, "p2", [])
+    result, reason = normalize_cny_fields(values, TEXT, [spec])
     assert reason == "supported" and result["amount"] == expected
     assert result["amount_input"] == values
 
@@ -179,8 +180,75 @@ def test_currency_scale_syntax_keeps_original_evidence(currency, unit, expected)
 def test_model_unit_repair_cannot_replace_amount_or_currency():
     spec = case()["content_review"]["claims"][3]["amount"]
     for values in ({"amount": 123, "currency": "CNY"}, {"amount": 4141.622, "currency": "USD"}):
-        result, reason = normalize_cny_fields(values, TEXT, "p2", [spec])
+        result, reason = normalize_cny_fields(values, TEXT, [spec])
         assert result is None and reason.startswith("normalization_")
+
+
+def test_amount_follows_the_semantic_review_not_a_regex():
+    """The reviewed claim.amount decides; passage wording, foreign currency in the
+    same paragraph and 'number followed by unit' syntax are not re-checked."""
+    raw = case()
+    money = next(c for c in raw["content_review"]["claims"] if c["id"] == "money")
+    # Value, unit and currency may be cited from different fragments of the input.
+    money["amount"]["evidence"] = [{"passage_id": "p2", "quote": "4141.622"}, {"passage_id": "p2", "quote": "万元"}]
+    values = validate(raw).events[0].metrics
+    assert (values["amount"], values["amount_raw"], values["amount_raw_unit"]) == (41416220, 4141.622, "万元")
+    assert values["amount_evidence"] == money["amount"]["evidence"]
+    # A claim that is not source_supported keeps the amount in the audit record only.
+    for status in ("inference", "pending_review", "unsupported"):
+        damaged = case()
+        next(c for c in damaged["content_review"]["claims"] if c["id"] == "money")["status"] = status
+        bundle = validate(damaged)
+        assert bundle.events[0].metrics == {} or bundle.events[0].metrics.get("amount") is None
+        assert bundle.content_review["claims"]["money"]["status"] == status
+        assert any(h["path"] == "/events/0/metrics" for h in bundle.content_review["held"])
+    # No claim.amount at all: the model gave no source basis, so the amount waits for review.
+    missing = case()
+    next(c for c in missing["content_review"]["claims"] if c["id"] == "money").pop("amount")
+    bundle = validate(missing)
+    values = bundle.events[0].metrics
+    assert values["amount"] is None and values["amount_candidate"] == 4141.622
+    assert (values["amount_status"], values["amount_reason"]) == ("pending_review", "amount_claim_missing")
+    assert bundle.content_review["claims"]["money"]["status"] == "source_supported"
+
+
+def test_thousand_yuan_table_amount_is_converted_not_rejected():
+    table = ("（三）主要会计数据和财务指标\n□是 ■否\n单位：千元\n项目 2025 年 2024 年 本年比上年增减\n"
+             "营业收入 423,701,834 362,012,554 17.04% 400,917,045")
+    passages = [*PASSAGES, Passage(passage_id="t1", section="表格 1", text=table)]
+    evidence = [{"passage_id": "t1", "quote": "营业收入 423,701,834 362,012,554 17.04%"},
+                {"passage_id": "t1", "quote": "单位：千元"}]
+    revenue = {"id": "revenue_2025", "statement": "宁德时代2025年度营业收入为423,701,834千元。", "kind": "observation",
+               "status": "source_supported", "reason": "行名、年份列与表头单位说明共同支持。", "evidence": evidence,
+               "depends_on": [], "amount": {"currency": "CNY", "value": 423701834, "unit": "千元", "evidence": evidence}}
+    raw = {"decision": "save_structured", "overall_score": 80, "confidence": .9,
+           "facts": [{"fact_type": "finance", "fact_statement": revenue["statement"], "period": "2025年度",
+                      "metrics": {"amount": 423701834, "currency": "CNY", "amount_unit": "千元"},
+                      "evidence_locator": {"passage_id": "t1"}}],
+           "content_review": {"protocol": PROTOCOL, "claims": [revenue], "bindings": {"/facts/0": ["revenue_2025"]}}}
+    report = BundleValidator({}, require_content_review=True).validate(raw, passages)
+    assert report.schema_valid, report.errors
+    fact = report.bundle.facts[0]
+    values = fact.metrics
+    assert (values["amount"], values["currency"], values["amount_unit"]) == (423701834000, "CNY", "元")
+    assert (values["amount_raw"], values["amount_raw_unit"]) == (423701834, "千元")
+    assert values["amount_evidence"] == evidence
+    assert fact.content_review["fields"]["metrics"]["status"] == "source_supported"
+    assert not any("amount" in h["path"] for h in fact.content_review["held_fields"])
+    assert "normalization_unsupported_amount_unit" not in json.dumps(fact.content_review)
+
+
+def test_unconvertible_unit_keeps_raw_amount_and_notes_it():
+    raw = case()
+    money = next(c for c in raw["content_review"]["claims"] if c["id"] == "money")
+    money["amount"].update(unit="万元等值", evidence={"passage_id": "p2", "quote": "4141.622"})
+    raw["events"][0]["metrics"] = {"amount": 4141.622, "currency": "CNY", "amount_unit": "万元等值"}
+    bundle = validate(raw)
+    values = bundle.events[0].metrics
+    assert (values["amount"], values["amount_unit"], values["amount_raw"]) == (4141.622, "万元等值", 4141.622)
+    assert values["amount_conversion"] == {"status": "not_converted", "reason": "unknown_amount_unit"}
+    review = bundle.events[0].content_review["fields"]["metrics/amount"]
+    assert review["status"] == "source_supported" and review["conversion"]["status"] == "not_converted"
 
 
 def test_review_survives_merge_sqlite_queries_cache_and_explanation(config, tmp_path):
@@ -287,3 +355,119 @@ def test_existing_database_gets_nullable_review_columns(tmp_path):
 
 def test_extraction_and_arbitration_share_the_same_policy():
     assert RULE_TEXT in SYSTEM_PROMPT and RULE_TEXT in ARBITRATION_SYSTEM
+
+
+def test_policy_text_and_examples_cover_event_and_summary_bindings():
+    from mic.content_review_policy import SCHEMA_HINT as HINT
+    from mic.modeling.prompts import SCHEMA_HINT as PROMPT_HINT
+    for phrase in ("只绑定描述该事项的 observation claim", "/events/i/impact", "current_claim_ids",
+                   "brief.one_sentence 非空时必须有绑定", "完整表达这句话", "depends_on 引用它所汇总的各个 claim",
+                   "复用同一 claim id"):
+        assert phrase in RULE_TEXT, phrase
+    event = HINT["binding_examples"]["event"]
+    assert set(event["bindings"]) == {"/events/0", "/events/0/entities", "/events/0/impact"}
+    assert event["bindings"]["/events/0"] == event["event_resolution"]["current_claim_ids"]
+    kinds = {c["id"]: c["kind"] for c in event["claims"]}
+    assert kinds[event["bindings"]["/events/0"][0]] == "observation"
+    assert kinds[event["bindings"]["/events/0/entities"][0]] == "identity"
+    assert kinds[event["bindings"]["/events/0/impact"][0]] == "analysis"
+    brief = HINT["binding_examples"]["brief"]
+    summary = brief["claims"][0]
+    assert brief["bindings"]["/brief/one_sentence"] == [summary["id"]] and len(summary["depends_on"]) >= 2
+    assert PROMPT_HINT["content_review"] is HINT
+    assert "输出前自查" in SYSTEM_PROMPT
+
+
+def summary_case():
+    """Two reviewed figures + two source-given comparisons, summarised in one sentence."""
+    raw = case()
+    review = raw["content_review"]
+    catl = claim("catl_amount", "宁德时代中标价4141.622万元。")
+    envision = claim("envision_amount", "远景能源中标价19461.6万元。", "p1")
+    catl_price = claim("catl_price", "来源给出二标段合单价1.035元/Wh。", kind="comparability", dependencies=["catl_amount"])
+    catl_price["field_values"] = {"comparison": {"unit_price": 1.035}}
+    envision_price = claim("envision_price", "来源给出一标段合单价0.518元/Wh。", "p1", kind="comparability",
+                           dependencies=["envision_amount"])
+    envision_price["field_values"] = {"comparison": {"unit_price": 0.518}}
+    sentence = "宁德时代中标二标段4141.622万元（合单价1.035元/Wh）；远景能源中标一标段19461.6万元（合单价0.518元/Wh）。"
+    summary = claim("lots_summary", sentence, dependencies=["catl_amount", "catl_price", "envision_amount", "envision_price"])
+    summary["evidence"] = [{"passage_id": "p1", "quote": TEXT["p1"]}, {"passage_id": "p2", "quote": TEXT["p2"]}]
+    review["claims"].extend([catl, envision, catl_price, envision_price, summary])
+    raw["brief"]["one_sentence"] = sentence
+    review["bindings"]["/brief/one_sentence"] = ["lots_summary"]
+    return raw, sentence
+
+
+def test_one_sentence_is_published_only_through_a_complete_summary_claim():
+    raw, sentence = summary_case()
+    bundle = validate(raw)
+    assert bundle.brief.one_sentence == sentence
+    assert bundle.brief.content_review["fields"]["one_sentence"]["status"] == "source_supported"
+    # One premise not supported by the source: the whole sentence waits, nothing is rewritten.
+    raw, sentence = summary_case()
+    next(c for c in raw["content_review"]["claims"] if c["id"] == "envision_price")["status"] = "pending_review"
+    bundle = validate(raw)
+    assert bundle.brief.one_sentence == ""
+    held = next(h for h in bundle.content_review["held"] if h["path"] == "/brief/one_sentence")
+    assert held["original"] == sentence and held["reason"] == "claim_not_supported"
+    assert bundle.content_review["claims"]["lots_summary"]["reason"] == "dependency_not_supported"
+    # Binding a partial claim publishes only that claim's statement, never the free-text sentence.
+    raw, sentence = summary_case()
+    raw["content_review"]["bindings"]["/brief/one_sentence"] = ["catl_amount"]
+    bundle = validate(raw)
+    assert bundle.brief.one_sentence == "宁德时代中标价4141.622万元。"
+    assert any(h["path"] == "/brief/one_sentence" for h in bundle.content_review["held"]) is False
+    # No binding at all: held as missing_record_review, the program does not pick a claim.
+    raw, sentence = summary_case()
+    raw["content_review"]["bindings"].pop("/brief/one_sentence")
+    bundle = validate(raw)
+    assert bundle.brief.one_sentence == ""
+    assert any(h["path"] == "/brief/one_sentence" and h["reason"] == "missing_record_review"
+               for h in bundle.content_review["held"])
+
+
+def test_event_record_binds_observation_and_impact_binds_analysis_separately():
+    raw = case()
+    review = raw["content_review"]
+    impact = claim("award_impact", "该中标对收入为正向影响（分析推断）。", kind="analysis", dependencies=["award"])
+    impact["field_values"] = {"impact": {"direction": "positive", "channels": ["revenue"],
+                                         "horizon": "annual", "magnitude_guess": "unknown"}}
+    review["claims"].append(impact)
+    raw["events"][0]["event_type"] = "major_order"
+    raw["events"][0]["impact"] = {"direction": "positive", "channels": ["revenue"], "horizon": "annual", "magnitude_guess": "unknown"}
+    # Wrong: analysis claim mixed into the record binding.
+    review["bindings"]["/events/0"] = ["award", "award_impact"]
+    review["bindings"].pop("/events/0/summary")
+    bundle = validate(raw)
+    event = bundle.events[0]
+    assert event.impact.direction == "unclear" and event.impact.channels == []
+    assert any(h["path"] == "/events/0/impact" for h in bundle.content_review["held"])
+    assert event.event_type == "" or event.content_review["fields"]["event_type"]["status"] != "source_supported"
+    # Right: record → observation, entities → identity, impact → analysis with field_values.
+    raw = case()
+    review = raw["content_review"]
+    review["claims"].append(deepcopy(impact))
+    raw["events"][0]["event_type"] = "major_order"
+    raw["events"][0]["impact"] = {"direction": "positive", "channels": ["revenue"], "horizon": "annual", "magnitude_guess": "unknown"}
+    review["bindings"].pop("/events/0/summary")
+    review["bindings"]["/events/0"] = ["award"]
+    review["bindings"]["/events/0/impact"] = ["award_impact"]
+    bundle = validate(raw)
+    event = bundle.events[0]
+    assert event.event_type == "major_order" and event.content_review["fields"]["event_type"]["status"] == "source_supported"
+    assert event.summary == raw["content_review"]["claims"][2]["statement"]
+    assert event.impact.direction == "positive" and event.impact.channels == ["revenue"]
+    assert event.content_review["fields"]["impact"]["status"] == "source_supported"
+    assert event.entities["subject"] == "宁德时代"
+    # The event anchor must equal the summary's effective binding.
+    from mic.event_resolution import build_context, finalize
+    good = deepcopy(bundle)
+    good.events[0].event_resolution = {"reviewed": True, "verdict": "new", "reason": "候选为空", "comparisons": [],
+                                       "current_claim_ids": ["award"],
+                                       "current_evidence": [{"passage_id": "p2", "quote": TEXT["p2"]}]}
+    finalize(good, build_context(None, []), PASSAGES, run_id="run", link_id="link")
+    assert good.events[0].event_resolution["status"] == "resolved"
+    bad = deepcopy(bundle)
+    bad.events[0].event_resolution = {**good.events[0].event_resolution["model_decision"], "current_claim_ids": ["award", "award_impact"]}
+    finalize(bad, build_context(None, []), PASSAGES, run_id="run", link_id="link")
+    assert bad.events[0].event_resolution["reason"] == "current_event_anchor_mismatch"
