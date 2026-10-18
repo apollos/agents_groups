@@ -1,8 +1,106 @@
 # agents_groups：Cursor 调试交接与验收标准
 
-版本：2026-10-04，依据截至北京时间 20:39 的本地运行反馈。  
-适用机器：Ubuntu WorkSpace。适用项目：`/home/yu/Workspace/agents_groups`。  
-本文定义本轮工作边界与完成条件；它不是“已通过验收”的报告。
+版本：2026-10-04 初版合同；**2026-10-18 12:20 更新**（第 0 节为本次新增的交接状态，第 1–12 节为原合同，仍有效，未改动）。  
+适用机器：Ubuntu WorkSpace（原机）→ 笔记本 Cursor 经 Remote SSH 回到同一台 WorkSpace 继续开发。适用项目：`/home/yu/Workspace/agents_groups`。  
+本文定义工作边界与完成条件，并记录当前进度；它不是"已通过验收"的报告。
+
+---
+
+## 0. 交接状态（更新于 2026-10-18 12:20，北京时间）
+
+### 0.1 当前目标
+
+按用户给出的 MIC 验收规范（见 0.2 的三个场景），逐场景测试 `tools/market_intelligence_collector`，不满足则修改代码/规范，满足则给出证据目录。最终目标仍是原合同第 1 节：intelligence_collector_agent 在既定预算内自动采集可追溯的结构化情报。本阶段先在 MIC 工具层用 CLI 直跑验证，Agent 端到端（A1–A10 真实正例）尚未在新代码版本上重跑。
+
+验收口径（用户规定）：交付物是具体事实/指标（不是链接）；主体、项目、数值、单位、日期、口径正确；有来源链接+原文摘录；不过度宣称；facts/metrics/events/summary/库记录一致。`completed`、高置信度、条数多都不等于通过。失败时要定位漏失阶段：未检索 / 检索到未读 / 读到但段落漏失 / 模型漏失 / 复核阻断。
+
+### 0.2 已完成内容与结论
+
+| 场景 | 状态 | 证据目录（均在 `tools/market_intelligence_collector/logs/acceptance/`，gitignore，仅本机） |
+| --- | --- | --- |
+| 场景 1：宁德时代 2025 年度 营业收入/归母净利润/经营现金流净额+同比 | **通过**（08 轮） | `mic_scenario1_20261007/08_event_and_summary_bindings/`，run `run_55d47e76ba10`；索引与各轮漏失阶段分析在 `mic_scenario1_20261007/README.md` |
+| 场景 3：宁德时代 2024-04-09 首发天恒储能系统（6.25 MWh / 430 Wh/L / 5 年功率与容量零衰减企业声明） | **内容全部命中，但一手来源未读到（未完成项）** | `mic_scenario3_tianheng_20261007/01_run/`，run `run_0ac51f757891`；`README.md` 有对照表与失败诊断 |
+| 场景 2：CATL × Solarpro 2 GWh 钠离子协议（2026-07-21）vs 602 MWh 保加利亚并网项目（2026-05），未披露金额留空 | **未开始** | — |
+| 近 7 天采集检查、重复采集一致性检查 | **未开始** | — |
+
+场景 1 最终结果：三项指标 423,701,834 / 72,201,282 / 133,219,982 千元（yoy 0.1704 / 0.4228 / 0.3735），period `2025年度`，来源 catl.com 年报摘要 PDF，复核全部 `source_supported`；facts 的 amount 换算为 423701834000 元（`amount_raw=423701834, amount_raw_unit=千元`）；事件 `earnings_change` + 完整一句话摘要 `source_supported`；`event_date` 留空并记 `missing_date`。
+
+本次聊天期间落地的代码改动（已在 commit `891700e` 中，24 文件 +1489/−304）：
+
+1. **任务问题机制** `mic/task_questions.py`（新）：`task_profile.questions` → `task_question` 查询族前置、问题词参与初筛/段落打分、`task_context` 下发模型；CLI `--question` / `--task-file`；`--time-window ""` 表示不过滤。
+2. **初筛/画像**：`official_domains`（`company_300750` 加 `catl.com`，`config/target_profiles.yaml` 与部署副本 `~/.config/agents_groups/mic/target_profiles.yaml` 都已改）→ 官网域名按目标身份命中 + 高可信一手来源。
+3. **读取队列** `pipeline.py`：`max_links_to_read` 只计读成功；读失败不占名额；队列头部保留一个一手来源名额 `_reserve_first_hand_slot`；传输预算耗尽才停（`read_queue_stopped_by_budget`）。`reader.py`：`BudgetExceeded` 非 cancelled/max_run_seconds 时切下一传输；PDF 表格块 `pdf_table_blocks` + 表格 passage 名额；PDF 行保留 ≥2 字符；私用区字形（Wingdings `\uf052`）归一化为 `■`。
+4. **金额**（用户第二条要求）：`mic/money.py` 重写——删除正则审批（数字紧跟单位、同段外币否决、原文重搜/猜尺度）与 `cny_amount_supported()`；`normalize_cny_fields(fields, passages, specifications)` 只应用内容审核已接受的 `claim.amount`，做结构/引用归属/一致性校验与 Decimal 换算；单位不是白名单，无法换算时保留原值并写 `amount_conversion={status:not_converted,reason}`。`content_review.py` 以 claim 状态决定金额物化；`evidence_review.check_money()` 只查格式，删除 `separate_prices()`；`validate.py` 同步。
+5. **审核规范**（用户第三条要求）`mic/content_review_policy.py` RULE_TEXT：规则 2 加"title 引用使整条 claim 引用无效""event_date 是披露/发生日期，报告期末/文件名年月不算，缺失留空"；规则 3 加事件绑定方式（`/events/i` 只绑 observation；`/events/i/entities` identity；`/events/i/impact` analysis；`current_claim_ids` 与 summary 绑定一致）和摘要绑定方式（one_sentence 必须有绑定、claim.statement 完整表达整句、多判断用 `depends_on` 汇总、复用 claim id）；规则 4 加 metrics.comparison 属 comparability；规则 5 重写金额要求（多条引用分别支持数值/单位/币种）。`SCHEMA_HINT` 加 `revenue_2025` 金额示例与 `binding_examples`（通用占位名）。`prompts.py` 加第 11 条（task_context）、第 12 条（输出前自查）。
+6. 文档：`README.md` 增 `questions` / `official_domains` / 读取队列语义；`AGENTS.md` 已有"运行产物进 logs/ 不进 docs/"约定（commit `5f966ab`）。
+
+### 0.3 已验证通过的测试与命令
+
+```bash
+# MIC 全套（最后一次：2026-10-07 15:0x，891700e 对应代码，全部通过）
+cd /home/yu/Workspace/agents_groups/tools/market_intelligence_collector
+/home/yu/.venv/mydev/bin/python -m pytest -q tests
+
+# Agent 全套（245 passed）
+cd /home/yu/Workspace/agents_groups/agents/intelligence_collector_agent
+/home/yu/.venv/mydev/bin/python -m pytest -q tests
+
+# 实跑一个场景（需 GUI 会话 + OpenClaw 已启动；Shell 需 required_permissions ["all"]）
+cd /home/yu/Workspace/agents_groups/tools/market_intelligence_collector
+set -a && . ./.env && set +a
+/home/yu/.venv/mydev/bin/python -m mic.cli collect company_300750 --task-file <dir>/task.json --json > <dir>/report.json 2> <dir>/stderr.txt
+# 导出该 run 的全部库记录（含 model_outputs 原始输出）
+/home/yu/.venv/mydev/bin/python logs/acceptance/mic_scenario1_20261007/export_run.py <run_id> <dir>/db_export.json
+```
+
+新增/重写测试：`tests/test_task_questions.py`（13 项）、`tests/test_money_evidence.py`（重写）、`tests/test_content_review.py`（+6：语义审核决定金额、千元表格换算、不可换算保留、规范文本覆盖、完整摘要 claim、事件 observation/impact 分离与锚点一致）、`tests/test_evidence_review.py`（金额用例改格式语义）。`test_cancel_during_body_read_sends_no_model_request` 改为只统计取消后的模型调用。
+
+### 0.4 已修改但尚未验证 / 状态不明
+
+- **commit `891700e`（10-09 "部分保存"）之后无新代码改动**；`git status` 仅 `?? check_python_env.py`（用户自建的环境探测脚本，打印主机名/解释器路径，与项目无关，可删或留）。
+- 场景 1 的书面报告 `tools/market_intelligence_collector/docs/acceptance/mic_scenario1_catl_fy2025_20261007.md` 10-07 曾写出，**现已不在磁盘上且从未入库**（目录 `docs/acceptance/` 不存在）。内容要点已并入 `logs/acceptance/mic_scenario1_20261007/README.md`。若需要正式 docs 报告，按该 README 重写。
+- Agent 侧 `agents/intelligence_collector_agent/src/agent_trade_intel/adapters/mic_adapter.py` **未透传 `task_profile.questions`**；目前 questions 只能经 CLI / `AnalystAPI.collect_intelligence` 使用。Agent 端到端在新版本上未重跑。
+- `normalize_quoted_price()`（单价路径）仍按维度语法在引用中定位数字，未改为"以 claim 为准"；用户未要求，列为可选后续。
+- `tools/market_intelligence_collector/mic.db`（gitignore）里累积了 00–08 轮及场景 3 的数据；是工作库，不是隔离验收库。原合同第 3.3 节"新测试用独立数据库"的要求在场景测试阶段没有执行，正式验收批次时需换绝对路径的隔离库。
+
+### 0.5 未解决问题
+
+1. **场景 3 一手来源未读到**：catl.com `news/7944.html` HTTP 200，正文在 `div.mc_e3s1b_txtbox`（24 个 `<p>`），不在 `mic/article_scope.py::ROOT_SELECTORS`，严格模式不做整页回退 → `article_container_not_found`。阶段=读取，非检索/预算/模型。所有要素由 sohu 转载凤凰网稿覆盖，故内容通过，但"一手来源"目标未完成。**建议修法**：选择器都不命中时按 `<p>` 文本密度选容器，再沿用现有链接比例、相关阅读边界、反爬校验；**不要**为 catl.com 加站点选择器特例（用户与规则均禁止公司/站点特判）。未得到用户确认，未动手。
+2. 场景 3 中画册 PDF（与问题无关的来源）仍产出一条 brief one_sentence（对画册内容的汇总）并入库；模型同时给了 limitation claim 与 coverage_gap。是否应把"与任务问题无关的来源"压低 decision 由用户决定，未改。
+3. 原合同第 5.1 节北极星发布时间、第 6 节 A1–A10 的 Agent 真实正例、第 7.2 节冻结批次等，在新版本（`891700e`）上尚未执行；10-04 以前的结论见下文第 4–5 节。
+
+### 0.6 已否定的方案（勿重试）
+
+| 方案 | 否定原因 |
+| --- | --- |
+| 在初筛/规划里按"年报""宁德时代"等关键词或公司名特判 | 违反 `.cursor/rules/intelligence-content-review.mdc` 与用户要求；改用通用的 `questions` + `official_domains` 画像字段 |
+| 放宽评分阈值、扩大预算、放宽日期、减少证据来通过 | 用户明令禁止；所有轮次预算 2/2/3 与部署限额不变 |
+| `mic/money.py` 用正则在原文重搜金额、按"数字紧跟单位"审批、同段外币整体否决、单位白名单 | 导致 05 轮 `normalization_unsupported_amount_unit` 清空 source_supported 的金额；用户要求删除，改为以模型审核 `claim.amount` 为准 |
+| `evidence_review.separate_prices()` 按词语把 amount 改成 unit_price | 程序擅自重分类，用户要求总额/单价归属由模型提取 |
+| 程序自动为缺绑定字段挑选"看起来相关"的 claim 补绑定；把 analysis claim 改成 observation 绕过审核；看到"年报"强制 event_type | 用户明确禁止；修法只在规范文本与提示（`content_review_policy.py`、`prompts.py`），`content_review.py` 隔离机制保持 |
+| 读取器在 http 预算耗尽时直接放弃（旧行为） | 02 轮 15 候选全部 `fetch_failed`；已改为切换下一传输 |
+| 用 `reader.ReadResult(body=...)`、从 `mic.schemas` 导入 `ReadResult` 等写测试 | 字段/位置不对；`ReadResult` 在 `mic.reader`，无 `body` 字段 |
+| 用 `_PDF_PUA_RE` 之外的方式"修"引文不匹配（例如放宽 quote 子串校验） | 放宽校验会削弱复核；正确做法是抽取阶段归一化字形 |
+
+### 0.7 运行环境、配置与依赖服务（在 Remote SSH 下同样适用）
+
+- Python：只用 `/home/yu/.venv/mydev/bin/python`（3.12.3）；`market_intelligence_collector` 与 `agent_trade_intel` 已可编辑安装。不要新建 venv。
+- MIC 部署配置：`/home/yu/.config/agents_groups/mic/*.yaml`（`MIC_CONFIG_DIR` 由 `tools/market_intelligence_collector/.env` 指向）。当前限额 `browser_runtime.yaml`：max_queries 2 / max_links_to_read 2 / http 2 / browser 2 / max_model_calls 3 / 300 s；`search_providers.yaml active: browser_local`。`target_profiles.yaml` 部署副本已含 `official_domains`，若重装配置需同步。
+- `.env`（gitignore，勿打印、勿提交）键名：`MIC_CONFIG_DIR, MIC_ALLOW_MOCK, OPENCLAW_GATEWAY_BASE_URL, OPENCLAW_REQUEST_MODEL, OPENCLAW_GATEWAY_TOKEN, OPENCLAW_AGENT_PRIMARY_MODEL, OPENCLAW_AGENT_FALLBACK_MODELS, MIC_BROWSER_PROFILE_DIR`。实跑前 `set -a && . ./.env && set +a`。
+- 依赖服务：OpenClaw Gateway `http://127.0.0.1:18791/v1`（用户手动启动，模型 `openclaw/main` → deepseek-v4.1-flash，fallback deepseek-v4-flash）；Edge 浏览器 `browser_local` 搜索与 Playwright 读取，`headless=false`，**需要 WorkSpace 上有可用 GUI 会话**——Remote SSH 本身不提供显示，需确认 DISPLAY/会话仍在，否则实跑会在搜索阶段失败（离线测试不受影响）。
+- Cursor Shell 工具：实跑需 `required_permissions: ["all"]`（沙箱无浏览器/网络）；`working_directory` 必须显式给出。
+- 运行产物位置：`tools/market_intelligence_collector/logs/`（`run_<id>.log`、`mic.log`、`acceptance/`）与 `agents/intelligence_collector_agent/logs/acceptance/`，均 gitignore。`docs/` 只放书面报告。
+- 验证用临时脚本放 `/tmp`（本次使用的 `/tmp/mic_s1/export_run.py` 已复制到 `logs/acceptance/mic_scenario1_20261007/export_run.py`，`/tmp` 内容换机器后不会存在）。
+
+### 0.8 下一步工作（按优先级）
+
+1. 向用户确认场景 3 的 `article_scope` 通用正文容器识别方案（0.5-1）；确认后实现 + 离线回归（用保存的 HTML 结构做 fixture，不写 catl 特例）+ 重跑场景 3 一轮，验证官网原文进入一手名额。
+2. 场景 2（CATL × Solarpro vs 602 MWh 并网项目）：同一运行方式，新 task.json；重点看事件区分（不同事项不合并）、未披露金额留空、`event_resolution` 比较。
+3. 近 7 天采集检查（`time_window: 7d`，查 `time_window_filtered` 与发布时间绑定）与重复采集一致性检查（同任务二次运行：`cached_or_reused_results`、不重复花预算、事实不重复新增）。
+4. 若用户需要，补 Agent 侧 `mic_adapter` 透传 `questions`，然后按原合同第 7.2 节在隔离工作区做冻结版本的 Agent 端到端批次。
+5. 决定是否重写 `docs/acceptance/` 书面报告（0.4）；提交前确认 `logs/` 未入库、`.env` 未泄露。
+
+---
 
 ## 1. 先明确最终要得到什么
 
