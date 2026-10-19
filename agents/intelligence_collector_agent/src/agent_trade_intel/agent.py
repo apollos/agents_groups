@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import logging
 import traceback
 from contextlib import contextmanager
@@ -1213,11 +1214,23 @@ def _task_summary(task: dict[str, Any]) -> str:
     return f"执行 {label} 的 {task.get('task_type')} 采集任务。"
 
 
+def _window_value(provided: dict[str, Any], key: str) -> tuple[bool, Any]:
+    """A present key is explicit, including ``""``. Absence is the only missing case."""
+    if key in provided:
+        return True, provided[key]
+    return False, None
+
+
 def _mic_task_profile(task: dict[str, Any], config: dict[str, Any], default_focus: list[str] | None = None) -> dict[str, Any]:
     """Resolve the MIC task profile: demand task_profile > YAML mic_task_defaults.
 
     No budget is hardcoded here; YAML config is the single source of defaults. When the demand is
     in test_mode, the budget is clamped by mic_task_defaults.test_mode_budget_profile.
+
+    ``time_window`` uses a default only when the field itself was not provided. An explicit empty
+    string stays empty, so MIC does not apply a publication-time filter. For a black-swan task the
+    order is ``black_swan_time_window``, then ``time_window``, then the black-swan default.
+    ``questions`` are copied through unchanged.
     """
     defaults_cfg = config.get("mic_task_defaults", {}) or {}
     profiles = (task.get("task_profile") or {}).get("mic", {}) or {}
@@ -1225,19 +1238,32 @@ def _mic_task_profile(task: dict[str, Any], config: dict[str, Any], default_focu
         d = defaults_cfg.get("black_swan", {}) or {}
         focus = profiles.get("black_swan_focus") or profiles.get("focus") or default_focus or d.get("focus") or ["risk"]
         budget = profiles.get("black_swan_budget_profile") or profiles.get("budget_profile") or d.get("budget_profile") or {}
-        time_window = profiles.get("black_swan_time_window") or profiles.get("time_window") or d.get("time_window") or "7d"
+        chosen, time_window = _window_value(profiles, "black_swan_time_window")
+        if not chosen:
+            chosen, time_window = _window_value(profiles, "time_window")
+        if not chosen:
+            chosen, time_window = _window_value(d, "time_window")
+        if not chosen:
+            time_window = "7d"
     else:
         d = defaults_cfg.get("deep_collect", {}) or {}
         focus = profiles.get("focus") or default_focus or d.get("focus") or ["risk"]
         budget = profiles.get("budget_profile") or d.get("budget_profile") or {}
-        time_window = profiles.get("time_window") or d.get("time_window") or "30d"
+        chosen, time_window = _window_value(profiles, "time_window")
+        if not chosen:
+            chosen, time_window = _window_value(d, "time_window")
+        if not chosen:
+            time_window = "30d"
     if task.get("test_mode"):
         cap = defaults_cfg.get("test_mode_budget_profile", {}) or {}
         budget = {
             key: min(int(budget.get(key, limit)), int(limit))
             for key, limit in cap.items()
         } or budget
-    return {"focus": focus, "time_window": time_window, "budget_profile": budget}
+    profile = {"focus": focus, "time_window": time_window, "budget_profile": budget}
+    if "questions" in profiles:
+        profile["questions"] = copy.deepcopy(profiles["questions"])
+    return profile
 
 
 def _preferred_intraday_frequency(capability: dict[str, Any] | None, config: dict[str, Any]) -> str | None:

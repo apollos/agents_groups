@@ -303,6 +303,41 @@ def _mic_task_profile_passthrough(monkeypatch):
     monkeypatch.setattr(agent_module, "_mic_task_profile", patched)
 
 
+def test_worker_request_keeps_questions_and_explicit_empty_window(tmp_path, stub_module, monkeypatch):
+    _mic_task_profile_passthrough(monkeypatch)
+    questions = [{
+        "question": "整理两款产品的公开规格。",
+        "search_terms": ["产品 规格 官网"],
+        "period": "当前公开资料",
+        "note": "不要丢掉",
+    }]
+    cases = (
+        ("normal-set", "mic_deep_collect", {"time_window": "14d", "questions": questions}, "14d"),
+        ("normal-empty", "mic_deep_collect", {"time_window": "", "questions": questions}, ""),
+        ("normal-omitted", "mic_deep_collect", {"questions": questions}, "30d"),
+        ("swan-set", "black_swan_scan", {"black_swan_time_window": "2d", "time_window": "", "questions": questions}, "2d"),
+        ("swan-empty", "black_swan_scan", {"black_swan_time_window": "", "time_window": "30d", "questions": questions}, ""),
+        ("swan-fallback-empty", "black_swan_scan", {"time_window": "", "questions": questions}, ""),
+        ("swan-omitted", "black_swan_scan", {"questions": questions}, "7d"),
+    )
+    for name, task_type, mic, expected_window in cases:
+        agent = _agent(tmp_path / name, stub_module)
+        task = {"task_id": "task-" + name, "task_type": task_type, "idempotency_key": name,
+                "target": {"target_id": "company_metax", "company_name": "沐曦"},
+                "budget_profile": {"stub_mode": "ok"},
+                "task_profile": {"mic": mic}}
+        ticket_id = agent.tickets.create_ticket(ticket_type="COLLECTION_TASK_TICKET", source_agent="t",
+                                                target_agent_id=agent.config.runtime.agent_id, priority="normal", payload=task)
+        agent.queue.publish("intelligence.collection", {"ticket_id": ticket_id},
+                            target_agent_id=agent.config.runtime.agent_id, idempotency_key="msg-" + name)
+        out = agent.run_once(topics=["intelligence.collection"])
+        assert out["status"] == "processed", out
+        request = json.loads((Path(_attempts(agent)[0]["result_path"]) / "request.json").read_text())
+        received = request["task_profile"]
+        assert received["time_window"] == expected_window
+        assert received["questions"] == questions
+
+
 def test_agent_records_attempt_and_persists_supervised_result(tmp_path, stub_module, monkeypatch):
     _mic_task_profile_passthrough(monkeypatch)
     agent = _agent(tmp_path / "a", stub_module)
