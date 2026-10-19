@@ -288,6 +288,11 @@ mic reader probe --url https://... --transport http|browser|http_then_browser [-
   规则评分与 triage 本身不变；闸门在规则 triage 之后和模型批量 triage 之后各执行一次（幂等），最终决定以闸门为准，
   模型批量 triage 不能把已降级的候选重新提升为 `read`。
 - 浏览器路线默认不复用历史分析（`cache.reuse_analysis: false`），避免把旧结果当作本次验收。
+- 专用 profile 不跨桌面会话沿用窗口几何：每次启动浏览器前（已持有 profile 锁）从 `Default/Preferences`
+  删除 `browser.window_placement`，由 Edge 按当前显示器确定窗口（在另一套屏幕几何下保存的窗口位置会让 Edge
+  启动即退出）；`SingletonLock` 指向存活进程或其他主机时不改动。结果记在清理诊断
+  `profile_maintenance.window_placement`（`reset` / `absent` / `no_preferences` / `unreadable` /
+  `profile_in_use` / `write_failed`）。
 - Cookie 值、profile 内容、凭据文件绝不进入日志、CLI 输出、异常、模型提示词、业务 SQLite、运行报告或 Git。
   注入专用 profile 的每个 Cookie 的 `expires` 会被截短到登记的本地有效期（min(用户 `max_age_seconds`，真实到期)，
   会话 Cookie 也变为有界 Cookie），且每次浏览器启动时先清除已过期/已撤销凭据域名下的 Cookie
@@ -426,7 +431,7 @@ CLI 等价写法：`mic collect company_300750 --question "…" --time-window ""
 | `get_risks` | `risk_id, risk_type, risk_summary, severity, time_horizon, impact_channels, confidence, source_link_id` |
 | `get_catalysts` | `catalyst_id, catalyst_type, expected_date, description, potential_impact, confidence, source_link_id` |
 | `get_analyst_questions` | `question_id, question, reason, priority, status, suggested_queries, related_event_id, source_link_id` |
-| `get_coverage_gaps` | `gap_id, gap_type, description, suggested_next_queries, priority, status, search_run_id` |
+| `get_coverage_gaps` | `gap_id, gap_type, description, suggested_next_queries, priority, status, search_run_id, source_link_id`（来自某来源分析的缺口带该来源；运行级缺口与旧记录为空） |
 | `explain_source_analysis` | `source{title,url,source_type,publish_time}, why_selected, matched_signals, triage_decision, models_used, merged_decision, facts, metrics, events, relations, risks, questions` |
 
 注意：
@@ -518,3 +523,9 @@ python tools/check_release_clean.py .      # 交付/打包前检查是否混入 
 
 `target_profiles` 中每个目标可选配置 `official_domains`（如 `[catl.com]`）：这些域名及其子域下的链接在初筛阶段
 按目标身份命中处理并视为高可信一手来源（`source_type=company`），用于公告/官网 PDF 这类标题里没有公司名的页面。
+
+严格正文范围（`strict_evidence_review: true`）默认只认文章容器，找不到就记 `article_scope_unresolved`，不做整页回退。
+唯一例外是这些官网域名下的页面：产品详情页、落地页常常没有文章容器，内容散在标题、卡片和短说明里。此时按正文区块取内容
+（`body_scope.selector = official_domain:content_blocks`）：跳过链接文字、以链接为主的区块和链接密集区域（菜单、页脚链接组），
+遇到“相关推荐”等标签截止，至少要有一定量的正文或表格。这类短正文在字符预算内按文档顺序整体送模型（相邻区块合并以遵守段落数上限），
+不按段落关键词得分丢弃；超出预算时仍按得分选段。第三方站点的同类页面行为不变。

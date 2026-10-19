@@ -39,6 +39,7 @@ class Database:
             # Per-request traceability (requested max_tokens, finish_reason, served
             # model, response id); legacy rows stay NULL = unknown.
             "model_run": {"request_diagnostics": "JSON"},
+            "coverage_gap": {"source_link_id": "TEXT"},
         }
         for table in ("merged_analysis", "analysis_brief", "fact_item", "metric_observation",
                       "event_card", "relation_record", "risk_flag", "catalyst_item",

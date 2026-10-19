@@ -74,6 +74,11 @@ RULE_TEXT = """
     "/metrics/0/interpretation":["price_comparison"], "/brief/why_it_matters":["price_comparison"]}。
    整条记录的 observation 审核涵盖它的描述、类型、数值、单位、日期、scope，
    必须一起核对完整记录；不再逐项重复绑定名称、单位等元数据。字段绑定可以覆盖记录绑定。
+   数值的限定（最高、高达、最大、最低、至少、不超过、约、标称等）和适用对象或层级
+   （单件/单台/整机/集群、某个型号或配置）属于口径，记录的名称、陈述或 scope 必须照原文保留；
+   丢失原文限定，或写入原文及上下文不支持的层级时，该记录不能判 source_supported。
+   没有单位字段的结构化数值（如事件 metrics 的 capacity、volume）只在单位由字段含义唯一确定时填写，
+   否则留空，用带 unit 的指标记录表达该数值。
    身份和分析不继承 observation 审核：entities/关系主体与类型使用 identity claim；
    direction/impact/interpretation/比较/催化剂/风险等使用 analysis 或 comparability claim。
    identity/analysis claim 的 field_values 给出它实际审核过的字段值，例如
@@ -86,12 +91,20 @@ RULE_TEXT = """
    后者需要独立 analysis claim，通常是 inference。正文已发生事项也不自动成为未来催化剂。
    不要把一条 observation 标成 identity 来绕过角色审核；身份 claim 必须明确说明每个角色的依据。
    可使用更具体路径覆盖子字段，如 /events/0/entities/counterparty。
-   事件绑定方式：事件整条记录（/events/i）只绑定描述该事项的 observation claim，它覆盖
-   event_type、summary、event_date、metrics；事件主体用 /events/i/entities 绑定 identity claim；
+   事件绑定方式：事件整条记录（/events/i）只绑定描述该事项发生的 observation claim，它覆盖
+   summary、event_date、metrics。event_type 不随规格或摘要自动成立，只发布该 claim 的
+   field_values.event_type，且必须与事件记录中的 event_type 相同，evidence 必须引用支持
+   这一行为已经发生的原文。规格事实、产品摘要成立，不能据此把 event_type 写成 product_launch
+   或其他已发生类型。写不出该证据时不要输出这条事件，events 可以为空，不要为了填满事件列表而生成事件。
+   程序在 field_values.event_type 缺失、不一致或该 claim 未受来源支持时隔离整条事件，
+   不删除同一来源已通过的事实、指标和摘要。是否产品页、哪个公司或型号，都不参与这个判断；
+   原文如果写明了发布、上市或同类行为，仍由该 occurrence claim 决定。
+   事件主体用 /events/i/entities 绑定 identity claim；
    impact、direction 等分析字段用 /events/i/impact 等路径单独绑定 analysis/comparability claim。
    不要把分析 claim 混进整条事件的绑定（如 "/events/0":["award","award_impact"]），否则该分析
-   既不能发布 impact，又会让整条记录因 kind 不匹配被搁置。事件类型由你根据来源判断并写入
-   event_type，程序只执行审核结果，不会按关键词改写类型。若输出 event_resolution，
+   既不能发布 impact，又会让整条记录因 kind 不匹配被搁置。事件类型由你根据来源判断，同时写入
+   事件记录和 field_values.event_type；程序不按关键词改写类型，只发布这个审核值或隔离整条事件。
+   若输出 event_resolution，
    其 current_claim_ids 必须与该事件 summary 的有效绑定一致（通常就是那一个 observation id）。
    narrative 文本会由所绑定的受支持 claim.statement 生成，勿依赖另写一套自由摘要。
    brief.one_sentence 非空时必须有绑定，且所绑定 claim 的 statement 必须完整表达这句话——
@@ -170,11 +183,12 @@ SCHEMA_HINT = {
             "claims": [
                 {"id": "disclosure_obs", "kind": "observation", "status": "source_supported",
                  "statement": "公司披露<某期间>报告，列示<指标A> <数值A> <单位>、<指标B> <数值B> <单位>。",
-                 "reason": "正文首段与数据表共同支持事项、报告期与数值；覆盖 event_type、summary、event_date、metrics。"
-                           "来源未给出披露日期时 event_date 留空。",
+                 "reason": "正文首段与数据表共同支持事项已经发生、报告期与数值；覆盖 summary、event_date、metrics。"
+                           "event_type 只来自本 claim 的 field_values。来源未给出披露日期时 event_date 留空。",
                  "evidence": [{"passage_id": "p0", "quote": "正文首段原文（不要引用 title）"},
                               {"passage_id": "t1", "quote": "数据行原文"}],
-                 "depends_on": []},
+                 "depends_on": [],
+                 "field_values": {"event_type": "earnings_change"}},
                 {"id": "company_identity", "kind": "identity", "status": "source_supported",
                  "statement": "报告主体为<公司全称>；无交易对手。", "reason": "文首/标题写明报告主体。",
                  "evidence": [{"passage_id": "p0", "quote": "主体原文"}], "depends_on": [],

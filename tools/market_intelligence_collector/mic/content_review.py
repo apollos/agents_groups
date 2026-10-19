@@ -162,6 +162,15 @@ class ContentReview:
         if ids and not held:
             if narrative:
                 return "；".join(dict.fromkeys(self.claims[cid]["statement"] for cid in accepted))
+            # event_type is the occurrence judgment. A supported spec or summary claim
+            # does not publish it; only that claim's explicit field_values.event_type does.
+            if field.split("/")[0] == "event_type":
+                valid, reviewed = self.reviewed_value(accepted, "event_type")
+                if not valid or reviewed != value:
+                    self.fields[path]["status"] = "pending_review"
+                    self.hold(path, value, "reviewed_value_missing_or_conflicting", ids)
+                    return deepcopy(default)
+                return reviewed
             if kinds != {"observation"}:
                 valid, reviewed = self.reviewed_value(accepted, field)
                 if not valid:
@@ -265,6 +274,10 @@ class ContentReview:
                 usable = all(_present(getattr(reviewed, field)) for field in required)
                 if group == "relations":
                     usable = usable and bool(reviewed.subject_entity.name and reviewed.object_entity.name)
+                if group == "events":
+                    type_status = (reviewed.content_review.get("fields") or {}).get("event_type", {}).get("status")
+                    if type_status is not None and type_status != "source_supported":
+                        usable = False
                 if usable:
                     kept.append(reviewed)
                 else:

@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import stat
+import subprocess
 import sys
 import textwrap
 import threading
@@ -25,7 +27,13 @@ from mic.browser.profile_lock import (
     write_private_file,
 )
 from mic.browser.runner import RunSupervisor, read_result_file
-from mic.browser.session import BrowserClosed, BrowserSession, BrowserUnavailable, gui_available
+from mic.browser.session import (
+    BrowserClosed,
+    BrowserSession,
+    BrowserUnavailable,
+    gui_available,
+    reset_saved_window_placement,
+)
 from tests.browser_doubles import browser_runtime_block
 
 # --- profile lock --------------------------------------------------------------------------------
@@ -212,6 +220,92 @@ def test_launch_failure_releases_lock_and_reports_code(tmp_path, monkeypatch):
         session.start()
     assert exc.value.code == "browser_missing"
     assert probe_lock(tmp_path / "mic-edge")["locked"] is False
+
+
+# --- saved window placement in the dedicated profile ---------------------------------------------
+
+def _write_prefs(profile: Path, prefs: dict) -> Path:
+    path = profile / "Default" / "Preferences"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(prefs), encoding="utf-8")
+    os.chmod(path, 0o600)
+    return path
+
+
+def _placement_prefs() -> dict:
+    return {"browser": {"window_placement": {"left": 10, "top": 10, "right": 2550, "bottom": 1430,
+                                             "maximized": False, "work_area_bottom": 1440},
+                        "has_seen_welcome_page": True},
+            "intl": {"accept_languages": "zh-CN,zh"}}
+
+
+def test_start_removes_saved_window_placement_before_launch(tmp_path, monkeypatch):
+    monkeypatch.setenv("DISPLAY", ":0")
+    prefs_path = _write_prefs(tmp_path / "mic-edge", _placement_prefs())
+
+    class RecordingBackend(FakeBackend):
+        def launch(self, **kwargs):
+            self.prefs_at_launch = json.loads(prefs_path.read_text(encoding="utf-8"))
+            return super().launch(**kwargs)
+
+    backend = RecordingBackend()
+    session = _session(tmp_path, backend)
+    session.start()
+    assert "window_placement" not in backend.prefs_at_launch["browser"]
+    assert backend.prefs_at_launch["browser"]["has_seen_welcome_page"] is True
+    assert backend.prefs_at_launch["intl"] == {"accept_languages": "zh-CN,zh"}
+    assert stat.S_IMODE(prefs_path.stat().st_mode) == 0o600
+    assert not prefs_path.with_name("Preferences.mic-tmp").exists()
+    diag = session.close()
+    assert diag["profile_maintenance"] == {"window_placement": "reset"}
+
+
+def test_window_placement_reset_leaves_other_profile_states_unchanged(tmp_path):
+    profile = tmp_path / "mic-edge"
+    ensure_private_dir(profile)
+    assert reset_saved_window_placement(profile) == "no_preferences"
+    assert not (profile / "Default" / "Preferences").exists()
+
+    prefs_path = _write_prefs(profile, {"browser": {"has_seen_welcome_page": True}})
+    before = prefs_path.read_bytes()
+    assert reset_saved_window_placement(profile) == "absent"
+    assert prefs_path.read_bytes() == before
+
+    truncated = '{"browser": {"window_placement": '
+    prefs_path.write_text(truncated, encoding="utf-8")
+    assert reset_saved_window_placement(profile) == "unreadable"
+    assert prefs_path.read_text(encoding="utf-8") == truncated
+
+
+def test_window_placement_kept_while_a_live_browser_holds_the_profile(tmp_path):
+    profile = tmp_path / "mic-edge"
+    prefs_path = _write_prefs(profile, _placement_prefs())
+    lock = profile / "SingletonLock"
+    os.symlink(f"{socket.gethostname()}-{os.getpid()}", lock)
+    assert reset_saved_window_placement(profile) == "profile_in_use"
+    assert "window_placement" in json.loads(prefs_path.read_text(encoding="utf-8"))["browser"]
+
+    lock.unlink()
+    os.symlink(f"mic-test-foreign-host-{os.getpid()}", lock)
+    assert reset_saved_window_placement(profile) == "profile_in_use"
+
+    exited = subprocess.Popen([sys.executable, "-c", "pass"])
+    exited.wait()
+    lock.unlink()
+    os.symlink(f"{socket.gethostname()}-{exited.pid}", lock)
+    assert reset_saved_window_placement(profile) == "reset"
+    assert "window_placement" not in json.loads(prefs_path.read_text(encoding="utf-8"))["browser"]
+
+
+def test_profile_busy_start_leaves_preferences_untouched(tmp_path, monkeypatch):
+    monkeypatch.setenv("DISPLAY", ":0")
+    holder = _session(tmp_path)
+    holder.start()
+    prefs_path = _write_prefs(tmp_path / "mic-edge", _placement_prefs())
+    with pytest.raises(ProfileBusy):
+        _session(tmp_path).start()
+    assert "window_placement" in json.loads(prefs_path.read_text(encoding="utf-8"))["browser"]
+    holder.close()
 
 
 def test_user_closed_window_is_detected_and_close_is_clean(tmp_path, monkeypatch):

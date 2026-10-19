@@ -26,7 +26,7 @@ from mic.profile import TargetProfile
 from mic.publication_time import extract_publication
 from mic.schemas import Passage
 from mic.search import SearchProvider
-from mic.utils import content_hash, normalize_ws, simhash
+from mic.utils import content_hash, domain_of, normalize_ws, simhash
 
 _AMOUNT_RE = re.compile(r"\d+(\.\d+)?\s*(亿元|万元|亿|万吨|吨|GWh|MWh|%|个百分点|元)")
 _DATE_RE = re.compile(r"\d{4}[-/年]\d{1,2}([-/月]\d{1,2})?|20\d{2}Q[1-4]|近\d+天|上半年|下半年")
@@ -399,6 +399,7 @@ class LinkReader:
         url = page_url
         image_texts: list[str] = []
         body_scope: dict = {}
+        first_party_blocks = False
         publication = {"status": "unknown", "published_at": None,
                        "reason": "pdf_publication_not_verified"}
         if isinstance(raw, bytes):
@@ -424,11 +425,13 @@ class LinkReader:
             document_type = "html"
             strict_scope = (self.config.output_schema or {}).get("limits", {}).get("strict_evidence_review") is True
             if strict_scope:
-                from mic.article_scope import extract_article
-                article = extract_article(raw, self, page_url=page_url)
+                from mic.article_scope import FIRST_PARTY_SELECTOR, extract_article
+                article = extract_article(raw, self, page_url=page_url,
+                                          first_party=self._on_official_domain(page_url, profile))
                 title, publish_time, body = article.title, article.publish_time, article.body
                 tables, image_urls, body_scope = article.tables, article.image_urls, article.report
                 publication = body_scope.get("publication_time", {})
+                first_party_blocks = body_scope.get("selector") == FIRST_PARTY_SELECTOR
             else:
                 title, publish_time, body, tables, image_urls = self._extract(raw)
                 publication = extract_publication(BeautifulSoup(raw, "lxml"), page_url)
@@ -461,8 +464,12 @@ class LinkReader:
                     document_type="html", failure_reason="article_body_empty", body_scope=body_scope)
         chash = content_hash(body)
         shash = simhash(body)
-        passages = self._select_passages(title, body, tables, profile,
-                                         image_texts=image_texts)
+        passages = None
+        if first_party_blocks and not image_texts:
+            passages = self._pack_short_body(title, body, tables)
+        if passages is None:
+            passages = self._select_passages(title, body, tables, profile,
+                                             image_texts=image_texts)
         return ReadResult(
             source_link_id=source_link_id, read_status="read", http_status=http_status,
             content_type=ctype, content_length=len(body), title=title,
@@ -646,6 +653,37 @@ class LinkReader:
         return extract_publication(soup).get("published_at")
 
     # --- passage selection (spec 10.2) ------------------------------------
+
+    @staticmethod
+    def _on_official_domain(url: str, profile: TargetProfile) -> bool:
+        host = domain_of(url or "")
+        return bool(host) and any(host == d or host.endswith("." + d) for d in profile.official_domains)
+
+    def _pack_short_body(self, title: str, body: str, tables: list[str]) -> list[Passage] | None:
+        """The whole body in document order, or ``None`` when it exceeds the passage budget.
+
+        Content blocks of a target-domain page (cards, spec lines) rarely repeat the product
+        name, so per-paragraph relevance scores would drop them although everything fits the
+        budget. Adjacent paragraphs share a passage so the passage count limit still holds.
+        """
+        paragraphs = [p for p in body.split("\n") if p.strip()]
+        slots = self.max_passages - 1 - len(tables)
+        if not paragraphs or slots <= 0:
+            return None
+        if sum(map(len, paragraphs)) + sum(map(len, tables)) > self.max_chars:
+            return None
+        passages: list[Passage] = []
+        if title:
+            passages.append(Passage(passage_id="title", section="标题", text=title))
+        for ti, table_text in enumerate(tables, start=1):
+            passages.append(Passage(passage_id=f"t{ti}", section=f"表格{ti}", text=table_text))
+        size = -(-len(paragraphs) // slots)
+        for start in range(0, len(paragraphs), size):
+            group = paragraphs[start:start + size]
+            section = (f"正文第{start + 1}段" if len(group) == 1
+                       else f"正文第{start + 1}–{start + len(group)}段")
+            passages.append(Passage(passage_id=f"p{start}", section=section, text="\n".join(group)))
+        return passages
 
     def _select_passages(self, title: str, body: str, tables: list[str],
                         profile: TargetProfile,

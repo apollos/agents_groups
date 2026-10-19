@@ -286,6 +286,12 @@ def test_bundle_coverage_gaps_are_persisted_for_api_readback():
     assert report["structured_outputs"]["coverage_gaps"] > 0
     gaps = api.get_coverage_gaps("company_300750")
     assert len(gaps) >= report["structured_outputs"]["coverage_gaps"]
+    # A source's gap stays attributable to that source (run-level gaps have none).
+    from_sources = [g for g in gaps if g["source_link_id"]]
+    assert from_sources
+    for gap in from_sources:
+        assert gap["search_run_id"] == report["search_run_id"]
+        assert api.explain_source_analysis(gap["source_link_id"])["source"]["url"]
 
 
 def test_merge_policy_min_overall_score_downgrades_to_link_only():

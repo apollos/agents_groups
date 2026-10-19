@@ -15,7 +15,10 @@ pages need ``goto()``, ``content()``, ``url``, ``title()``, ``inner_text()``,
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import socket
+import stat
 import time
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -45,6 +48,65 @@ class BrowserClosed(RuntimeError):
 def gui_available(env: dict[str, str] | None = None) -> bool:
     env = os.environ if env is None else env
     return bool(env.get("DISPLAY") or env.get("WAYLAND_DISPLAY"))
+
+
+def _profile_held_by_live_browser(profile_dir: Path) -> bool:
+    """True when Chromium's ``SingletonLock`` names a live process (or another host)."""
+    try:
+        target = os.readlink(profile_dir / "SingletonLock")
+    except OSError:
+        return False
+    host, _, pid = target.rpartition("-")
+    if host != socket.gethostname():
+        return True
+    if not pid.isdigit():
+        return False
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def reset_saved_window_placement(profile_dir: Path) -> str:
+    """Remove ``browser.window_placement`` from the dedicated profile's ``Default/Preferences``.
+
+    Edge restores that geometry at start-up, and a placement saved under another desktop
+    geometry can make it abort before the first page. MIC never needs it, so Edge sizes the
+    window for the current display instead. A profile held by a live browser is not touched.
+
+    Returns ``reset``, ``absent``, ``no_preferences``, ``unreadable``, ``profile_in_use`` or
+    ``write_failed``.
+    """
+    prefs_path = profile_dir / "Default" / "Preferences"
+    if _profile_held_by_live_browser(profile_dir):
+        return "profile_in_use"
+    try:
+        prefs = json.loads(prefs_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return "no_preferences"
+    except (OSError, ValueError):
+        return "unreadable"
+    browser = prefs.get("browser") if isinstance(prefs, dict) else None
+    if not isinstance(browser, dict) or "window_placement" not in browser:
+        return "absent"
+    del browser["window_placement"]
+    tmp = prefs_path.with_name(prefs_path.name + ".mic-tmp")
+    try:
+        mode = stat.S_IMODE(prefs_path.stat().st_mode)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(prefs, fh, ensure_ascii=False, separators=(",", ":"))
+        os.replace(tmp, prefs_path)
+    except OSError:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        return "write_failed"
+    return "reset"
 
 
 def cookie_domain_within_any(cookie_domain: str, allowed: list[str]) -> bool:
@@ -127,6 +189,7 @@ class BrowserSession:
     browser_processes: list[dict[str, int]] = field(default_factory=list)
     stats: dict[str, int] = field(default_factory=lambda: {
         "navigations": 0, "pages_opened": 0, "pages_closed": 0, "cookies_injected": 0})
+    profile_maintenance: dict[str, str] = field(default_factory=dict)
     _closed_by_user: bool = False
 
     # --- lifecycle -------------------------------------------------------
@@ -154,6 +217,11 @@ class BrowserSession:
         except ProfileBusy:
             self._lock = None
             raise
+        placement = reset_saved_window_placement(self.profile_dir)
+        self.profile_maintenance["window_placement"] = placement
+        if placement != "absent":
+            logger.info("browser_profile_window_placement run_id=%s profile=%s status=%s",
+                        self.run_id, self.profile_dir.name, placement)
         timeout_ms = int(float(self.runtime.get("browser_start_timeout_seconds", 20)) * 1000)
         # The browser's identity for the supervisor is a Chromium switch on its command line
         # (``--mic-attempt-id=<attempt>``): present from the moment the process exists, so a
@@ -227,7 +295,8 @@ class BrowserSession:
         than hidden when something could not be closed.
         """
         diag: dict[str, Any] = {"browser_started": self._context is not None,
-                                "closed_by_user": self._closed_by_user, **self.stats}
+                                "closed_by_user": self._closed_by_user, **self.stats,
+                                "profile_maintenance": dict(self.profile_maintenance)}
         problems: list[str] = []
         ctx, self._context = self._context, None
         if ctx is not None:

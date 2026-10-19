@@ -353,14 +353,33 @@ def test_existing_database_gets_nullable_review_columns(tmp_path):
         assert con.execute(text("SELECT content_review FROM event_card WHERE id='old'")).scalar() is None
 
 
+def test_existing_coverage_gap_table_gets_nullable_source_link(tmp_path):
+    db = Database(f"sqlite:///{tmp_path / 'old-gaps.db'}")
+    with db.engine.begin() as con:
+        con.execute(text("CREATE TABLE coverage_gap (id VARCHAR PRIMARY KEY, search_run_id VARCHAR)"))
+        con.execute(text("INSERT INTO coverage_gap(id, search_run_id) VALUES ('old', 'run_old')"))
+    db.create_all()
+    db.create_all()
+    assert "source_link_id" in {c["name"] for c in inspect(db.engine).get_columns("coverage_gap")}
+    with db.engine.connect() as con:
+        assert con.execute(text("SELECT source_link_id FROM coverage_gap WHERE id='old'")).scalar() is None
+
+
 def test_extraction_and_arbitration_share_the_same_policy():
     assert RULE_TEXT in SYSTEM_PROMPT and RULE_TEXT in ARBITRATION_SYSTEM
+
+
+def test_policy_text_keeps_numeric_qualifiers_levels_and_units_with_the_record():
+    for phrase in ("数值的限定", "适用对象或层级", "丢失原文限定", "不能判 source_supported",
+                   "没有单位字段的结构化数值", "用带 unit 的指标记录表达该数值"):
+        assert phrase in RULE_TEXT, phrase
 
 
 def test_policy_text_and_examples_cover_event_and_summary_bindings():
     from mic.content_review_policy import SCHEMA_HINT as HINT
     from mic.modeling.prompts import SCHEMA_HINT as PROMPT_HINT
-    for phrase in ("只绑定描述该事项的 observation claim", "/events/i/impact", "current_claim_ids",
+    for phrase in ("只绑定描述该事项发生的 observation claim", "field_values.event_type",
+                   "规格事实、产品摘要成立", "隔离整条事件", "/events/i/impact", "current_claim_ids",
                    "brief.one_sentence 非空时必须有绑定", "完整表达这句话", "depends_on 引用它所汇总的各个 claim",
                    "复用同一 claim id"):
         assert phrase in RULE_TEXT, phrase
@@ -426,6 +445,48 @@ def test_one_sentence_is_published_only_through_a_complete_summary_claim():
                for h in bundle.content_review["held"])
 
 
+def test_spec_summary_without_event_type_value_keeps_facts_and_drops_the_event():
+    text = "甲-X200是甲公司的通用GPU产品，采用扣卡式模组，最大功耗700W。"
+    passages = [Passage(passage_id="p0", section="正文", text=text)]
+    spec = {"id": "spec", "statement": "甲-X200采用扣卡式模组，最大功耗700W。", "kind": "observation",
+            "status": "source_supported", "reason": "原文给出形态和最大功耗，没有发布行为。",
+            "evidence": [{"passage_id": "p0", "quote": text}], "depends_on": [], "field_values": {}}
+    raw = {"decision": "save_structured", "overall_score": 78, "confidence": 0.8,
+           "brief": {"one_sentence": spec["statement"]},
+           "facts": [{"fact_statement": spec["statement"], "evidence_locator": {"passage_id": "p0"}}],
+           "metrics": [{"metric_name": "最大功耗", "metric_value": 700, "unit": "W",
+                        "evidence_locator": {"passage_id": "p0"}}],
+           "events": [{"event_type": "product_launch", "summary": spec["statement"],
+                       "evidence_locator": {"passage_id": "p0"}}],
+           "content_review": {"protocol": PROTOCOL, "claims": [spec], "bindings": {
+               "/facts/0": ["spec"], "/metrics/0": ["spec"], "/brief/one_sentence": ["spec"],
+               "/events/0": ["spec"]}}}
+    bundle = BundleValidator({}, require_content_review=True).validate(raw, passages).bundle
+    assert bundle.facts and bundle.facts[0].fact_statement == spec["statement"]
+    assert bundle.metrics and bundle.metrics[0].metric_value == 700 and bundle.metrics[0].unit == "W"
+    assert bundle.brief.one_sentence == spec["statement"]
+    assert bundle.events == []
+    assert any(h["reason"] == "core_claim_not_supported" and h["path"] == "/events/0"
+               for h in bundle.content_review["held"])
+
+
+def test_explicit_event_type_value_still_publishes_the_event():
+    text = "甲公司于2026年3月1日发布甲-X200通用GPU产品。"
+    passages = [Passage(passage_id="p0", section="正文", text=text)]
+    occurred = {"id": "launch", "statement": "甲公司于2026年3月1日发布甲-X200。", "kind": "observation",
+                "status": "source_supported", "reason": "原文写明发布行为及日期。",
+                "evidence": [{"passage_id": "p0", "quote": text}], "depends_on": [],
+                "field_values": {"event_type": "product_launch"}}
+    raw = {"decision": "save_structured", "overall_score": 78, "confidence": 0.8,
+           "events": [{"event_type": "product_launch", "summary": occurred["statement"],
+                       "event_date": "2026-03-01", "evidence_locator": {"passage_id": "p0"}}],
+           "content_review": {"protocol": PROTOCOL, "claims": [occurred], "bindings": {"/events/0": ["launch"]}}}
+    bundle = BundleValidator({}, require_content_review=True).validate(raw, passages).bundle
+    assert len(bundle.events) == 1
+    assert bundle.events[0].event_type == "product_launch"
+    assert bundle.events[0].content_review["fields"]["event_type"]["status"] == "source_supported"
+
+
 def test_event_record_binds_observation_and_impact_binds_analysis_separately():
     raw = case()
     review = raw["content_review"]
@@ -439,10 +500,9 @@ def test_event_record_binds_observation_and_impact_binds_analysis_separately():
     review["bindings"]["/events/0"] = ["award", "award_impact"]
     review["bindings"].pop("/events/0/summary")
     bundle = validate(raw)
-    event = bundle.events[0]
-    assert event.impact.direction == "unclear" and event.impact.channels == []
-    assert any(h["path"] == "/events/0/impact" for h in bundle.content_review["held"])
-    assert event.event_type == "" or event.content_review["fields"]["event_type"]["status"] != "source_supported"
+    assert bundle.events == []
+    assert any(h["path"] == "/events/0" and h["reason"] == "core_claim_not_supported"
+               for h in bundle.content_review["held"])
     # Right: record → observation, entities → identity, impact → analysis with field_values.
     raw = case()
     review = raw["content_review"]
@@ -450,6 +510,7 @@ def test_event_record_binds_observation_and_impact_binds_analysis_separately():
     raw["events"][0]["event_type"] = "major_order"
     raw["events"][0]["impact"] = {"direction": "positive", "channels": ["revenue"], "horizon": "annual", "magnitude_guess": "unknown"}
     review["bindings"].pop("/events/0/summary")
+    next(c for c in review["claims"] if c["id"] == "award")["field_values"] = {"event_type": "major_order"}
     review["bindings"]["/events/0"] = ["award"]
     review["bindings"]["/events/0/impact"] = ["award_impact"]
     bundle = validate(raw)

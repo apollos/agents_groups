@@ -411,6 +411,8 @@ class CoverageGapRow(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     search_run_id: Mapped[str | None] = mapped_column(String)
+    # Source whose analysis reported the gap; NULL for run-level gaps and legacy rows.
+    source_link_id: Mapped[str | None] = mapped_column(String)
     target_id: Mapped[str | None] = mapped_column(String)
     gap_type: Mapped[str | None] = mapped_column(String)
     description: Mapped[str | None] = mapped_column(Text)

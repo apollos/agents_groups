@@ -64,6 +64,8 @@ def gold_response(index, context):
             "statement": "只保留原文明示的获标方/项目和产品；未明确的交易对手为空。", "reason": "人工核对保存的p0/p1/p2",
             "depends_on": [cid], "evidence": deepcopy(claims[cid]["evidence"]),
             "field_values": {"entities": deepcopy(PARTIES[cid])}})
+        claims[cid]["field_values"] = {**(claims[cid].get("field_values") or {}),
+                                       "event_type": event["event_type"]}
         review["bindings"][f"/events/{i}"] = [cid]
         review["bindings"][f"/events/{i}/entities"] = [party_id]
         evidence = deepcopy(claims[cid]["evidence"])

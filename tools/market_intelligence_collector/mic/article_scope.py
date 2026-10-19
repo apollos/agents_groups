@@ -27,6 +27,13 @@ CHROME = re.compile(
 BOUNDARY_LABELS = {'相关阅读', '相关推荐', '相关新闻', '推荐阅读', '热门新闻',
                    '延伸阅读', '猜你喜欢', 'Related articles', 'Related news',
                    'Recommended reading'}
+FIRST_PARTY_SELECTOR = 'official_domain:content_blocks'
+_INLINE_TAGS = frozenset({
+    'a', 'abbr', 'b', 'br', 'cite', 'code', 'del', 'em', 'font', 'i', 'img', 'ins', 'label',
+    'mark', 'q', 's', 'small', 'span', 'strong', 'sub', 'sup', 'time', 'u', 'wbr'})
+_LINK_RATIO = 0.45
+_MIN_FIRST_PARTY_BLOCKS = 2
+_MIN_FIRST_PARTY_CHARS = 60
 
 
 @dataclass
@@ -66,7 +73,80 @@ def _is_related_boundary(text):
                for label in BOUNDARY_LABELS)
 
 
-def extract_article(html, reader, page_url=""):
+def _first_party_content(soup, title):
+    """Content blocks and tables of a target-domain page that has no article element.
+
+    Product and landing pages spread their content over sibling sections (headings, cards,
+    short descriptions). A block is an element holding only inline content. Link text,
+    mostly-link blocks and anything inside a link-dense region (menus, footer link groups)
+    are skipped; a related-reading label ends the content as it does inside an article.
+    Returns ``(blocks, tables, truncated_at_related_heading)``.
+    """
+    body = soup.body or soup
+    stats = {}
+
+    def measure(node):
+        key = id(node)
+        if key not in stats:
+            links = node.find_all('a')
+            stats[key] = (len(normalize_ws(node.get_text(' ', strip=True))),
+                          sum(len(normalize_ws(a.get_text(' ', strip=True))) for a in links),
+                          len(links))
+        return stats[key]
+
+    page_chars, page_linked, _ = measure(body)
+    page_plain = page_chars - page_linked
+
+    def mostly_links(node):
+        chars, linked, _ = measure(node)
+        return linked > _LINK_RATIO * max(chars, 1)
+
+    def in_link_region(node):
+        for parent in node.parents:
+            if parent is body:
+                return False
+            chars, linked, count = measure(parent)
+            if count >= 3 and mostly_links(parent) and chars - linked < page_plain / 2:
+                return True
+        return False
+
+    tables = []
+    for table in body.find_all('table'):
+        if mostly_links(table) or in_link_region(table):
+            continue
+        rows = []
+        for tr in table.find_all('tr')[:30]:
+            cells = [normalize_ws(c.get_text(' ', strip=True)) for c in tr.find_all(['th', 'td'])]
+            cells = [c for c in cells if c]
+            if cells:
+                rows.append(' | '.join(cells))
+        if rows and len(tables) < 5:
+            tables.append('\n'.join(rows))
+
+    blocks, seen = [], set()
+    for node in body.find_all(True):
+        if node.name in _INLINE_TAGS or node.name == 'table' or node.find_parent('table') is not None:
+            continue
+        if any(getattr(d, 'name', None) and d.name not in _INLINE_TAGS for d in node.descendants):
+            continue
+        line = normalize_ws(node.get_text(' ', strip=True))
+        if not line or node.find_parent('a') is not None or mostly_links(node) or in_link_region(node):
+            continue
+        if _is_related_boundary(line):
+            return blocks, tables, True
+        if len(line) >= 8 and line not in seen and line != title:
+            seen.add(line)
+            blocks.append(line)
+    return blocks, tables, False
+
+
+def extract_article(html, reader, page_url="", first_party=False):
+    """Scope an HTML page to its article body.
+
+    ``first_party`` marks a page on the target's own domain: when no article container is
+    found there, the page's content blocks are used instead of failing (see
+    ``_first_party_content``). Pages elsewhere still have no fallback.
+    """
     soup = BeautifulSoup(html, 'lxml')
     page_title = normalize_ws(soup.title.get_text(' ', strip=True)) if soup.title else ''
     from mic.publication_time import extract_publication
@@ -102,6 +182,20 @@ def extract_article(html, reader, page_url=""):
                 result.report['reason'] = 'ambiguous_article_containers'
                 return result
             break
+    if root is None and first_party:
+        blocks, tables, truncated = _first_party_content(soup, result.title)
+        content_chars = sum(map(len, blocks)) + sum(map(len, tables))
+        if content_chars >= _MIN_FIRST_PARTY_CHARS and (len(blocks) >= _MIN_FIRST_PARTY_BLOCKS or tables):
+            result.body = '\n'.join(blocks)
+            result.tables = tables
+            result.report.update(
+                status='scoped', selector=FIRST_PARTY_SELECTOR, body_blocks=len(blocks),
+                tables=len(tables), images=0,
+                limitation='目标官方域名页面无文章容器：按正文区块筛选，排除链接与链接密集区域；'
+                           '不证明内容完整、主体归属或语义真实')
+            if truncated:
+                result.report['truncated_at_related_heading'] = True
+            return result
     if root is None:
         result.report['reason'] = 'article_container_not_found'
         # A small visible excerpt is used only to classify challenge pages.

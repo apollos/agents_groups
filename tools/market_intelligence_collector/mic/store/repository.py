@@ -563,11 +563,12 @@ class Repository:
             # Bundle-level coverage gaps are first-class structured outputs in
             # spec §13.13/§16. Persist them with the current run id so
             # get_coverage_gaps() and the E2E DB counts reflect what the model
-            # actually found missing for this source. The table is run/target
-            # scoped by design and does not store raw content.
+            # actually found missing for this source. The source link is kept: a gap
+            # only holds for its own source and may be covered by another source of the run.
             for gap in bundle.coverage_gaps:
                 s.add(m.CoverageGapRow(
-                    id=new_id("gap"), search_run_id=search_run_id, target_id=target_id,
+                    id=new_id("gap"), search_run_id=search_run_id,
+                    source_link_id=source_link_id, target_id=target_id,
                     gap_type=gap.gap_type, description=gap.description,
                     suggested_next_queries=gap.suggested_next_queries,
                     priority=gap.priority, status="open", created_at=now(),
@@ -1022,7 +1023,7 @@ class Repository:
                 "gap_id": r.id, "gap_type": r.gap_type, "description": r.description,
                 "suggested_next_queries": r.suggested_next_queries,
                 "priority": r.priority, "status": r.status,
-                "search_run_id": r.search_run_id,
+                "search_run_id": r.search_run_id, "source_link_id": r.source_link_id,
             } for r in rows]
 
     def count_rows_for_run(self, run_id: str) -> dict[str, Any]:

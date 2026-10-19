@@ -1051,3 +1051,16 @@ target_profiles:
     regions:
     - 中国
     - 海外
+  company_metax:
+    target_id: company_metax
+    type: company
+    canonical_name: 沐曦集成电路（上海）股份有限公司
+    aliases:
+    - 沐曦
+    - 沐曦股份
+    - MetaX
+    official_domains:
+    - metax-tech.com
+    products:
+    - 曦云C600
+    - 曦云C588
