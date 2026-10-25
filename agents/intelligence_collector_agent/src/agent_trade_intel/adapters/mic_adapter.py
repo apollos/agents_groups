@@ -16,7 +16,7 @@ from .common import ToolResult
 
 logger = get_logger("adapters.mic")
 
-DEFAULT_TIMEOUT_SECONDS = 900
+DEFAULT_TIMEOUT_SECONDS = 600
 EXECUTION_MODES = ("subprocess", "in_process")
 
 # Design 15 error table. ``retryable`` means "the queue may schedule a bounded retry with a

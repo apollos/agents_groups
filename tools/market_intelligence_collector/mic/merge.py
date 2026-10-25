@@ -138,7 +138,7 @@ class MultiModelMerger:
             customer_supplier_signals=cs_signals, price_cost_margin_signals=pcm_signals,
             policy_signals=policy_signals,
             analyst_questions=self._dedup_questions(questions)[:8],
-            coverage_gaps=gaps[:8],
+            coverage_gaps=gaps,
         )
         reviews = [c.bundle.content_review for c in contributions
                    if c.bundle.content_review.get("protocol") == REVIEW_PROTOCOL]

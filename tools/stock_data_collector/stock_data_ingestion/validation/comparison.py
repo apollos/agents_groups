@@ -82,7 +82,13 @@ def build_comparison_key(record: BaseModel | dict[str, Any]) -> str:
     return "|".join(str(data.get(k)) for k in sorted(data.keys()) if k.endswith("_id") or k.endswith("code"))
 
 
-def _uses_tencent_hist(data: dict[str, Any]) -> bool:
+def _has_estimated_amount(data: dict[str, Any]) -> bool:
+    provenance = data.get("field_provenance") or {}
+    is_estimated = (provenance.get("amount") or {}).get("is_estimated")
+    if isinstance(is_estimated, bool):
+        return is_estimated
+    # Historical Tencent records predate the explicit field marker. Preserve
+    # their conservative comparison behavior without excluding current amounts.
     return "stock_zh_a_hist_tx" in str(data.get("source_api", ""))
 
 
@@ -111,11 +117,9 @@ def compare_standard_records(
         # supplement-candidate case handled by merge_policy, not comparison.
         if not _is_present(canonical_value) or not _is_present(other_value):
             continue
-        # AKShare's Tencent daily fallback does not provide trading amount or
-        # true VWAP. The adapter supplies a marked estimate only to satisfy the
-        # current standard BarRecord shape. Do not let that estimate produce
-        # false amount/vwap conflicts against richer canonical providers.
-        if field in {"amount", "vwap"} and (_uses_tencent_hist(c) or _uses_tencent_hist(o)):
+        # Estimates cannot independently validate actual amount/VWAP. Current
+        # Tencent SDK output provides actual amounts and must be compared.
+        if field in {"amount", "vwap"} and (_has_estimated_amount(c) or _has_estimated_amount(o)):
             continue
         checked.append(field)
         conflict = detect_field_conflict(

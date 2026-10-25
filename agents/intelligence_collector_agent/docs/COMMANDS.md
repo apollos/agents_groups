@@ -21,7 +21,7 @@ intel-agent --config config/intelligence_collector.yaml demand cancel --demand-i
 # Runtime tick
 intel-agent --config config/intelligence_collector.yaml runtime tick --now "2026-06-11T10:30:00+08:00"
 
-# 崩溃恢复（requeue 过期 lease、补 ack 已完成消息、dead letter 生成 FAULT_TICKET、补发孤儿 Ticket 消息）
+# 崩溃恢复（回收过期租约、补 ack 终态工作、补发孤儿消息与已记录的完成通知、同步任务状态）
 intel-agent --config config/intelligence_collector.yaml runtime recover
 
 # 查看心跳
@@ -47,7 +47,7 @@ intel-agent --config config/intelligence_collector.yaml queue retry --message-id
 intel-agent --config config/intelligence_collector.yaml queue dead-letter
 intel-agent --config config/intelligence_collector.yaml ticket list --status open
 
-# 读取结果
+# 读取结果（collection-status 会先修复任务状态投影，不触发采集）
 intel-agent --config config/intelligence_collector.yaml read collection-status --demand-id test_demand_held_sellable_10m_001
 intel-agent --config config/intelligence_collector.yaml read events --ticker 300750.SZ
 intel-agent --config config/intelligence_collector.yaml read market-features --ticker 300750.SZ --window 10m

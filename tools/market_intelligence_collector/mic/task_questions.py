@@ -149,10 +149,13 @@ def task_context(questions: Iterable[TaskQuestion]) -> dict[str, Any] | None:
     if not items:
         return None
     return {
-        "questions": [{"question": i["question"], "period": i["period"]} for i in items],
+        "questions": [{"question_id": f"q{index}", "question": item["question"],
+                       "period": item["period"]} for index, item in enumerate(items, 1)],
         "instruction": (
             "本次采集带有明确的研究问题。优先从来源中抽取能直接回答这些问题的 facts / metrics，"
             "每条都要写明报告期（period）、单位（unit）、口径（scope，如 归母/扣非、合并/母公司），"
             "同比等比较值放入 comparison。来源没有回答问题的部分不要推断或换算补齐，"
-            "在 coverage_gaps 中说明缺失；来源若只给出近似/四舍五入数值，按原文数值与单位输出。"),
+            "在 coverage_gaps 中说明缺失；来源若只给出近似/四舍五入数值，按原文数值与单位输出。"
+            "按统一内容审核规则逐一填写 content_review.task_coverage，理解每个问题的全部需求方面；"
+            "未覆盖方面引用问题原文，不将没有回答当成没有发生。"),
     }

@@ -3,8 +3,12 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Iterator
+
+
+_connections: ContextVar[dict[str, sqlite3.Connection]] = ContextVar("sqlite_connections", default={})
 
 
 class SQLiteStore:
@@ -29,11 +33,24 @@ class SQLiteStore:
 
     @contextmanager
     def session(self) -> Iterator[sqlite3.Connection]:
+        shared = _connections.get().get(str(self.sqlite_path))
+        if shared is not None:
+            yield shared
+            return
         con = self.connect()
         try:
             yield con
         finally:
             con.close()
+
+    @contextmanager
+    def reuse_connection(self, con: sqlite3.Connection) -> Iterator[None]:
+        """Reuse a transaction for nested operations on the same database in this context."""
+        token = _connections.set({**_connections.get(), str(self.sqlite_path): con})
+        try:
+            yield
+        finally:
+            _connections.reset(token)
 
     def init_schema(self) -> None:
         with self.session() as con:
@@ -46,6 +63,9 @@ def _apply_migrations(con: sqlite3.Connection) -> None:
     message_cols = {row["name"] for row in con.execute("PRAGMA table_info(messages)")}
     if "expires_at" not in message_cols:
         con.execute("ALTER TABLE messages ADD COLUMN expires_at TEXT")
+    if "lease_generation" not in message_cols:
+        con.execute("ALTER TABLE messages ADD COLUMN lease_generation INTEGER NOT NULL DEFAULT 0")
+    con.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (11)")
     con.execute("INSERT OR IGNORE INTO schema_migrations(version) VALUES (2)")
     # v3: per-event evidence fields so research quality (source authority, freshness) is queryable.
     event_cols = {row["name"] for row in con.execute("PRAGMA table_info(structured_events)")}

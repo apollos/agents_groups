@@ -13,7 +13,9 @@ usable text layer are rendered to page images and transcribed; thin HTML pages
 from __future__ import annotations
 
 import io
+import json
 import re
+from copy import deepcopy
 from dataclasses import dataclass, field
 from urllib.parse import urljoin
 
@@ -26,12 +28,14 @@ from mic.profile import TargetProfile
 from mic.publication_time import extract_publication
 from mic.schemas import Passage
 from mic.search import SearchProvider
+from mic.task_triage import index_read_authorized
 from mic.utils import content_hash, domain_of, normalize_ws, simhash
 
 _AMOUNT_RE = re.compile(r"\d+(\.\d+)?\s*(亿元|万元|亿|万吨|吨|GWh|MWh|%|个百分点|元)")
 _DATE_RE = re.compile(r"\d{4}[-/年]\d{1,2}([-/月]\d{1,2})?|20\d{2}Q[1-4]|近\d+天|上半年|下半年")
 
 _MAX_PDF_PAGES = 20
+_PDF_EDGE_CONTEXT_CHARS = 600
 _MAX_TABLES = 5
 _MAX_TABLE_ROWS = 30
 _PDF_PAGE_NUMBER_RE = re.compile(r"[-–—]?\s*\d{1,4}\s*[-–—]?")
@@ -145,12 +149,15 @@ class ReadResult:
     final_url: str | None = None
     fetch_diagnostics: dict = field(default_factory=dict)
     publication_time: dict = field(default_factory=dict)
+    # Selected directory entries and their DOM/URL provenance. Kept separate
+    # from content-free per-attempt diagnostics and forwarded to shared review.
+    material_scope: dict = field(default_factory=dict)
 
 
 # Parse failures after which a browser attempt may still rescue the page.
 _BROWSER_RESCUE_REASONS = {"anti_bot_page", "rendering_required", "article_body_empty"}
 # Parse failures that only a `allow_scope_retry` site rule may rescue.
-_SCOPE_RETRY_REASONS = {"article_scope_unresolved"}
+_SCOPE_RETRY_REASONS = {"article_scope_unresolved", "index_scope_unresolved"}
 # Fetch outcomes where a second transport is pointless.
 _NO_RETRY_FETCH = {"http_status", "unsupported_content", "rejected"}
 
@@ -167,7 +174,7 @@ class LinkReader:
         self.access_profile_id = ap.get("profile_id", "default")
         gov = (config.call_governance or {}).get("budgets", {})
         self.max_passages = gov.get("max_selected_passages_per_link", 8)
-        self.max_chars = gov.get("max_input_chars_per_model_call", 8000)
+        self.max_chars = gov.get("max_input_chars_per_model_call", 32000)
         self.task_terms: list[str] = []
         self.browser_fetch_cfg = dict(getattr(config, "browser_fetch", {}) or {})
         self.article_scope_version = "article_scope_v1"
@@ -181,7 +188,8 @@ class LinkReader:
         return self
 
     def read(self, source_link_id: str, url: str, profile: TargetProfile,
-             context=None, strategy: str | None = None) -> ReadResult:
+             context=None, strategy: str | None = None, *,
+             read_intent: str = "content", intent_review: dict | None = None) -> ReadResult:
         """Fetch + parse one link.
 
         Without ``context`` (legacy callers / tests) this is the HTTP-only path
@@ -189,15 +197,23 @@ class LinkReader:
         (``http_then_browser`` / ``browser_first`` / ``http_only``) is applied
         with budget reservations and the browser session from the context.
         """
+        if read_intent not in ("content", "index") or (
+                read_intent == "index" and not index_read_authorized(
+                    source_link_id, read_intent, intent_review)):
+            return ReadResult(source_link_id=source_link_id, read_status="failed",
+                              failure_reason="unapproved_read_intent")
         if context is None or not context.browser_runtime.get("enabled"):
             if context is not None:
                 context.budget.record("http_read_attempts")
             fetched = self._fetch_http_result(url)
-            result = self._parse_fetch(source_link_id, fetched, profile)
+            result = self._parse_fetch(source_link_id, fetched, profile, read_intent=read_intent)
             result.fetch_diagnostics = {"strategy": "http_only", "attempts": [fetched.diagnostics()],
-                                        "parser_version": self.article_scope_version}
+                                        "read_intent": read_intent,
+                                        "parser_version": ("index_scope_v1" if read_intent == "index"
+                                                           else self.article_scope_version)}
             return result
-        return self._read_with_strategy(source_link_id, url, profile, context, strategy)
+        return self._read_with_strategy(source_link_id, url, profile, context, strategy,
+                                        read_intent=read_intent)
 
     def _plan(self, url: str, strategy: str | None) -> tuple[list[str], dict]:
         from urllib.parse import urlparse
@@ -218,10 +234,11 @@ class LinkReader:
                        "fallback_reasons": list(cfg.get("fallback_reasons") or ["anti_bot_page", "rendering_required"])}
 
     def _read_with_strategy(self, source_link_id: str, url: str, profile: TargetProfile,
-                            context, strategy: str | None) -> ReadResult:
+                            context, strategy: str | None, *, read_intent: str = "content") -> ReadResult:
         from mic.budget import BudgetExceeded
 
         order, plan = self._plan(url, strategy)
+        plan["read_intent"] = read_intent
         attempts: list[dict] = []
         last: ReadResult | None = None
         budget = context.budget
@@ -241,7 +258,7 @@ class LinkReader:
             else:
                 fetched = self._fetch_browser_result(url, context)
             attempts.append(fetched.diagnostics())
-            result = self._parse_fetch(source_link_id, fetched, profile)
+            result = self._parse_fetch(source_link_id, fetched, profile, read_intent=read_intent)
             if result.read_status == "read":
                 result.fetch_diagnostics = self._diag(plan, attempts)
                 return result
@@ -249,7 +266,8 @@ class LinkReader:
             reason = result.failure_reason or fetched.blocked_reason or "fetch_failed"
             # Authenticated retry for a blocked browser page (design 10.3).
             if transport == "browser" and reason in ("anti_bot_page", "login_required", "captcha"):
-                retried = self._authenticated_retry(source_link_id, url, profile, context, fetched, attempts)
+                retried = self._authenticated_retry(source_link_id, url, profile, context, fetched, attempts,
+                                                    read_intent=read_intent)
                 if retried is not None:
                     if retried.read_status == "read":
                         retried.fetch_diagnostics = self._diag(plan, attempts)
@@ -270,7 +288,9 @@ class LinkReader:
     @staticmethod
     def _diag(plan: dict, attempts: list[dict]) -> dict:
         return {"strategy": plan["mode"], "host": plan["host"], "allow_scope_retry": plan["allow_scope_retry"],
-                "attempts": attempts, "parser_version": "article_scope_v1",
+                "attempts": attempts, "read_intent": plan.get("read_intent", "content"),
+                "parser_version": ("index_scope_v1" if plan.get("read_intent") == "index"
+                                   else "article_scope_v1"),
                 # True when no transport could even be tried (every attempt budget-skipped).
                 "budget_exhausted": bool(attempts) and all(a.get("reason") == "budget" for a in attempts)}
 
@@ -293,7 +313,8 @@ class LinkReader:
         return False
 
     def _authenticated_retry(self, source_link_id: str, url: str, profile: TargetProfile, context,
-                             blocked, attempts: list[dict]) -> ReadResult | None:
+                             blocked, attempts: list[dict], *,
+                             read_intent: str = "content") -> ReadResult | None:
         from mic.budget import BudgetExceeded
 
         store = context.session_store
@@ -323,7 +344,7 @@ class LinkReader:
         fetched.authenticated_retry = True
         attempts.append(fetched.diagnostics())
         # Same FetchResult contract, same full body checks.
-        return self._parse_fetch(source_link_id, fetched, profile)
+        return self._parse_fetch(source_link_id, fetched, profile, read_intent=read_intent)
 
     # --- fetch adapters -------------------------------------------------------
 
@@ -376,7 +397,8 @@ class LinkReader:
 
     # --- unified parse chain (HTML / PDF / anti-bot / strict scope) -------------
 
-    def _parse_fetch(self, source_link_id: str, fetched, profile: TargetProfile) -> ReadResult:
+    def _parse_fetch(self, source_link_id: str, fetched, profile: TargetProfile, *,
+                     read_intent: str = "content") -> ReadResult:
         base = {"transport": fetched.transport, "final_url": fetched.final_url}
         if fetched.blocked_reason is not None or (fetched.html is None and fetched.content is None):
             reason = "fetch_failed"
@@ -389,13 +411,21 @@ class LinkReader:
                               failure_reason=reason, **base)
         raw = fetched.content if fetched.content is not None else fetched.html
         result = self._parse_raw(source_link_id, raw, fetched.http_status, fetched.content_type, profile,
-                                 page_url=fetched.final_url or fetched.requested_url)
+                                 page_url=fetched.final_url or fetched.requested_url,
+                                 read_intent=read_intent)
         result.transport = fetched.transport
         result.final_url = fetched.final_url
         return result
 
     def _parse_raw(self, source_link_id: str, raw, http_status: int | None, ctype: str | None,
-                   profile: TargetProfile, page_url: str = "") -> ReadResult:
+                   profile: TargetProfile, page_url: str = "", *,
+                   read_intent: str = "content") -> ReadResult:
+        if read_intent == "index":
+            if not isinstance(raw, str):
+                return ReadResult(source_link_id=source_link_id, read_status="failed",
+                                  http_status=http_status, content_type=ctype,
+                                  failure_reason="index_content_type_mismatch")
+            return self._parse_index(source_link_id, raw, http_status, ctype, page_url)
         url = page_url
         image_texts: list[str] = []
         body_scope: dict = {}
@@ -469,7 +499,8 @@ class LinkReader:
             passages = self._pack_short_body(title, body, tables)
         if passages is None:
             passages = self._select_passages(title, body, tables, profile,
-                                             image_texts=image_texts)
+                                             image_texts=image_texts,
+                                             preserve_document_edges=document_type == "pdf")
         return ReadResult(
             source_link_id=source_link_id, read_status="read", http_status=http_status,
             content_type=ctype, content_length=len(body), title=title,
@@ -477,6 +508,86 @@ class LinkReader:
             document_type=document_type, passages=passages, body_scope=body_scope,
             publication_time=publication,
         )
+
+    def _parse_index(self, source_link_id: str, raw: str, http_status: int | None,
+                     ctype: str | None, page_url: str) -> ReadResult:
+        """Read only the model-requested index, without following its links.
+
+        Entries stay in DOM order and remain whole under the existing passage
+        and character limits. Their dates/links are navigation material, not an
+        inferred page publication date or an assertion of list completeness.
+        """
+        from mic.browser.index_scope import extract_index_scope
+
+        extracted = extract_index_scope(raw, base_url=page_url)
+        entries = extracted.get("entries") or []
+        body = "\n".join(entry["text"] for entry in entries)
+        scope = deepcopy(extracted.get("scope") or {})
+        scope["kind"] = "index"
+        scope.setdefault("ordering", "unknown")
+        scope.setdefault("completeness", "unknown")
+        scope["parser_version"] = "index_scope_v1"
+        publication = {"status": "unknown", "published_at": None,
+                       "reason": "index_entry_dates_are_not_source_publication"}
+        # Diagnostics contain counts and structural observations, never quoted
+        # entries. The selected material is carried separately to model review.
+        diagnostic_keys = ("kind", "parser_version", "candidate_containers", "eligible_entries",
+                           "returned_entries", "truncated", "truncation_reasons", "coverage",
+                           "visibility", "followed_links", "ordering", "completeness")
+        diagnostics = {key: deepcopy(scope[key]) for key in diagnostic_keys if key in scope}
+        diagnostics.update(status=extracted.get("status"), reason=extracted.get("reason"))
+        common = dict(source_link_id=source_link_id, http_status=http_status,
+                      content_type=ctype, content_length=len(body), title=extracted.get("title"),
+                      document_type="html", body_scope=diagnostics, publication_time=publication)
+        if self._is_anti_bot_page(extracted.get("title"), body, raw_html=raw):
+            return ReadResult(read_status="failed", failure_reason="anti_bot_page", **common)
+        if extracted.get("status") != "scoped":
+            return ReadResult(read_status="failed", failure_reason="index_scope_unresolved", **common)
+        selected: list[dict] = []
+        reasons = list(scope.get("truncation_reasons") or [])
+        for entry in entries:
+            if len(selected) >= self.max_passages:
+                reasons.append("max_selected_passages_per_link")
+                break
+            # Stop at the first entry that does not fit: selecting later rows
+            # would hide a hole in the visible directory prefix.
+            candidate = [*selected, entry]
+            # Account for the source title, URLs, DOM locators, time attributes
+            # and duplicate entry text in metadata as well as quoted passages.
+            # Keep the title intact: if title plus one complete entry does not
+            # fit, fail this material read instead of silently altering either.
+            # Reserve the longer final truncation annotation while sizing.
+            candidate_scope = {**scope, "entries": candidate, "selected_entries": len(candidate),
+                               "truncated": True, "completeness": "incomplete",
+                               "truncation_reasons": list(dict.fromkeys(
+                                   [*reasons, "max_input_chars_per_model_call"]))}
+            candidate_passages = [{"passage_id": item["entry_id"], "section": "index_entry",
+                                   "text": item["text"]} for item in candidate]
+            material_chars = len(json.dumps(candidate_scope, ensure_ascii=False))
+            material_chars += len(json.dumps(candidate_passages, ensure_ascii=False))
+            material_chars += len(json.dumps({"title": common["title"]}, ensure_ascii=False))
+            if material_chars > self.max_chars:
+                reasons.append("max_input_chars_per_model_call")
+                break
+            selected.append(deepcopy(entry))
+        scope.update(selected_entries=len(selected), entries=selected,
+                     truncated=bool(scope.get("truncated") or len(selected) < len(entries)),
+                     truncation_reasons=list(dict.fromkeys(reasons)))
+        if scope["truncated"]:
+            scope["completeness"] = "incomplete"
+        diagnostics.update(selected_entries=len(selected), truncated=scope["truncated"],
+                           truncation_reasons=scope["truncation_reasons"],
+                           completeness=scope["completeness"])
+        if not selected:
+            return ReadResult(read_status="failed", failure_reason="index_scope_unresolved", **common)
+        passages = [Passage(passage_id=entry["entry_id"], section="index_entry", text=entry["text"])
+                    for entry in selected]
+        # Entry destinations and pagination are part of directory evidence:
+        # matching titles alone must not deduplicate different document links.
+        index_content = json.dumps({"title": extracted.get("title"), "entries": entries,
+                                    "pagination": scope.get("pagination")}, ensure_ascii=False, sort_keys=True)
+        return ReadResult(read_status="read", content_hash=content_hash(index_content), simhash=simhash(body),
+                          passages=passages, material_scope=scope, **common)
 
     # --- fetch -------------------------------------------------------------
 
@@ -687,7 +798,8 @@ class LinkReader:
 
     def _select_passages(self, title: str, body: str, tables: list[str],
                         profile: TargetProfile,
-                        image_texts: list[str] | None = None) -> list[Passage]:
+                        image_texts: list[str] | None = None,
+                        preserve_document_edges: bool = False) -> list[Passage]:
         entity_terms = profile.all_entity_terms()
         keyword_terms = (
             profile.products + profile.customers + profile.suppliers
@@ -743,6 +855,8 @@ class LinkReader:
                 scored.append((score, idx, para))
 
         scored.sort(key=lambda x: (-x[0], x[1]))
+        if preserve_document_edges:
+            return self._select_pdf_context_passages(title, body, tables, relevant_tables, scored)
         # Leave room for the title passage and the reserved table slots.
         selected = scored[: max(0, self.max_passages - 1 - table_slots)]
         selected.sort(key=lambda x: x[1])  # restore document order
@@ -777,5 +891,89 @@ class LinkReader:
             text = img_text[: max(0, budget)]
             passages.append(Passage(
                 passage_id=f"img{ii}", section=f"图片转写{ii}", text=text))
+            budget -= len(text)
+        return passages
+
+    def _select_pdf_context_passages(self, title: str, body: str, tables: list[str],
+                                    relevant_tables: list[tuple[float, int, str]],
+                                    scored: list[tuple[float, int, str]]) -> list[Passage]:
+        """Reserve small contiguous edge windows after the existing table allocation.
+
+        These are edges of the *extracted range*: extraction still stops at 20 pages,
+        and an end window is not proof that the actual last page was read. Their dates
+        and surrounding prose remain ordinary model input, never publication metadata.
+        """
+        passages: list[Passage] = []
+        budget = max(0, self.max_chars)
+        for _score, ti, table_text in relevant_tables:
+            if budget <= 0 or len(passages) >= self.max_passages:
+                break
+            # Match the previous table allocation before spending anything on context.
+            text = table_text[:budget]
+            passages.append(Passage(passage_id=f"t{ti}", section=f"表格{ti}", text=text))
+            budget -= len(text)
+        if title and budget > 0 and len(passages) < self.max_passages:
+            text = title[:min(200, budget)]
+            passages.insert(0, Passage(passage_id="title", section="标题", text=text))
+            budget -= len(text)
+
+        # Keep table blocks atomic in the edge windows too. If a window boundary
+        # lands inside a table, shrink the window rather than emit a partial copy.
+        body = body.strip()
+        protected: list[tuple[int, int]] = []
+        for table in tables:
+            start = body.find(table)
+            while table and start >= 0:
+                protected.append((start, start + len(table)))
+                start = body.find(table, start + len(table))
+
+        def window(start: int, end: int) -> tuple[int, int]:
+            if start > 0 and body[start - 1:start] != "\n":
+                boundary = body.find("\n", start, end)
+                if boundary >= 0:
+                    start = boundary + 1
+            if end < len(body) and body[end:end + 1] != "\n":
+                boundary = body.rfind("\n", start, end)
+                if boundary >= 0:
+                    end = boundary
+            for table_start, table_end in protected:
+                if table_start < start < table_end:
+                    start = table_end
+                if table_start < end < table_end:
+                    end = table_start
+            return start, max(start, end)
+
+        slots = max(0, self.max_passages - len(passages))
+        edge_limit = min(_PDF_EDGE_CONTEXT_CHARS, budget // min(2, slots)) if slots else 0
+        previous_end = 0
+        for edge in ("start", "end"):
+            if edge_limit <= 0 or budget <= 0 or len(passages) >= self.max_passages:
+                break
+            if edge == "start":
+                start, end = window(0, min(len(body), edge_limit))
+            else:
+                start, end = window(max(previous_end, len(body) - min(_PDF_EDGE_CONTEXT_CHARS, budget)),
+                                    len(body))
+            text = body[start:end].strip()
+            if not text:
+                continue
+            section = "已抽取范围首段" if edge == "start" else "已抽取范围末段（不代表完整文档末页）"
+            passages.append(Passage(passage_id=f"pdf_{edge}", section=section, text=text))
+            budget -= len(text)
+            previous_end = end
+
+        selected = []
+        remaining_slots = max(0, self.max_passages - len(passages))
+        for score, idx, para in scored:
+            if len(selected) >= remaining_slots:
+                break
+            if any(para in p.text for p in passages if p.passage_id != "title"):
+                continue
+            selected.append((score, idx, para))
+        for _score, idx, para in sorted(selected, key=lambda row: row[1]):
+            if budget <= 0 or len(passages) >= self.max_passages:
+                break
+            text = para[:budget]
+            passages.append(Passage(passage_id=f"p{idx}", section=f"正文第{idx + 1}段", text=text))
             budget -= len(text)
         return passages

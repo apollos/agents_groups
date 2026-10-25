@@ -10,6 +10,7 @@ from .config import CollectorConfig
 from .db import SQLiteStore, loads_json
 from .logging_setup import get_logger
 from .research_dashboard import ResearchDashboardService
+from .task_lifecycle import sync_task_statuses
 from .time_utils import local_day_utc_range, market_phase, parse_dt
 
 logger = get_logger("dashboard")
@@ -20,10 +21,11 @@ HEARTBEAT_STALE_SECONDS = 900
 
 
 class DashboardService:
-    """Read-only aggregation over the three SQLite stores for the live dashboard.
+    """Aggregation over the three SQLite stores for the live dashboard.
 
     Every call opens fresh connections, so each poll reflects the current database state while
-    the agent / runtime keep writing from other processes (WAL mode allows concurrent readers).
+    the agent / runtime keep writing from other processes. Task status projections are repaired
+    from the authoritative bus before reading; this never dispatches collection work.
     """
 
     def __init__(
@@ -44,6 +46,7 @@ class DashboardService:
         return parse_dt(None, self.config.runtime.timezone).date().isoformat()
 
     def overview(self) -> dict[str, Any]:
+        sync_task_statuses(self.data_store, self.bus_store)
         now_utc = datetime.now(timezone.utc)
         now_iso = now_utc.isoformat(timespec="seconds")
         local_now = parse_dt(now_iso, self.config.runtime.timezone)

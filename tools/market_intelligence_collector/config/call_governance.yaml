@@ -9,7 +9,7 @@ call_governance:
     # Dedicated sub-budget for model-based SERP batch triage so it never starves
     # extraction calls. Pipeline defaults this to ~1/6 of the run budget.
     max_batch_triage_calls: 5
-    max_input_chars_per_model_call: 8000
+    max_input_chars_per_model_call: 32000
     max_selected_passages_per_link: 8
 
   # Vision rescue extraction (PDF page images / embedded page images) via a
@@ -60,6 +60,11 @@ call_governance:
 
   extraction:
     prefer_bundle_extraction: true
+    # One source re-extraction per run, only after JSON parsing fails and normal
+    # fallback yields no valid output. Uses existing run/source/gateway/time
+    # budgets; no local JSON repair, extra allowance, or triage/split retry.
+    json_recovery:
+      enabled: true
     split_tasks_only_when:
       - selected_text_too_long
       - model_output_schema_failed

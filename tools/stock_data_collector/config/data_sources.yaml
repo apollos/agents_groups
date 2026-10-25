@@ -157,6 +157,9 @@ providers:
     supports_hk_daily: false
     auth_env: {}
     retry_attempts: 3
+    # The default security_master integration runs BaoStock in a child process.
+    # This bounds the entire provider step (login + queries + pagination); allow
+    # up to 2 extra seconds for forced process cleanup. Other requests unchanged.
     timeout_seconds: 30
     rate_limit:
       requests_per_minute: 60

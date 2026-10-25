@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from mic.config import MICConfig
+from mic.modeling.json_response import parse_json_object
 
 try:  # openai is optional at runtime when only the mock is used.
     from openai import OpenAI
@@ -32,7 +33,7 @@ class ModelCallResult:
     provider: str
     provider_type: str
     model_name: str
-    status: str  # success | request_failed | json_invalid
+    status: str  # success | request_failed | json_invalid | output_truncated
     raw_text: str = ""
     parsed: dict | None = None
     input_chars: int = 0
@@ -52,12 +53,22 @@ class ModelCallResult:
     finish_reason: str | None = None
     served_model: str | None = None
     provider_request_id: str | None = None
+    acceptance_trace: dict[str, Any] | None = None
+    json_parse_error: dict[str, Any] | None = None
+    json_recovery: dict[str, Any] | None = None
 
     def request_diagnostics(self) -> dict[str, Any]:
-        return {"requested_max_tokens": self.requested_max_tokens,
+        diagnostics = {"requested_max_tokens": self.requested_max_tokens,
                 "finish_reason": self.finish_reason, "served_model": self.served_model,
                 "is_mock": self.is_mock,
                 "output_truncated": self.finish_reason == "length"}
+        if self.acceptance_trace is not None:
+            diagnostics["acceptance_trace"] = dict(self.acceptance_trace)
+        if self.json_parse_error is not None:
+            diagnostics["json_parse_error"] = dict(self.json_parse_error)
+        if self.json_recovery is not None:
+            diagnostics["json_recovery"] = dict(self.json_recovery)
+        return diagnostics
 
 
 @dataclass
@@ -164,6 +175,12 @@ class ModelAdapter:
                                   "max_tokens": max_tokens, "temperature": 0.2}
         if want_json:
             kwargs["response_format"] = {"type": "json_object"}
+        remaining = self.remaining_seconds()
+        if remaining is not None:
+            # A recovery must not get a fresh SDK timeout after spending most
+            # of the run. The reservation below rechecks deadline/cancellation;
+            # the worker supervisor remains the overall wall-clock fence.
+            kwargs["timeout"] = max(0.001, remaining)
         refused = self._reserve_gateway_request()
         if refused is not None:
             return ModelCallResult(
@@ -224,9 +241,17 @@ class ModelAdapter:
                                     "fragment not parsed as a complete bundle")
             return result
         if want_json:
-            result.parsed = self._parse_json(text)
-            if result.parsed is None:
+            result.parsed, result.json_parse_error = parse_json_object(text)
+            if result.json_parse_error is not None:
                 result.status = "json_invalid"
+                result.error_type = "json_invalid"
+                detail = result.json_parse_error
+                result.error_message = "Invalid JSON object response: " + detail["kind"]
+                if "offset" in detail:
+                    result.error_message += (
+                        f" at line {detail['line']}, column {detail['column']}"
+                        f" (character offset {detail['offset']})"
+                    )
         return result
 
     def _estimate_cost(self, in_tok: int, out_tok: int) -> float:
@@ -236,19 +261,7 @@ class ModelAdapter:
 
     @staticmethod
     def _parse_json(text: str) -> dict | None:
-        text = text.strip()
-        if text.startswith("```"):
-            text = re.sub(r"^```(json)?", "", text).rstrip("`").strip()
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            m = re.search(r"\{.*\}", text, re.DOTALL)
-            if m:
-                try:
-                    return json.loads(m.group(0))
-                except json.JSONDecodeError:
-                    return None
-            return None
+        return parse_json_object(text)[0]
 
     # --- deterministic mock ------------------------------------------------
 

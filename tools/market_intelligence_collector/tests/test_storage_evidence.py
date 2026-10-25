@@ -8,8 +8,9 @@ import unittest
 from sqlalchemy import Column, MetaData, Table, inspect, select
 
 from mic.config import MICConfig
+from mic.evidence_review import EvidenceReview
 from mic.merge import ModelContribution, MultiModelMerger
-from mic.schemas import BundleExtraction
+from mic.schemas import BundleExtraction, Passage
 from mic.store import models as m
 from mic.store.database import Database
 from mic.store.repository import Repository
@@ -67,6 +68,61 @@ class StorageEvidenceTests(unittest.TestCase):
         actual = self.repo.get_metric_observations("target")[0]
         self.assertEqual(actual["evidence_locator"], self.bundle.metrics[0].evidence_locator.model_dump())
         self.assertEqual(actual["scope"], self.bundle.metrics[0].scope)
+
+    def generated_metric_diagnostics(self):
+        metric = self.bundle.metrics[0]
+        metric.scope = {}
+        metric.period = "2026-09-15"
+        passages = [Passage(passage_id="p2", section="body", text="120MWh + 240MWh")]
+        EvidenceReview(self.bundle, passages, []).check_fields()
+        self.assertEqual(metric.scope["value_evidence"]["operands"], [120, 240])
+        self.assertEqual(metric.scope["value_evidence"]["value"], 360)
+        self.assertEqual(metric.scope["value_evidence"]["passage_id"], "p2")
+        self.assertEqual(metric.scope["period_review"]["status"], "pending_review")
+        self.assertIsNone(metric.period)
+        return copy.deepcopy(metric.scope)
+
+    def test_system_generated_diagnostics_survive_read_and_cache_without_new_approval(self):
+        diagnostics = self.generated_metric_diagnostics()
+        original = copy.deepcopy(self.bundle.model_dump())
+        self.save()
+        result = self.repo.clone_latest_analysis("source", "cached-source", "cache-target")
+        self.assertNotIn("cache_reuse_rejected", result)
+        self.assertEqual(result["metrics"], 1)
+        for target in ("target", "cache-target"):
+            metric, = self.repo.get_metric_observations(target)
+            self.assertEqual(metric["scope"], diagnostics)
+            self.assertEqual(metric["metric_value"], 360)
+            self.assertIsNone(metric["period"])
+            self.assertFalse(metric.get("content_review"))
+            self.assertFalse(metric["scope"].get("usable_as_price_benchmark"))
+        self.assertEqual(self.bundle.model_dump(), original)
+        with self.db.session() as session:
+            stored = session.scalars(select(m.MetricObservationRow).where(
+                m.MetricObservationRow.source_link_id == "source")).one()
+            self.assertEqual(stored.scope, diagnostics)
+            self.assertFalse(stored.content_review)
+
+    def test_system_diagnostics_do_not_authorize_unreviewed_business_scope(self):
+        diagnostics = self.generated_metric_diagnostics()
+        self.bundle.metrics[0].scope["region"] = "Synthetic Region"
+        original = copy.deepcopy(self.bundle.metrics[0].scope)
+        self.save()
+        actual, = self.repo.get_metric_observations("target")
+        self.assertEqual(actual["metric_value"], 360)
+        self.assertIsNone(actual["scope"].get("region"))
+        for key, value in diagnostics.items():
+            self.assertEqual(actual["scope"][key], value)
+        self.assertFalse(actual["scope"].get("usable_as_price_benchmark"))
+        result = self.repo.clone_latest_analysis("source", "cached-source", "cache-target")
+        self.assertEqual(result["cache_reuse_rejected"], "scope_review_requires_refresh")
+        self.assertEqual(result["metrics"], 0)
+        self.assertEqual(self.repo.get_metric_observations("cache-target"), [])
+        self.assertEqual(self.bundle.metrics[0].scope, original)
+        with self.db.session() as session:
+            stored = session.scalars(select(m.MetricObservationRow)).one()
+            self.assertEqual(stored.scope, original)
+            self.assertFalse(stored.content_review)
 
     def test_fact_locator_and_price(self):
         self.save()

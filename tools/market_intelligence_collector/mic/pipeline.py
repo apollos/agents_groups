@@ -10,16 +10,22 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any
 
 from mic.browser.contracts import SearchBatch, SearchRequest
 from mic.budget import DEFAULT_LIMITS, BudgetExceeded, RunBudget, merge_limits
 from mic.config import MICConfig, load_config
+from mic.content_review import (enforce_source_publication_dates, finalize_task_coverage,
+                                resolve_source_publication)
+from mic.content_review_policy import PROTOCOL as CONTENT_REVIEW_PROTOCOL
 from mic.event_resolution import PROTOCOL, build_context, finalize
+from mic.index_navigation import discover_index_links
 from mic.logging_utils import get_logger, setup_logging
 from mic.merge import ModelContribution, MultiModelMerger
 from mic.modeling.adapter import ModelRegistry
+from mic.modeling.acceptance_trace import AcceptanceTrace
 from mic.modeling.call_planner import CallBudget, LinkModelResult, ModelCallPlanner
 from mic.modeling.vision import VisionExtractor
 from mic.planner import QueryPlanner
@@ -27,10 +33,12 @@ from mic.profile import TargetProfile
 from mic.publication_time import PublicationWindow
 from mic.reader import LinkReader
 from mic.run_context import RunContext, TargetIdentity, config_fingerprint
-from mic.schemas import CoverageGap, SearchHit, TriageResult
+from mic.schemas import BundleExtraction, CoverageGap, SearchHit, TriageResult
 from mic.search import build_search_provider
 from mic.store import Repository, get_database
 from mic.task_questions import parse_task_questions, question_terms, task_context
+from mic.task_triage import (PROTOCOL as TASK_TRIAGE_PROTOCOL, INDEX_BASIS,
+                             index_read_authorized)
 from mic.triage import SearchHitTriage
 from mic.utils import canonicalize_url, domain_of, new_id
 from mic.validate import BundleValidator
@@ -78,6 +86,10 @@ class RunStats:
     time_window_filter: dict[str, Any] = field(default_factory=dict)
     output_decisions: list[dict[str, Any]] = field(default_factory=list)
     content_reviews: list[dict[str, Any]] = field(default_factory=list)
+    task_coverage: list[dict[str, Any]] = field(default_factory=list)
+    source_publications: list[dict[str, Any]] = field(default_factory=list)
+    task_triage_reviews: list[dict[str, Any]] = field(default_factory=list)
+    index_navigation: list[dict[str, Any]] = field(default_factory=list)
     # One entry per model request actually attempted (A4 traceability).
     model_requests: list[dict[str, Any]] = field(default_factory=list)
     stop_reason: str | None = None
@@ -86,6 +98,9 @@ class RunStats:
     unique_source_links: int = 0
     deduplicated_links: int = 0
     links_read: int = 0
+    # Physical successful reads, partitioned by exact body hash, not coverage.
+    unique_materials_read: int = 0
+    duplicate_body_reads: int = 0
     links_model_analyzed: int = 0
     model_calls: int = 0
     parallel_ensemble_calls: int = 0
@@ -200,7 +215,10 @@ class Pipeline:
             max_batch_triage_calls=gov.get("max_batch_triage_calls", max(1, run_calls // 6)),
         )
         call_planner = ModelCallPlanner(self.config, self.registry, call_budget)
+        call_planner.acceptance_trace = AcceptanceTrace.from_environment(run_id, run_calls)
         call_planner.task_context = task_context(questions)
+        if call_planner.task_context is not None:
+            call_planner.task_context["reference_time"] = window.reference.isoformat()
 
         logger.info("collect_start run_id=%s target_id=%s attempt_id=%s browser=%s",
                     run_id, target_id, context.attempt_id, self._browser_run)
@@ -216,6 +234,15 @@ class Pipeline:
                 stats.stop_reason = exc.reason
                 logger.warning("collect_stopped run_id=%s reason=%s", run_id, exc.reason)
             finally:
+                # Cancellation can leave _execute before its normal tail. Keep
+                # completed model attempts visible in the stopped run as well.
+                stats.model_calls = call_budget.calls_used
+                already = context.budget.used.get("model_calls", 0)
+                if stats.model_calls > already:
+                    context.budget.record("model_calls", stats.model_calls - already)
+                stats.vision_calls = self.vision.calls_used
+                stats.estimated_model_cost = self._cost_from_runs(stats) + round(
+                    self.vision.estimated_cost, 6)
                 cleanup = self._close_context(context)
                 self.registry.set_budget(None)
             # Final verdict after wrap-up (browser closed) and before the report is published:
@@ -261,8 +288,9 @@ class Pipeline:
                       "max_browser_read_attempts": 0, "max_authenticated_retries_per_run": 0,
                       "max_model_calls": run_calls,
                       "max_gateway_requests": int(budget_profile.get("max_gateway_requests", big)),
-                      "max_run_seconds": int(budget_profile.get("max_run_seconds",
-                                                                DEFAULT_LIMITS["max_run_seconds"] * 24)),
+                      # Preserve the legacy API deadline independently of the
+                      # browser research defaults; changing those must not widen it.
+                      "max_run_seconds": int(budget_profile.get("max_run_seconds", 7200)),
                       "max_page_seconds": DEFAULT_LIMITS["max_page_seconds"]}
         deadline = run_options.get("deadline_seconds")
         run_seconds = float(limits["max_run_seconds"])
@@ -337,6 +365,49 @@ class Pipeline:
         return read_queue
 
     @staticmethod
+    def _order_read_queue(read_queue: list[tuple[str, SearchHit, TriageResult]]
+                          ) -> list[tuple[str, SearchHit, TriageResult]]:
+        """Use accepted task priorities across batches, ranks only within a batch.
+
+        Unreviewed/legacy candidates keep their baseline positions. A batch-local
+        rank cannot become a global rank; related-only sources still stay last.
+        """
+        ordered = Pipeline._reserve_first_hand_slot(sorted(
+            read_queue, key=lambda item: (
+                RELATED_ONLY_SIGNAL in item[2].matched_signals, -item[2].read_priority)))
+        groups: dict[tuple[tuple[str, ...], bool], list[int]] = {}
+        for index, (link_id, _hit, tri) in enumerate(ordered):
+            members = tuple(tri.task_review.get("compared_source_ids", []))
+            if (tri.task_review.get("status") == "accepted"
+                    and tri.task_read_rank is not None and link_id in members):
+                key = (members, RELATED_ONLY_SIGNAL in tri.matched_signals)
+                groups.setdefault(key, []).append(index)
+        for positions in groups.values():
+            ranked = sorted((ordered[index] for index in positions),
+                            key=lambda item: item[2].task_read_rank)
+            for index, item in zip(positions, ranked):
+                ordered[index] = item
+        priority_positions: dict[bool, list[int]] = {}
+        for index, (link_id, _hit, tri) in enumerate(ordered):
+            priority, review = tri.task_read_priority, tri.task_review
+            if (review.get("protocol") == TASK_TRIAGE_PROTOCOL
+                    and review.get("status") == "accepted"
+                    and review.get("source_link_id") == link_id
+                    and link_id in review.get("compared_source_ids", [])
+                    and type(priority) in (int, float) and 0 <= priority <= 100
+                    and review.get("task_read_priority") == priority):
+                priority_positions.setdefault(
+                    RELATED_ONLY_SIGNAL in tri.matched_signals, []).append(index)
+        for positions in priority_positions.values():
+            # Stable sorting preserves the preceding batch-local order for ties;
+            # equal ranks from different batches are never compared.
+            ranked = sorted((ordered[index] for index in positions),
+                            key=lambda item: -item[2].task_read_priority)
+            for index, item in zip(positions, ranked):
+                ordered[index] = item
+        return ordered
+
+    @staticmethod
     def _read_attempt_possible(context: RunContext) -> bool:
         """True while at least one fetch transport still has attempt budget.
 
@@ -353,8 +424,8 @@ class Pipeline:
         The page relevance rules already classified the hit (``discovery.relevance``); here they
         only *demote* ``read`` candidates, never promote them, and never change the triage score:
 
-        * ``site_ok`` / ``content_form_ok`` false -> ``link_record_only`` (wrong site or a
-          non-article form such as a search listing / tag page);
+        * ``site_ok`` false -> ``link_record_only``; ``content_form_ok`` false also
+          demotes unless accepted model task triage explicitly requested an index;
         * ``target_match`` false and the legacy triage saw no entity at all -> ``link_record_only``;
         * ``target_match`` false but a related company (customer / supplier / competitor from the
           target profile) is named -> stays readable, tagged ``related_entity_only`` so it is
@@ -368,7 +439,8 @@ class Pipeline:
         demote_reason: str | None = None
         if rel.get("site_ok") is False:
             demote_reason = "site_rule"
-        elif rel.get("content_form_ok") is False:
+        elif (rel.get("content_form_ok") is False and not index_read_authorized(
+                tri.source_link_id, tri.read_intent, tri.task_review)):
             demote_reason = "content_form"
         elif rel.get("target_match") is False and "target_entity_match" not in tri.matched_signals:
             demote_reason = "no_target_or_related_entity"
@@ -421,6 +493,7 @@ class Pipeline:
                  call_planner: ModelCallPlanner, stats: RunStats, context: RunContext,
                  window: PublicationWindow) -> None:
         self.vision.reset_run()
+        coverage_questions = (task_context(parse_task_questions(task_profile)) or {}).get("questions", [])
         if getattr(self, "validator", None) is not None:
             # Statement review needs to tell the target's own award from another party's.
             self.validator.target_names = [profile.canonical_name, *profile.aliases]
@@ -553,6 +626,15 @@ class Pipeline:
                         canonical, profile.target_id, exclude_run_id=run_id, reviewed_only=True)
                 if prior is not None:
                     stats.cached_or_reused_results += 1
+                    cached_publication = enforce_source_publication_dates((prior.metadata_ or {}).get("publication_time") or {
+                        "status": "unknown", "published_at": None,
+                        "reason": "cached_publication_evidence_missing"})
+                    cached_publication.update(cache_source_link_id=prior.id,
+                                              time_window=window.assess(cached_publication))
+                    self._check_alive(context)
+                    self.repo.update_link_publication(link_id, cached_publication)
+                    stats.source_publications.append({"source_link_id": link_id,
+                                                       "publication_time": cached_publication})
                     self.repo.update_link_triage(
                         link_id, tri.read_priority, "link_record_only",
                         reason=f"cross-run canonical URL reuse: {prior.id}",
@@ -560,15 +642,21 @@ class Pipeline:
                         need_model=False)
                     self.repo.update_link_read(
                         link_id, "link_record_only", prior.content_hash, prior.simhash)
+                    self._check_alive(context)
                     self._tally_cloned(stats, self.repo.clone_latest_analysis(
-                        prior.id, link_id, profile.target_id, reviewed_only=True), hit)
+                        prior.id, link_id, profile.target_id, reviewed_only=True,
+                        publication=cached_publication), hit,
+                        publication=cached_publication)
+                    self._record_unassessed_coverage(
+                        run_id, profile.target_id, stats, context, coverage_questions, link_id)
                     continue
                 triaged.append((link_id, hit, tri))
 
         # Model-based SERP batch triage for borderline-score hits (spec 11.1 /
         # 15.2 D): one model call decides many hits, instead of one call per hit.
         self._check_alive(context)
-        self._batch_triage(call_planner, triaged, stats)
+        self._batch_triage(call_planner, triaged, stats, context=context,
+                           max_links_to_read=max_links_to_read)
         self._check_alive(context)
         # Final gate *after* every triage step (review: batch triage re-promoted a hit the
         # rule gate had demoted - ``/tag/catl``, content_form_ok=false - and it was read).
@@ -579,7 +667,7 @@ class Pipeline:
             self.repo.update_link_triage(
                 link_id, tri.read_priority, tri.triage_decision,
                 reason=tri.reason, signals=tri.matched_signals,
-                need_model=tri.need_model)
+                need_model=tri.need_model, task_review=tri.task_review or None)
 
         # Build read queue from final decisions, sort by priority, cap by budget.
         # Browser route: candidates that match the target identity come first; candidates kept
@@ -587,20 +675,36 @@ class Pipeline:
         # not) fill remaining slots and never displace a target-identity candidate.
         read_queue = [(lid, h, t) for lid, h, t in triaged
                       if t.triage_decision == "read"]
-        read_queue.sort(key=lambda x: (RELATED_ONLY_SIGNAL in x[2].matched_signals, -x[2].read_priority))
-        read_queue = self._reserve_first_hand_slot(read_queue)
-        # ``max_links_to_read`` counts links whose article was actually obtained. A candidate
-        # that yields no article (anti-bot page, listing, unresolved scope, duplicate body)
-        # does not use up a slot: the queue moves on to the next candidate while the
-        # transport attempt budgets (http / browser) still allow a fetch. Previously two
-        # unlucky top picks ended the read stage with nothing to analyse.
+        read_queue = self._order_read_queue(read_queue)
+        # Discovery is not an attempt. A directory can provide new context for
+        # an existing, unread search candidate without creating a duplicate row.
+        sources_by_url = {canonicalize_url(h.url): (lid, h, t) for lid, h, t in triaged}
+        attempted_urls: set[str] = set()
+        # A successful Reader return consumes a physical read slot, including a
+        # duplicate body or final URL. Only failed reads leave a slot available;
+        # every actual HTTP/browser attempt is still charged to its own budget.
         seen_final_canonical: set[str] = set()
+        seen_read_hashes: set[str] = set()
         read_ok = 0
 
         for qi, (link_id, hit, tri) in enumerate(read_queue):
             if read_ok >= max_links_to_read:
                 break
             self._check_alive(context)
+            navigation = tri.task_review.get("navigation")
+            if navigation and canonicalize_url(hit.url) in attempted_urls:
+                # Another queued read may have just redirected to this child.
+                # Recheck at execution time, not only when links are discovered.
+                for audit in reversed(stats.index_navigation):
+                    if audit["parent_source_link_id"] == navigation["parent_source_link_id"]:
+                        audit["skipped"].append({"source_link_id": link_id,
+                                                 "reason": "already_attempted_before_read"})
+                        break
+                self.repo.update_link_triage(
+                    link_id, tri.read_priority, "link_record_only",
+                    reason="navigation URL already attempted in this run",
+                    signals=tri.matched_signals, need_model=False, task_review=tri.task_review)
+                continue
             if not self._read_attempt_possible(context):
                 stats.read_queue_stopped_by_budget = len(read_queue) - qi
                 logger.info("read_queue_stopped run_id=%s reason=attempt_budget_exhausted "
@@ -609,7 +713,12 @@ class Pipeline:
                 break
             stats.links_selected_for_read += 1
             context.budget.record("links_selected_for_read")
-            read = self.reader.read(link_id, hit.url, profile, context=context)
+            attempted_urls.add(canonicalize_url(hit.url))
+            read_options = ({"read_intent": tri.read_intent, "intent_review": tri.task_review}
+                            if tri.read_intent == "index" else {})
+            read = self.reader.read(link_id, hit.url, profile, context=context, **read_options)
+            if tri.task_review.get("navigation"):
+                read.fetch_diagnostics["navigation"] = deepcopy(tri.task_review["navigation"])
             stop_after_this = bool(read.fetch_diagnostics.get("budget_exhausted"))
             if stop_after_this:
                 # Every transport this URL may use is out of attempts; later candidates share
@@ -622,9 +731,24 @@ class Pipeline:
             # Right after the read returns, before any branch may ``continue`` (review: a
             # cancel / deadline during the *last* read, which then failed, was never seen).
             self._check_alive(context)
+            if read.read_status == "read":
+                read_ok += 1
+                stats.links_read += 1
+                duplicate_body = bool(read.content_hash and read.content_hash in seen_read_hashes)
+                if duplicate_body:
+                    stats.duplicate_body_reads += 1
+                else:
+                    stats.unique_materials_read += 1
+                if read.content_hash:
+                    seen_read_hashes.add(read.content_hash)
+                read.fetch_diagnostics["physical_read"] = {
+                    "successful": True, "counts_toward_read_limit": True,
+                    "duplicate_body": duplicate_body,
+                }
             # Pending redirects / browser navigations may land on another URL:
             # update canonical identity and never analyse the same body twice.
             final_canonical = canonicalize_url(read.final_url or hit.url)
+            attempted_urls.add(final_canonical)
             if read.final_url and read.final_url != hit.url:
                 self.repo.update_link_final_url(link_id, read.final_url, final_canonical,
                                                 domain_of(read.final_url))
@@ -632,8 +756,6 @@ class Pipeline:
             if read.read_status == "read" and final_canonical in seen_final_canonical:
                 read.read_status, read.failure_reason = "failed", "duplicate_final_url"
             seen_final_canonical.add(final_canonical)
-            if read.read_status == "read":
-                read_ok += 1
             freshness = window.assess(read.publication_time)
             read.fetch_diagnostics["time_window"] = freshness
             self.repo.save_read_attempt({
@@ -656,32 +778,26 @@ class Pipeline:
                 if stop_after_this:
                     break
                 continue
-            stats.links_read += 1
-            if window.days is not None:
-                if not freshness["allowed"]:
-                    reason = freshness["status"]
-                    counts = stats.time_window_filter["filtered_by_reason"]
-                    counts[reason] = counts.get(reason, 0) + 1
-                    stats.time_window_filter["filtered_links"].append({
-                        "source_link_id": link_id, "url": hit.url, "title": read.title,
-                        **freshness,
-                    })
-                    self.repo.update_link_triage(
-                        link_id, tri.read_priority, "link_record_only",
-                        reason=f"时间窗过滤: {reason}",
-                        signals=[*tri.matched_signals, f"time_window:{reason}"], need_model=False)
-                    self.repo.update_link_read(
-                        link_id, "link_record_only", read.content_hash, read.simhash,
-                        document_type=read.document_type, access_profile_id=self.reader.access_profile_id)
-                    continue
-                stats.time_window_filter["passed"] += 1
-
-            if read.publication_time.get("status") == "known":
-                hit.publish_time_guess = read.publish_time
+            extracted_publication = deepcopy(read.publication_time)
+            pending_publication = (window.days is not None
+                                   and extracted_publication.get("status", "unknown") == "unknown")
+            if window.days is not None and not freshness["allowed"] and not pending_publication:
+                # A directory's own publication date does not date the linked
+                # documents. It may route a read while its business content
+                # remains excluded by the ordinary publication window.
+                self._extend_index_queue(
+                    read, hit, tri, read_queue, qi, sources_by_url, attempted_urls,
+                    seen_canonical, call_planner, stats, context,
+                    max_links_to_read=max_links_to_read)
+                self._finish_publication(read, hit, tri, stats, context, window,
+                                         extracted_publication, extracted_publication)
+                continue
 
             # Content-hash reuse (spec 15.1 A): same body within this run.
-            if read.content_hash in seen_content_hash:
+            if not pending_publication and read.content_hash in seen_content_hash:
                 stats.cached_or_reused_results += 1
+                self._finish_publication(read, hit, tri, stats, context, window,
+                                         extracted_publication, extracted_publication)
                 self.repo.update_link_read(
                     link_id, "link_record_only", read.content_hash, read.simhash,
                     document_type=read.document_type,
@@ -690,11 +806,13 @@ class Pipeline:
             # Cross-run content-hash reuse: identical body already analyzed for
             # this target in a prior run -> clone instead of calling models.
             prior_body = None
-            if reuse_enabled:
+            if reuse_enabled and not pending_publication:
                 prior_body = self.repo.find_analyzed_link_by_content_hash(
                     read.content_hash, profile.target_id, exclude_link_id=link_id, reviewed_only=True)
             if prior_body is not None:
                 stats.cached_or_reused_results += 1
+                self._finish_publication(read, hit, tri, stats, context, window,
+                                         extracted_publication, extracted_publication)
                 self.repo.update_link_triage(
                     link_id, tri.read_priority, "link_record_only",
                     reason=f"cross-run content_hash reuse: {prior_body.id}",
@@ -704,8 +822,13 @@ class Pipeline:
                     link_id, "link_record_only", read.content_hash, read.simhash,
                     document_type=read.document_type,
                     access_profile_id=self.reader.access_profile_id)
+                self._check_alive(context)
                 self._tally_cloned(stats, self.repo.clone_latest_analysis(
-                    prior_body.id, link_id, profile.target_id, reviewed_only=True), hit)
+                    prior_body.id, link_id, profile.target_id, reviewed_only=True,
+                    publication=read.publication_time), hit,
+                    publication=read.publication_time)
+                self._record_unassessed_coverage(
+                    run_id, profile.target_id, stats, context, coverage_questions, link_id)
                 continue
             seen_content_hash.add(read.content_hash)
             self.repo.update_link_read(
@@ -723,42 +846,68 @@ class Pipeline:
             source_metadata = {
                 "source_link_id": link_id, "title": read.title or hit.title,
                 "url": hit.url, "source_name": hit.domain, "source_type": source_type,
-                "publish_time": read.publish_time,
+                "publish_time": (read.publish_time if extracted_publication.get("status") == "known" else None),
+                "publication_time": extracted_publication,
+                "collection_time_window": window.describe(),
                 "query_family": hit.query_family,
             }
+            if read.material_scope:
+                source_metadata["material_scope"] = deepcopy(read.material_scope)
+            if tri.task_review.get("navigation"):
+                source_metadata["navigation"] = deepcopy(tri.task_review["navigation"])
             resolution_context = build_context(task_profile.get("event_resolution_history"), stats.top_events)
             source_metadata["event_resolution_context"] = resolution_context
             materiality = tri.read_priority
             self._check_alive(context)  # before any model request for this link
             link_result = call_planner.run_for_link(
                 profile, read, source_metadata, tri, source_type, materiality)
-            # After the request(s) returned and before anything is persisted: a cancel that
-            # arrived meanwhile, or a response that landed past the deadline, ends the run
-            # as cancelled / timed_out instead of "completed" (review R3).
+            # Keep completed extraction requests/raw outputs in the audit before
+            # checking a stop or starting navigation. A cancellation during a
+            # recovery must not erase the paid original/recovery calls. These
+            # ModelRun/ModelOutput rows are audit, not admitted business records.
+            contributions = []
+            if link_result.call_mode != "no_model" and link_result.outputs:
+                stats.links_model_analyzed += 1
+                if link_result.was_split:
+                    stats.split_extractions += 1
+                if link_result.call_mode == "parallel_ensemble":
+                    stats.parallel_ensemble_calls += 1
+                elif link_result.call_mode == "cascade":
+                    stats.cascade_calls += 1
+                elif link_result.call_mode in ("priority_fallback", "single_model") and \
+                        len(link_result.outputs) > 1:
+                    stats.fallback_calls += len(link_result.outputs) - 1
+                contributions = self._persist_model_outputs(link_id, link_result, read, stats)
+
+            # A late response may be audited, but cannot authorize navigation,
+            # publication dates or business writes after cancellation/deadline.
             self._check_alive(context)
 
+            # Following a visible link is a separate model navigation decision,
+            # not publication of this directory's contents. Do this before the
+            # no-output/date/admission branches; child evidence remains independent.
+            self._extend_index_queue(
+                read, hit, tri, read_queue, qi, sources_by_url, attempted_urls,
+                seen_canonical, call_planner, stats, context,
+                max_links_to_read=max_links_to_read)
+
             if link_result.call_mode == "no_model" or not link_result.outputs:
+                self._finish_publication(read, hit, tri, stats, context, window,
+                                         extracted_publication, extracted_publication)
+                self._record_unassessed_coverage(
+                    run_id, profile.target_id, stats, context, coverage_questions, link_id)
                 continue
 
-            stats.links_model_analyzed += 1
-            if link_result.was_split:
-                stats.split_extractions += 1
-            if link_result.call_mode == "parallel_ensemble":
-                stats.parallel_ensemble_calls += 1
-            elif link_result.call_mode == "cascade":
-                stats.cascade_calls += 1
-            elif link_result.call_mode in ("priority_fallback", "single_model") and \
-                    len(link_result.outputs) > 1:
-                # Every output beyond the first is an actual fallback call.
-                stats.fallback_calls += len(link_result.outputs) - 1
-
-            contributions = self._persist_model_outputs(
-                link_id, link_result, read, stats)
             if not contributions:
+                self._finish_publication(read, hit, tri, stats, context, window,
+                                         extracted_publication, extracted_publication)
+                self._record_unassessed_coverage(
+                    run_id, profile.target_id, stats, context, coverage_questions, link_id)
                 continue
 
             merge_result = self.merger.merge(
                 link_id, profile.target_id, contributions, self._model_feedback)
+            publication_bundles = [contribution.bundle for contribution in contributions]
 
             # Arbitration on field/relation-direction conflict (spec 11.3 / 14).
             if ModelCallPlanner.arbitration_triggered(merge_result.field_conflicts,
@@ -773,6 +922,7 @@ class Pipeline:
                         link_id, "arbitration", "arbitration", outputs=arb_outputs)
                     arb_contribs = self._persist_model_outputs(
                         link_id, arb_result, read, stats)
+                    publication_bundles.extend(c.bundle for c in arb_contribs)
                     # Arbiter output carries extra weight as the tie-breaker.
                     for c in arb_contribs:
                         c.configured_weight *= 1.5
@@ -781,8 +931,22 @@ class Pipeline:
                         self._model_feedback)
 
             bundle = merge_result.bundle
+            publication = resolve_source_publication(publication_bundles, extracted_publication)
+            bundle.content_review["source_publication"] = publication
+            if not self._finish_publication(read, hit, tri, stats, context, window,
+                                            publication, extracted_publication):
+                # Model output remains in the audit; no structured records from a
+                # source without a valid in-window publication date are admitted.
+                stats.content_reviews.append({"source_link_id": link_id,
+                                              "publication_filtered": True, **bundle.content_review})
+                self._record_unassessed_coverage(
+                    run_id, profile.target_id, stats, context, coverage_questions, link_id)
+                continue
+            source_metadata["publish_time"] = read.publish_time
+            source_metadata["publication_time"] = publication
             finalize(bundle, resolution_context, read.passages, run_id=run_id, link_id=link_id,
                      multiple_extractions=len(merge_result.model_outputs) > 1)
+            coverage = finalize_task_coverage(bundle, coverage_questions)
             stats.output_decisions.append({"source_link_id": link_id,
                                            **merge_result.decision_diagnostics})
 
@@ -796,25 +960,75 @@ class Pipeline:
                         "field_conflicts": merge_result.field_conflicts,
                     }, search_run_id=run_id)
                 self._tally(stats, bundle, source_metadata=source_metadata)
+            elif coverage:
+                # A skipped source cannot count as an answer. Keep its coverage
+                # uncertainty without admitting its discarded structured output.
+                self._check_alive(context)
+                self.repo.save_coverage_gaps(
+                    run_id, profile.target_id,
+                    [CoverageGap.model_validate(gap) for gap in
+                     bundle.content_review.get("task_coverage_generated_gaps", [])],
+                    source_link_id=link_id)
+                stats.content_reviews.append({"source_link_id": link_id, **bundle.content_review})
+            stats.task_coverage.extend(coverage)
 
         # End of work: a run that is cancelled or past its deadline here is not "completed".
         self._check_alive(context)
+        if not stats.task_coverage:
+            # No usable extraction (including zero reads) is explicit uncertainty,
+            # not silent coverage. This needs neither another query nor a model call.
+            self._record_unassessed_coverage(
+                run_id, profile.target_id, stats, context, coverage_questions)
         # Persist run-level coverage gaps that weren't tied to a saved link.
         run_gaps = self._run_gaps(stats)
         self.repo.save_coverage_gaps(run_id, profile.target_id, run_gaps)
         stats.structured["coverage_gaps"] += len(run_gaps)
-        stats.model_calls = call_planner.budget.calls_used
-        # Model calls are gated by the call planner's own budget (max_model_calls_per_run) and
-        # every real HTTP send by ``gateway_requests_sent``; mirror the count into the run budget
-        # so ``collection_diagnostics.budget_used`` is one consistent view (observed live: the
-        # counter stayed 0 while two gateway requests had been sent).
-        already = context.budget.used.get("model_calls", 0)
-        if stats.model_calls > already:
-            context.budget.record("model_calls", stats.model_calls - already)
-        stats.vision_calls = self.vision.calls_used
-        stats.estimated_model_cost = self._cost_from_runs(stats) + \
-            round(self.vision.estimated_cost, 6)
         self._fold_budget(stats, context)
+
+    def _finish_publication(self, read, hit, tri, stats: RunStats, context: RunContext,
+                            window: PublicationWindow, publication: dict,
+                            extracted_publication: dict) -> bool:
+        """Persist the final evidence separately from the unchanged read attempt."""
+        publication = enforce_source_publication_dates(publication or {
+            "status": "unknown", "published_at": None, "reason": "publication_evidence_missing"})
+        freshness = window.assess(publication)
+        publication["extracted_publication"] = deepcopy(extracted_publication)
+        publication["time_window"] = freshness
+        self._check_alive(context)
+        self.repo.update_link_publication(read.source_link_id, publication)
+        stats.source_publications.append({"source_link_id": read.source_link_id,
+                                           "publication_time": publication})
+        read.publication_time = publication
+        read.publish_time = publication.get("published_at") if publication.get("status") == "known" else None
+        if freshness["allowed"]:
+            if window.days is not None:
+                stats.time_window_filter["passed"] += 1
+            return True
+        reason = freshness["status"]
+        counts = stats.time_window_filter["filtered_by_reason"]
+        counts[reason] = counts.get(reason, 0) + 1
+        stats.time_window_filter["filtered_links"].append({
+            "source_link_id": read.source_link_id, "url": hit.url, "title": read.title, **freshness})
+        self.repo.update_link_triage(
+            read.source_link_id, tri.read_priority, "link_record_only",
+            reason=f"时间窗过滤: {reason}",
+            signals=[*tri.matched_signals, f"time_window:{reason}"], need_model=False)
+        self.repo.update_link_read(read.source_link_id, "link_record_only", read.content_hash, read.simhash,
+                                   document_type=read.document_type,
+                                   access_profile_id=self.reader.access_profile_id)
+        return False
+
+    def _record_unassessed_coverage(self, run_id: str, target_id: str,
+                                    stats: RunStats, context: RunContext,
+                                    questions: list[dict], source_link_id: str | None = None) -> None:
+        if not questions:
+            return
+        bundle = BundleExtraction(source_link_id=source_link_id)
+        coverage = finalize_task_coverage(bundle, questions)
+        self._check_alive(context)
+        self.repo.save_coverage_gaps(run_id, target_id, bundle.coverage_gaps,
+                                     source_link_id=source_link_id)
+        stats.task_coverage.extend(coverage)
 
     @staticmethod
     def _fold_budget(stats: RunStats, context: RunContext) -> None:
@@ -850,8 +1064,111 @@ class Pipeline:
 
     # --- batch triage ------------------------------------------------------
 
+    def _extend_index_queue(self, read, parent_hit: SearchHit, parent_tri: TriageResult,
+                             queue, position, sources_by_url, attempted_urls, seen_canonical,
+                             call_planner, stats, context, *, max_links_to_read) -> None:
+        if not (index_read_authorized(read.source_link_id, parent_tri.read_intent,
+                                      parent_tri.task_review)
+                and read.material_scope.get("kind") == "index"
+                and (call_planner.task_context or {}).get("questions")):
+            return
+        audit = {"protocol": "index_navigation_v1", "parent_source_link_id": read.source_link_id,
+                 "parent_url": parent_hit.url, "status": "not_assessed",
+                 "candidate_source_link_ids": [], "enqueued_source_link_ids": [], "skipped": []}
+        stats.index_navigation.append(audit)
+        if (stats.links_read >= max_links_to_read or not self._read_attempt_possible(context)
+                or not call_planner.budget.can_call_batch_triage()
+                or not context.budget.can("gateway_requests_sent", 2)):
+            audit["reason"] = "insufficient_navigation_and_child_budget"
+            return
+        self._check_alive(context)
+        candidates, discovery = discover_index_links(
+            read, parent_hit, max_candidates=call_planner.batch_size(),
+            max_chars=call_planner.max_input_chars)
+        audit["discovery"] = discovery
+        pending = []
+        for child in candidates:
+            canonical = canonicalize_url(child.url)
+            if canonical in attempted_urls:
+                audit["skipped"].append({"url": child.url, "reason": "already_attempted"})
+                continue
+            existing = sources_by_url.get(canonical)
+            if canonical in seen_canonical and existing is None:
+                audit["skipped"].append({"url": child.url, "reason": "already_materialized_or_reused"})
+                continue
+            navigation = deepcopy(child.discovery["index_navigation"])
+            if existing is None:
+                # max_search_hits caps SERP results, not links in an already
+                # read page. Discovery is bounded by batch/input limits here;
+                # reads and model calls still share the original run budgets.
+                lid = self.repo.save_source_link(context.run_id, None, child, canonical,
+                                                  self.triage.source_type(child.domain))
+                stats.unique_source_links += 1
+                seen_canonical.add(canonical)
+                original = TriageResult(source_link_id=lid, triage_decision="link_record_only",
+                                        reason="index candidate awaiting model navigation")
+                self.repo.update_link_triage(
+                    lid, original.read_priority, original.triage_decision,
+                    reason=original.reason, signals=[], need_model=False)
+                sources_by_url[canonical] = (lid, child, original)
+            else:
+                lid, old_hit, original = existing
+                # Keep SERP gates and source identity; append this new navigation
+                # evidence without inheriting the parent's entity or credibility.
+                child = old_hit.model_copy(deep=True)
+                child.discovery = {**(child.discovery or {}), "index_navigation": navigation}
+            neutral = original.model_copy(deep=True, update={
+                "triage_decision": "link_record_only", "need_model": False,
+                "read_intent": "content", "task_review": {},
+                "task_read_rank": None, "task_read_priority": None})
+            pending.append((lid, child, neutral))
+        audit["candidate_source_link_ids"] = [lid for lid, _, _ in pending]
+        scope = read.material_scope
+        nav_context = {
+            "protocol": "index_navigation_v1", "parent_source_link_id": read.source_link_id,
+            "parent_url": parent_hit.url,
+            "material_scope_summary": {key: deepcopy(scope[key]) for key in (
+                "selected_entries", "truncated", "truncation_reasons", "ordering",
+                "completeness", "coverage") if key in scope},
+            "read_state": {"attempted_urls": sorted(attempted_urls),
+                           "successful_reads": stats.links_read},
+        }
+        self._batch_triage(call_planner, pending, stats, context=context,
+                           max_links_to_read=max_links_to_read, navigation_context=nav_context,
+                           navigation_audit=audit)
+        self._check_alive(context)
+        replacements = {}
+        submitted = set(audit.get("submitted_source_link_ids", []))
+        excluded = {row["source_link_id"] for row in audit["skipped"]
+                    if row["reason"] == "model_input_char_limit"}
+        for lid, child, tri in pending:
+            if tri.task_review.get("basis") != INDEX_BASIS or tri.task_review.get("status") != "accepted":
+                # A failed new ranking cannot revoke a pre-existing authorization
+                # or promote an unreviewed candidate via legacy rule scores.
+                if lid not in excluded:
+                    audit["skipped"].append({"source_link_id": lid,
+                                             "reason": ("navigation_not_accepted" if lid in submitted
+                                                        else "navigation_not_submitted")})
+                continue
+            tri.task_review["navigation"] = deepcopy(child.discovery["index_navigation"])
+            tri.reason = tri.task_review["reason"]
+            tri = self._apply_read_gate(child, tri, stats)
+            self.repo.update_link_triage(lid, tri.read_priority, tri.triage_decision,
+                                        reason=tri.reason, signals=tri.matched_signals,
+                                        need_model=tri.need_model, task_review=tri.task_review)
+            sources_by_url[canonicalize_url(child.url)] = (lid, child, tri)
+            replacements[lid] = (lid, child, tri)
+        tail = [row for row in queue[position + 1:] if row[0] not in replacements]
+        approved = [row for row in replacements.values() if row[2].triage_decision == "read"]
+        queue[position + 1:] = self._order_read_queue([*tail, *approved])
+        audit.update(status="assessed" if replacements else "not_assessed",
+                     enqueued_source_link_ids=[lid for lid, _, _ in approved])
+
     def _batch_triage(self, call_planner: ModelCallPlanner,
-                      triaged: list[tuple[str, Any, Any]], stats: RunStats) -> None:
+                      triaged: list[tuple[str, Any, Any]], stats: RunStats, *,
+                      context: RunContext, max_links_to_read: int,
+                      navigation_context: dict | None = None,
+                      navigation_audit: dict | None = None) -> None:
         if not (self.config.call_governance or {}).get("batching", {}).get(
                 "serp_batch_triage", False):
             return
@@ -859,15 +1176,72 @@ class Pipeline:
                 .get("serp_batch_triage", {}).get("trigger", {}))
         band = trig.get("use_model_when_rule_score_between", [45, 75])
         lo, hi = band[0], band[1]
-        candidates = [(lid, h, t) for lid, h, t in triaged if lo <= t.read_priority <= hi]
+        task_aware = bool((call_planner.task_context or {}).get("questions"))
+        # Research needs are compared across candidates, including high rule
+        # scores. A boilerplate new filing can matter more than an old rich snippet.
+        candidates = [(lid, h, t) for lid, h, t in triaged
+                      if task_aware or lo <= t.read_priority <= hi]
         size = call_planner.batch_size()
         for i in range(0, len(candidates), size):
+            self._check_alive(context)
             batch = candidates[i:i + size]
-            items = [{"id": lid, "title": h.title, "snippet": h.snippet}
-                     for lid, h, _ in batch]
+            limits, used = context.budget.limits, context.budget.used
+            pairs = {
+                "max_http_read_attempts": "http_read_attempts",
+                "max_browser_read_attempts": "browser_read_attempts",
+                "max_gateway_requests": "gateway_requests_sent",
+            }
+            effective_limits = {key: limits[key] for key in pairs if limits[key] < 10 ** 9}
+            remaining = {pairs[key]: max(0, limits[key] - used.get(pairs[key], 0))
+                         for key in effective_limits}
+            effective_limits.update(
+                max_links_to_read=max_links_to_read,
+                max_model_calls=call_planner.budget.max_model_calls_per_run,
+                max_run_seconds=limits["max_run_seconds"])
+            remaining.update(
+                successful_reads=max(0, max_links_to_read - stats.links_read),
+                model_calls=max(0, call_planner.budget.max_model_calls_per_run
+                                - call_planner.budget.calls_used),
+                run_seconds=round(context.budget.remaining_seconds(), 3))
+            call_planner.triage_budget_context = {
+                "scope": "entire_task_run", "snapshot": "before_this_triage_call",
+                "successful_read_basis": "physical_fetch_including_duplicates",
+                "limits": effective_limits, "remaining": remaining,
+                "batch_index": i // size + 1,
+                "candidate_count": len(candidates), "batch_size_limit": size,
+            }
+            items = [{"id": lid, "title": h.title, "snippet": h.snippet,
+                      "url": h.url, "domain": h.domain, "rule_priority": t.read_priority,
+                      "source_type": self.triage.source_type(h.domain),
+                      "read_gate": (h.discovery or {}).get("relevance", {})}
+                     for lid, h, t in batch]
+            if navigation_context is not None:
+                from mic.modeling.prompts import build_batch_triage_messages
+                for item, (_, hit, _) in zip(items, batch):
+                    item["navigation"] = deepcopy(hit.discovery["index_navigation"])
+                # Whole candidates only: input size is checked against the actual
+                # user payload, including task, parent provenance and run budget.
+                while items and len(build_batch_triage_messages(
+                        items, call_planner.task_context, call_planner.triage_budget_context,
+                        navigation_context)[-1]["content"]) > call_planner.max_input_chars:
+                    if navigation_audit is not None:
+                        navigation_audit["skipped"].append({
+                            "source_link_id": items[-1]["id"], "reason": "model_input_char_limit"})
+                    items.pop()
+                    batch = batch[:-1]
+                if not items:
+                    break
             before = len(call_planner.triage_results)
-            decisions = call_planner.batch_triage(items)
-            for res in call_planner.triage_results[before:]:
+            before_reviews = len(call_planner.task_triage_reviews)
+            decisions = (call_planner.batch_triage(items, navigation_context=navigation_context)
+                         if navigation_context is not None else call_planner.batch_triage(items))
+            stats.task_triage_reviews.extend(call_planner.task_triage_reviews[before_reviews:])
+            attempted = call_planner.triage_results[before:]
+            if navigation_audit is not None and attempted:
+                navigation_audit.setdefault("submitted_source_link_ids", []).extend(
+                    item["id"] for item in items)
+            stats.batch_triage_calls += len(attempted)
+            for res in attempted:
                 stats.model_requests.append({
                     "model_run_id": None, "source_link_id": None,
                     "task_name": "serp_batch_triage", "model_config_id": res.model_config_id,
@@ -875,17 +1249,25 @@ class Pipeline:
                     "error_type": res.error_type, "output_tokens": res.output_tokens,
                     **(res.request_diagnostics() if hasattr(res, "request_diagnostics") else {}),
                 })
+            # Retain the actual request audit even if cancellation or the
+            # deadline arrived during the call; never apply the late decision.
+            self._check_alive(context)
             if not decisions:
                 break  # budget spent or disabled
-            stats.batch_triage_calls += 1
             for lid, _h, t in batch:
                 d = decisions.get(lid)
                 if not d:
                     continue
                 stats.batch_triaged_hits += 1
                 t.triage_decision = d.get("triage_decision", t.triage_decision)
-                t.read_priority = max(t.read_priority, float(d.get("read_priority",
-                                                                   t.read_priority)))
+                if task_aware:
+                    t.task_read_rank = d["task_read_rank"]
+                    t.task_read_priority = d["task_read_priority"]
+                    t.read_intent = d["read_intent"]
+                    t.task_review = {**d["task_review"],
+                                     "compared_source_ids": [lid for lid, _, _ in batch]}
+                else:
+                    t.read_priority = max(t.read_priority, float(d.get("read_priority", t.read_priority)))
                 t.need_model = bool(d.get("need_model", t.need_model))
 
     # --- helpers -----------------------------------------------------------
@@ -896,8 +1278,16 @@ class Pipeline:
         policy = self.config.model_policies.get("tasks", {}).get(link_result.task_name, {})
         weight_by_model = {m["model_id"]: m.get("weight", 1.0)
                            for m in policy.get("models", [])}
+        model_run_ids: list[str] = []
         for res in link_result.outputs:
             stats.estimated_model_cost += res.estimated_cost
+            diagnostics = (res.request_diagnostics()
+                           if hasattr(res, "request_diagnostics") else {})
+            recovery = diagnostics.get("json_recovery")
+            if isinstance(recovery, dict):
+                parent_index = recovery.get("parent_output_index")
+                if type(parent_index) is int and 0 <= parent_index < len(model_run_ids):
+                    recovery["parent_model_run_id"] = model_run_ids[parent_index]
             model_run_id = self.repo.save_model_run({
                 "source_link_id": link_id, "task_name": link_result.task_name,
                 "call_mode": link_result.call_mode, "provider_type": res.provider_type,
@@ -911,15 +1301,15 @@ class Pipeline:
                 "latency_ms": res.latency_ms, "status": res.status,
                 "error_type": res.error_type, "error_message": res.error_message,
                 "provider_request_id": getattr(res, "provider_request_id", None),
-                "request_diagnostics": (res.request_diagnostics()
-                                        if hasattr(res, "request_diagnostics") else None),
+                "request_diagnostics": diagnostics,
             })
+            model_run_ids.append(model_run_id)
             stats.model_requests.append({
                 "model_run_id": model_run_id, "source_link_id": link_id,
                 "task_name": link_result.task_name, "model_config_id": res.model_config_id,
                 "requested_model": res.model_name, "status": res.status,
                 "error_type": res.error_type, "output_tokens": res.output_tokens,
-                **(res.request_diagnostics() if hasattr(res, "request_diagnostics") else {}),
+                **diagnostics,
             })
             if res.status != "success" or res.parsed is None:
                 self.repo.save_model_output({
@@ -983,6 +1373,7 @@ class Pipeline:
                     "domain": source_metadata.get("source_name"),
                     "source_type": source_metadata.get("source_type"),
                     "published_at": source_metadata.get("publish_time"),
+                    "publication_time": source_metadata.get("publication_time"),
                     "title": source_metadata.get("title"),
                     "query_family": source_metadata.get("query_family"),
                 }
@@ -998,7 +1389,8 @@ class Pipeline:
             if key in stats.structured:
                 stats.structured[key] += n
 
-    def _tally_cloned(self, stats: RunStats, cloned: dict, hit) -> None:
+    def _tally_cloned(self, stats: RunStats, cloned: dict, hit,
+                      publication: dict | None = None) -> None:
         """Fold a cache-reuse clone result into run stats, including event details.
 
         Without this, all_events only contains fresh-analysis events and the
@@ -1011,7 +1403,10 @@ class Pipeline:
             "url": hit.url,
             "domain": hit.domain,
             "source_type": self.triage.source_type(hit.domain),
-            "published_at": hit.publish_time_guess,
+            "published_at": ((publication or {}).get("published_at")
+                             if (publication or {}).get("status") == "known" else None),
+            "publication_time": publication,
+            "publish_time_guess": hit.publish_time_guess,
             "title": hit.title,
             "query_family": hit.query_family,
         }
@@ -1129,6 +1524,10 @@ class Pipeline:
         profile = self.config.get_target_profile(target_id) or {}
         diagnostics = (self._collection_diagnostics(run_id, stats, context, cleanup or {})
                        if context is not None else None)
+        # Read back the actual rows of this run. Counts alone cannot convey which
+        # part of the user's request is still missing to the downstream Agent.
+        coverage_gaps = self.repo.get_coverage_gaps(target_id, search_run_id=run_id)
+        stats.structured["coverage_gaps"] = len(coverage_gaps)
         return {
             "search_run_id": run_id,
             "event_resolution_protocol": PROTOCOL,
@@ -1160,6 +1559,8 @@ class Pipeline:
                 "search_hits": stats.search_hits,
                 "unique_source_links": stats.unique_source_links,
                 "links_read": stats.links_read,
+                "unique_materials_read": stats.unique_materials_read,
+                "duplicate_body_reads": stats.duplicate_body_reads,
                 "time_window_passed": stats.time_window_filter.get("passed", 0),
                 "time_window_filtered": sum(stats.time_window_filter.get("filtered_by_reason", {}).values()),
                 "links_model_analyzed": stats.links_model_analyzed,
@@ -1175,12 +1576,17 @@ class Pipeline:
                 "estimated_model_cost": round(stats.estimated_model_cost, 4),
             },
             "structured_outputs": stats.structured,
+            "coverage_gaps": coverage_gaps,
+            "task_coverage": stats.task_coverage,
+            "source_publications": stats.source_publications,
+            "task_triage_reviews": stats.task_triage_reviews,
+            "index_navigation": stats.index_navigation,
             "top_events": stats.top_events[:5],
             # Full event list for downstream coverage accounting: minor events (small buyback,
             # inventory drift, tender shortlist) matter for variable coverage even when they
             # don't make the top-5 display cut.
             "all_events": stats.top_events,
-            "content_review_protocol": "content_review_v1",
+            "content_review_protocol": CONTENT_REVIEW_PROTOCOL,
             "content_reviews": stats.content_reviews,
             "top_relations": stats.top_relations[:5],
             "call_efficiency": {

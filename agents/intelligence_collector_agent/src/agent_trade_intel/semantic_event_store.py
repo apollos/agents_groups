@@ -42,8 +42,10 @@ def save(persister, *, task, report):
     target_id = target.get("target_id") or task.get("target_id")
     events = list(report.get("all_events") or report.get("top_events") or [])
     with persister.store.session() as con:
-        # The event row, evidence ledger, references and counters change atomically.
-        con.execute("BEGIN IMMEDIATE")
+        # Preserve an outer lease/cancellation guard when the bus and data share a database.
+        # Standalone saves retain the immediate write lock before reading evidence rows.
+        nested = con.in_transaction
+        con.execute("SAVEPOINT mic_semantic_events" if nested else "BEGIN IMMEDIATE")
         try:
             waiting = events
             while waiting:
@@ -69,15 +71,24 @@ def save(persister, *, task, report):
                     break
                 waiting = deferred
             for gap in report.get("coverage_gaps", []) or []:
+                gap_id = gap.get("gap_id") or "gap_" + stable_hash(
+                    [task.get("task_id"), target_id, report.get("search_run_id"), gap], 24)
                 con.execute("INSERT OR IGNORE INTO coverage_gaps(gap_id,target_id,ticker,priority,status,"
                             "description,suggested_next_queries_json,source_run_id) VALUES(?,?,?,?,'open',?,?,?)",
-                            (gap.get("gap_id") or new_id("gap"), target_id, target.get("ticker"),
+                            (gap_id, target_id, target.get("ticker"),
                              gap.get("priority", "normal"), gap.get("description") or str(gap)[:300],
                              dumps_json(gap.get("suggested_next_queries", [])), report.get("search_run_id")))
                 counts["coverage_gaps"] += 1
-            con.commit()
+            if nested:
+                con.execute("RELEASE SAVEPOINT mic_semantic_events")
+            else:
+                con.commit()
         except Exception:
-            con.rollback()
+            if nested:
+                con.execute("ROLLBACK TO SAVEPOINT mic_semantic_events")
+                con.execute("RELEASE SAVEPOINT mic_semantic_events")
+            else:
+                con.rollback()
             raise
     return counts
 

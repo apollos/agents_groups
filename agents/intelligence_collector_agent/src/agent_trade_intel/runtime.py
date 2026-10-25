@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .config import CollectorConfig
-from .db import SQLiteStore
+from .db import SQLiteStore, loads_json
 from .demand import DemandCompiler, DemandRegistry
 from .errors import QueueEmpty
 from .ids import make_idempotency_key, new_id
@@ -11,6 +11,7 @@ from .logging_setup import get_logger
 from .queue import SQLiteMessageQueue
 from .tickets import TicketRepository, priority_to_int
 from .time_utils import market_phase, parse_dt
+from .task_lifecycle import best_effort_sync
 
 logger = get_logger("runtime")
 
@@ -57,6 +58,7 @@ class RuntimeController:
         demand_events = self._consume_demand_messages()
         created = self.compiler.compile_active_demands(self.registry, as_of=now, market_phase=resolved_phase)
         capability = self._maybe_schedule_capability_check(now=now, phase=resolved_phase, force=run_capability_validation)
+        best_effort_sync(self.data_store, self.bus_store)
         return {
             "status": "ok",
             "market_phase": resolved_phase,
@@ -88,35 +90,61 @@ class RuntimeController:
         return consumed
 
     def _cancel_open_work(self, demand_id: str) -> dict[str, list[str]]:
-        """Cancel open request/task Tickets of a suspended/cancelled Demand and ack their messages."""
-        needle = f'"demand_id":"{demand_id}"'
-        with self.bus_store.session() as con:
-            rows = con.execute(
-                """
-                SELECT ticket_id FROM tickets
-                WHERE ticket_type IN ('COLLECTION_REQUEST_TICKET', 'COLLECTION_TASK_TICKET')
-                  AND status IN ('open', 'in_progress')
-                  AND payload_json LIKE ?
-                """,
-                (f"%{needle}%",),
-            ).fetchall()
-        cancelled_tickets = [str(r["ticket_id"]) for r in rows]
-        for ticket_id in cancelled_tickets:
-            self.tickets.update_status(ticket_id, "cancelled", f"demand {demand_id} suspended/cancelled")
+        """Cancel the demand's work and revoke its deliveries in one bus transaction.
+
+        The bus write lock also serializes with worker finalization and child publication.
+        A completed task remains complete, and unrelated notifications are never consumed.
+        """
+        cancelled_tickets: list[str] = []
         acked_messages: list[str] = []
-        if cancelled_tickets:
-            with self.bus_store.session() as con:
-                msg_rows = con.execute("SELECT message_id, payload_json FROM messages WHERE status='open'").fetchall()
-            for row in msg_rows:
-                if any(ticket_id in str(row["payload_json"]) for ticket_id in cancelled_tickets):
-                    self.queue.ack(str(row["message_id"]))
-                    acked_messages.append(str(row["message_id"]))
+        with self.bus_store.session() as con:
+            con.execute("BEGIN IMMEDIATE")
+            try:
+                rows = con.execute(
+                    """SELECT ticket_id, status, payload_json FROM tickets
+                       WHERE ticket_type IN ('COLLECTION_REQUEST_TICKET', 'COLLECTION_TASK_TICKET')
+                         AND status IN ('open', 'in_progress')"""
+                ).fetchall()
+                for row in rows:
+                    payload = loads_json(row["payload_json"], {})
+                    if not isinstance(payload, dict) or payload.get("demand_id") != demand_id:
+                        continue
+                    ticket_id = str(row["ticket_id"])
+                    con.execute(
+                        "UPDATE tickets SET status='cancelled', updated_at=datetime('now') WHERE ticket_id=?",
+                        (ticket_id,),
+                    )
+                    self.tickets._append_event(
+                        con, ticket_id, "status_changed", row["status"], "cancelled",
+                        f"demand {demand_id} suspended/cancelled", {},
+                    )
+                    cancelled_tickets.append(ticket_id)
+                cancelled_ids = set(cancelled_tickets)
+                if cancelled_ids:
+                    msg_rows = con.execute(
+                        """SELECT message_id, payload_json FROM messages
+                           WHERE status IN ('open','in_progress') AND topic='intelligence.collection'"""
+                    ).fetchall()
+                    for row in msg_rows:
+                        payload = loads_json(row["payload_json"], {})
+                        if isinstance(payload, dict) and payload.get("ticket_id") in cancelled_ids:
+                            con.execute(
+                                """UPDATE messages SET status='done', lease_owner=NULL, lease_until=NULL,
+                                   updated_at=datetime('now') WHERE message_id=?""",
+                                (row["message_id"],),
+                            )
+                            acked_messages.append(str(row["message_id"]))
+                con.execute("COMMIT")
+            except BaseException:
+                con.execute("ROLLBACK")
+                raise
         logger.info(
             "cancelled %s tickets / acked %s messages for demand %s",
             len(cancelled_tickets),
             len(acked_messages),
             demand_id,
         )
+        best_effort_sync(self.data_store, self.bus_store)
         return {"tickets": cancelled_tickets, "messages": acked_messages}
 
     def _maybe_schedule_capability_check(self, *, now: str, phase: str, force: bool) -> dict[str, Any] | None:

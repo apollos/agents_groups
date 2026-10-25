@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import logging
 import traceback
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import date, datetime, timedelta, timezone
 from threading import Event, Thread
 from typing import Any, Callable, Iterator
@@ -36,12 +36,15 @@ from .reader import IntelligenceReader
 from .session import AgentSessionRepository
 from .stores import create_stores, init_unique_stores
 from .tickets import TicketRepository, priority_to_int
+from .task_lifecycle import best_effort_sync
+from .work_guard import TERMINAL_TICKET_STATES, WorkRevoked, owns_lease, require_work, result_write_guard
+from .collection_results import publish_ready_results
 
 logger = get_logger("agent")
 
 
 @contextmanager
-def lease_heartbeat(keepalive: Callable[[], None], interval_seconds: int) -> Iterator[None]:
+def lease_heartbeat(keepalive: Callable[[], None], interval_seconds: float) -> Iterator[None]:
     """Keep extending the message lease while a single long blocking tool call runs.
 
     MIC deep collects regularly outlive queue.lease_seconds. Without a background heartbeat the
@@ -100,10 +103,11 @@ class IntelligenceCollectorAgent:
         self.planner = TaskGraphPlanner(config.raw)
         self.quality = QualityGate(config.raw)
         self.persister = ResultPersister(self.data_store)
+        self.persister.write_guard = self._result_write_guard
         self.feature_builder = MarketFeatureBuilder(self.data_store, config.raw)
         self.mic = MICAdapter(
             config.tools.mic_config_dir,
-            timeout_seconds=int(config.get("tools.market_intelligence_collector.timeout_seconds", 900)),
+            timeout_seconds=int(config.get("tools.market_intelligence_collector.timeout_seconds", 600)),
             execution_mode=config.tools.mic_execution_mode,
             runs_root=config.tools.mic_runs_dir,
             python_executable=config.tools.mic_python_executable,
@@ -141,6 +145,8 @@ class IntelligenceCollectorAgent:
         self.lease_seconds = int(config.get("queue.lease_seconds", 300))
         self.retry_delay_seconds = int(config.get("queue.retry_delay_seconds", 60))
         self._current_lease: tuple[str, str] | None = None  # (message_id, worker_id)
+        self._current_lease_attempt: int | None = None
+        self._current_lease_generation: int | None = None
         self._cancel_event: Event | None = None  # set when the lease is lost mid-collection
         self._lease_lost = False
         self._current_session_id: str | None = None
@@ -151,6 +157,7 @@ class IntelligenceCollectorAgent:
         topics = topics or self.config.get("queue.consume_topics", ["intelligence.collection", QUERY_REQUEST_TOPIC])
         self.queue.expire_messages()
         self.queue.requeue_expired_leases()
+        best_effort_sync(self.data_store, self.bus_store)
         self._maybe_run_startup_capability_check()
         session_id = self._ensure_session()
         self._current_session_id = session_id
@@ -167,6 +174,10 @@ class IntelligenceCollectorAgent:
             self._checkpoint(session_id=session_id, state="idle", checkpoint={"reason": "queue_empty"})
             return {"status": "idle", "reason": "queue_empty"}
         self._current_lease = (msg.message_id, worker_id)
+        self._current_lease_attempt = msg.attempts
+        self._current_lease_generation = msg.lease_generation
+        self.tickets.active_lease = (msg.message_id, worker_id, msg.attempts, msg.lease_generation)
+        self.queue.active_lease = self.tickets.active_lease
         self._lease_lost = False
         ticket_id = msg.payload.get("ticket_id")
         self.heartbeats.beat(state="processing", worker_id=worker_id, session_id=session_id, message_id=msg.message_id, ticket_id=ticket_id)
@@ -187,17 +198,24 @@ class IntelligenceCollectorAgent:
                 return {"status": "lease_lost", "message_id": msg.message_id, "result": _public_result(result)}
             if action == "retry":
                 error = result.get("_retry_error") or {"error_code": "RETRYABLE_TOOL_FAILURE", "error_message": "retryable tool failure"}
-                self.queue.nack(msg.message_id, error, retryable=True, retry_delay_seconds=self.retry_delay_seconds)
+                delivery = self.queue.nack(msg.message_id, error, retryable=True, retry_delay_seconds=self.retry_delay_seconds,
+                                           worker_id=worker_id, lease_attempt=msg.attempts, lease_generation=msg.lease_generation)
+                if delivery is None:
+                    raise WorkRevoked("lease changed before retry")
+                outcome = "retry_scheduled" if delivery == "open" else "dead_lettered"
                 self._checkpoint(
                     session_id=session_id,
-                    state="retry_scheduled",
+                    state=outcome,
                     checkpoint={"last_message_id": msg.message_id, "result": result, "error": error},
                     current_ticket_id=ticket_id,
                 )
-                return {"status": "retry_scheduled", "message_id": msg.message_id, "result": _public_result(result)}
+                return {"status": outcome, "message_id": msg.message_id, "result": _public_result(result)}
             if action == "dead":
                 error = result.get("_retry_error") or {"error_code": "NON_RETRYABLE_TOOL_FAILURE", "error_message": "non-retryable tool failure"}
-                self.queue.nack(msg.message_id, error, retryable=False, retry_delay_seconds=self.retry_delay_seconds)
+                delivery = self.queue.nack(msg.message_id, error, retryable=False, retry_delay_seconds=self.retry_delay_seconds,
+                                           worker_id=worker_id, lease_attempt=msg.attempts, lease_generation=msg.lease_generation)
+                if delivery is None:
+                    raise WorkRevoked("lease changed before failure")
                 self._checkpoint(
                     session_id=session_id,
                     state="dead_lettered",
@@ -205,7 +223,8 @@ class IntelligenceCollectorAgent:
                     current_ticket_id=ticket_id,
                 )
                 return {"status": "dead_lettered", "message_id": msg.message_id, "result": _public_result(result)}
-            self.queue.ack(msg.message_id)
+            if not self.queue.ack(msg.message_id, worker_id=worker_id, lease_attempt=msg.attempts, lease_generation=msg.lease_generation):
+                raise WorkRevoked("lease changed before acknowledgement")
             self._checkpoint(
                 session_id=session_id,
                 state="running",
@@ -213,11 +232,29 @@ class IntelligenceCollectorAgent:
                 current_ticket_id=ticket_id,
             )
             return {"status": "processed", "message_id": msg.message_id, "result": result}
+        except WorkRevoked as exc:
+            self._lease_lost = True
+            return {"status": "lease_lost", "message_id": msg.message_id, "reason": str(exc)}
         except Exception as exc:
             tb = traceback.format_exc(limit=20)
             error = {"error_code": "AGENT_TASK_FAILED", "error_message": str(exc), "traceback": tb[-4000:]}
             logger.exception("task failed for message %s ticket=%s", msg.message_id, ticket_id)
-            self.queue.nack(msg.message_id, error, retryable=True, retry_delay_seconds=self.retry_delay_seconds)
+            with self.bus_store.session() as con:
+                owned = owns_lease(con, msg.message_id, worker_id, msg.attempts, msg.lease_generation)
+            if not owned or self._lease_lost:
+                self._lease_lost = True
+                return {"status": "lease_lost", "message_id": msg.message_id, "error": error}
+            current = self.tickets.get(ticket_id) if ticket_id else None
+            if current and current["status"] in TERMINAL_TICKET_STATES:
+                # A later publication/checkpoint error must not replay completed tool work.
+                self.queue.ack(msg.message_id, worker_id=worker_id, lease_attempt=msg.attempts, lease_generation=msg.lease_generation)
+                return {"status": "finalization_error", "message_id": msg.message_id,
+                        "ticket_status": current["status"], "error": error}
+            delivery = self.queue.nack(msg.message_id, error, retryable=True, retry_delay_seconds=self.retry_delay_seconds,
+                                       worker_id=worker_id, lease_attempt=msg.attempts, lease_generation=msg.lease_generation)
+            if delivery is None:
+                self._lease_lost = True
+                return {"status": "lease_lost", "message_id": msg.message_id, "error": error}
             self._emit_fault(error, parent_ticket_id=ticket_id, correlation_id=msg.correlation_id)
             self._checkpoint(
                 session_id=session_id,
@@ -225,9 +262,37 @@ class IntelligenceCollectorAgent:
                 checkpoint={"last_message_id": msg.message_id, "error": error},
                 current_ticket_id=ticket_id,
             )
-            return {"status": "failed", "message_id": msg.message_id, "error": error}
+            return {"status": "dead_lettered" if delivery == "dead" else "failed", "message_id": msg.message_id, "error": error}
         finally:
+            # This is a repairable projection, never a reason to redeliver tools.
+            best_effort_sync(self.data_store, self.bus_store)
+            self.tickets.active_lease = None
+            self.queue.active_lease = None
             self._current_lease = None
+            self._current_lease_attempt = None
+            self._current_lease_generation = None
+
+    def _assert_current_work(self) -> None:
+        if self._current_lease is None:
+            return  # Direct offline handler calls have no queue lease.
+        if self._lease_lost:
+            raise WorkRevoked("delivery lease was revoked")
+        message_id, worker_id = self._current_lease
+        try:
+            with self.bus_store.session() as con:
+                require_work(con, (message_id, worker_id, self._current_lease_attempt, self._current_lease_generation))
+        except WorkRevoked:
+            self._lease_lost = True
+            if self._cancel_event is not None:
+                self._cancel_event.set()
+            raise
+
+    def _result_write_guard(self):
+        if self._current_lease is None:
+            return nullcontext()
+        message_id, worker_id = self._current_lease
+        return result_write_guard(self.bus_store, (message_id, worker_id,
+                                  self._current_lease_attempt, self._current_lease_generation))
 
     def _keepalive(self) -> None:
         """Extend the active message lease and record a heartbeat.
@@ -237,7 +302,8 @@ class IntelligenceCollectorAgent:
         """
         if self._current_lease:
             message_id, worker_id = self._current_lease
-            owned = self.queue.extend_lease(message_id, worker_id, self.lease_seconds)
+            owned = self.queue.extend_lease(message_id, worker_id, self.lease_seconds,
+                                            lease_attempt=self._current_lease_attempt, lease_generation=self._current_lease_generation)
             if owned is False:
                 # Another worker may already own this message: stop our collection instead of
                 # letting two workers run the same task on the same browser profile.
@@ -245,6 +311,11 @@ class IntelligenceCollectorAgent:
                 if self._cancel_event is not None:
                     self._cancel_event.set()
                 logger.warning("lease lost for message %s; cancelling in-flight collection", message_id)
+            else:
+                try:
+                    self._assert_current_work()
+                except WorkRevoked:
+                    pass  # The tool cancellation event carries this to the running worker.
             self.heartbeats.beat(state="processing", worker_id=worker_id, session_id=self._current_session_id, message_id=message_id)
 
     def run_until_idle(self, *, max_messages: int = 100) -> dict[str, Any]:
@@ -264,7 +335,11 @@ class IntelligenceCollectorAgent:
         if not ticket:
             raise ValueError(f"ticket not found: {ticket_id}")
         ticket_type = ticket["ticket_type"]
+        if ticket["status"] in TERMINAL_TICKET_STATES:
+            publish_ready_results(self.bus_store, self.queue, ticket_id=ticket_id)
+            return {"status": "already_finalized", "ticket_status": ticket["status"], "reused": True}
         self.tickets.update_status(ticket_id, "in_progress", "agent leased message")
+        best_effort_sync(self.data_store, self.bus_store)
         if ticket_type == "COLLECTION_REQUEST_TICKET":
             return self._handle_collection_request(ticket)
         if ticket_type == "COLLECTION_TASK_TICKET":
@@ -321,7 +396,9 @@ class IntelligenceCollectorAgent:
         return {"status": "planned", "task_count": len(task_payloads), "created": created}
 
     def _handle_collection_task(self, ticket: dict[str, Any]) -> dict[str, Any]:
-        task = ticket["payload"]
+        task = dict(ticket["payload"])
+        if self._current_lease is not None:
+            task["_execution_key"] = f"{self._current_lease[0]}:{self._current_lease_generation}"
         task_type = task.get("task_type")
         if task_type == "tool_capability_check":
             return self._execute_capability_check(ticket, task)
@@ -400,15 +477,21 @@ class IntelligenceCollectorAgent:
         existing_run = self._successful_mic_run(task)
         if existing_run:
             previous = self._mic_result_for_run(existing_run)
+            self._assert_current_work()
+            if previous.status == "success" and "event_ledger" not in previous.quality:
+                # A crash can occur after save_run and before materializing its structures.
+                saved = self.persister.save_mic_structures(task=task, result=previous)
+                previous.quality["event_ledger"] = {k: saved.get(k, 0) for k in (
+                    "source_event_rows", "events", "events_linked", "events_replayed",
+                    "events_unresolved", "events_pending", "events_follow_up")}
             q = self.quality.evaluate(previous, context={"priority": ticket.get("priority"), "target": target})
             previous.quality.update(q)
-            with self.data_store.session() as con:
-                con.execute("UPDATE collection_runs SET quality_json=? WHERE run_id=?",
-                            (dumps_json(previous.quality), existing_run))
+            with self._result_write_guard():
+                with self.data_store.session() as con:
+                    con.execute("UPDATE collection_runs SET quality_json=? WHERE run_id=?",
+                                (dumps_json(previous.quality), existing_run))
             completed_empty = q.get("output_status") == "no_structured_output"
-            self.tickets.update_status(ticket["ticket_id"], "done" if q["usable"] or completed_empty else "failed",
-                                       "MIC task reused; output quality re-evaluated", q)
-            self._publish_collection_result(ticket, status=previous.status,
+            self._complete_task(ticket, ticket_status="done" if q["usable"] or completed_empty else "failed", status=previous.status,
                 run_ids=[existing_run], usable=bool(q["usable"]), output_status=q.get("output_status"))
             return {"status": previous.status, "run_id": existing_run, "reused": True,
                     "quality": q, "usable": bool(q["usable"]), "output_status": q.get("output_status")}
@@ -445,7 +528,7 @@ class IntelligenceCollectorAgent:
         # the lease sets the cancel event, which stops the worker process.
         cancel_event = Event()
         self._cancel_event = cancel_event
-        heartbeat_interval = max(30, self.lease_seconds // 3)
+        heartbeat_interval = max(0.1, self.lease_seconds / 3)
 
         def _attempt_keepalive() -> None:
             self._keepalive()
@@ -455,18 +538,40 @@ class IntelligenceCollectorAgent:
 
         try:
             with lease_heartbeat(_attempt_keepalive, heartbeat_interval):
+                self._assert_current_work()
                 self.attempts.mark_running(attempt_id)
                 result = self.mic.collect(target_id=target_id, task_profile=task_profile, task_key=task_key,
                                           attempt_id=attempt_id, cancel_event=cancel_event)
         finally:
             self._cancel_event = None
         outcome = self.mic.last_outcome or {}
-        self.attempts.finish(
+        try:
+            self._assert_current_work()
+        except WorkRevoked:
+            self._lease_lost = True
+        attempt = self.attempts.get(attempt_id)
+        if cancel_event.is_set() or (attempt and attempt["state"] not in {"starting", "running"}):
+            self._lease_lost = True
+        finished = self.attempts.finish(
             attempt_id, state=_attempt_state(result, outcome, lease_lost=self._lease_lost),
             error_code=(result.errors[0].get("error_code") if result.errors else None),
             cleanup=outcome.get("cleanup"), result_path=outcome.get("run_dir"),
             budget_used=outcome.get("budget_used") or ((result.quality or {}).get("collection_diagnostics") or {}).get("budget_used"),
-            worker_pid=outcome.get("worker_pid"))
+            worker_pid=outcome.get("worker_pid"),
+            expected_states=("starting", "running", "cancelling") if self._lease_lost else ("starting", "running"))
+        if not finished:
+            # An operator may revoke the attempt between the preceding read and this CAS.
+            self._lease_lost = True
+            fallback_state = _attempt_state(result, outcome, lease_lost=True)
+            # Late cleanup failure is evidence of a surviving worker even after cancellation.
+            # Preserve that blocker; ordinary results must never revive a terminal attempt.
+            fallback_expected = (("cancelling", "cancelled", "interrupted")
+                                 if outcome.get("status") == "cleanup_incomplete" else ("cancelling",))
+            self.attempts.finish(
+                attempt_id, state=fallback_state,
+                error_code="MIC_CANCELLED", cleanup=outcome.get("cleanup"),
+                result_path=outcome.get("run_dir"), worker_pid=outcome.get("worker_pid"),
+                expected_states=fallback_expected)
         if self._lease_lost:
             # Revoked attempt: do not persist or export anything from it (design 8.3).
             return {"status": "cancelled", "reason": "lease_lost", "attempt_id": attempt_id,
@@ -475,6 +580,7 @@ class IntelligenceCollectorAgent:
 
     def _finish_mic_task(self, ticket: dict[str, Any], task: dict[str, Any], target: dict[str, Any],
                          result: ToolResult, *, attempt_id: str | None, run_dir: str | None) -> dict[str, Any]:
+        self._assert_current_work()
         codes = {e.get("error_code") for e in result.errors}
         if not codes & {"MIC_ATTEMPT_ACTIVE", "MIC_PROFILE_BUSY", "MIC_CANCELLED"}:
             # Deferrals/cancellations are scheduling outcomes, not tool health signals.
@@ -505,26 +611,25 @@ class IntelligenceCollectorAgent:
             )
         # Ledger counts (source rows / linked evidence) ride along in the result quality so
         # consumers never read "N new events" when most rows were copies of known events.
-        with self.data_store.session() as con:
-            con.execute("UPDATE collection_runs SET quality_json=? WHERE run_id=?", (dumps_json(result.quality), run_id))
-        if saved.get("events"):
-            self._emit_event_summary(ticket=ticket, target=target, count=saved["events"], run_id=run_id)
-        if saved.get("coverage_gaps"):
-            self.queue.publish(
-                "coverage_gap.created",
-                {"target": target, "count": saved["coverage_gaps"], "run_id": run_id, "ticket_id": ticket["ticket_id"]},
-                priority=priority_to_int("normal"),
-                correlation_id=ticket.get("correlation_id"),
-                idempotency_key=make_idempotency_key("message", "coverage_gap", ticket["ticket_id"], run_id),
-            )
+        with self._result_write_guard():
+            with self.data_store.session() as con:
+                con.execute("UPDATE collection_runs SET quality_json=? WHERE run_id=?", (dumps_json(result.quality), run_id))
+            if saved.get("events"):
+                self._emit_event_summary(ticket=ticket, target=target, count=saved["events"], run_id=run_id)
+            if saved.get("coverage_gaps"):
+                self.queue.publish(
+                    "coverage_gap.created",
+                    {"target": target, "count": saved["coverage_gaps"], "run_id": run_id, "ticket_id": ticket["ticket_id"]},
+                    priority=priority_to_int("normal"),
+                    correlation_id=ticket.get("correlation_id"),
+                    idempotency_key=make_idempotency_key("message", "coverage_gap", ticket["ticket_id"], run_id),
+                )
         action, retry_error = _tool_message_action(q, result.errors)
         if action == "retry":
             self.tickets.update_status(ticket["ticket_id"], "open", "MIC task scheduled for retry", retry_error)
         else:
             completed_empty = q.get("output_status") == "no_structured_output"
-            self.tickets.update_status(ticket["ticket_id"], "done" if q["usable"] or completed_empty else "failed",
-                                       "MIC task completed without structured output" if completed_empty else "MIC task completed", q)
-            self._publish_collection_result(ticket, status=result.status,
+            self._complete_task(ticket, ticket_status="done" if q["usable"] or completed_empty else "failed", status=result.status,
                 run_ids=[run_id], usable=bool(q["usable"]), output_status=q.get("output_status"))
         out = {"status": result.status, "run_id": run_id, "quality": q, "saved": saved,
                "usable": bool(q["usable"]), "output_status": q.get("output_status"),
@@ -562,13 +667,7 @@ class IntelligenceCollectorAgent:
         """run_id of an earlier successful MIC run for the same task idempotency key, if any."""
         if not task.get("idempotency_key"):
             return None
-        idem = make_idempotency_key("run", task.get("idempotency_key"), self.mic.tool_name, "collect_intelligence")
-        with self.data_store.session() as con:
-            row = con.execute(
-                "SELECT run_id FROM collection_runs WHERE idempotency_key=? AND status='success'",
-                (idem,),
-            ).fetchone()
-        return str(row["run_id"]) if row else None
+        return self.persister.successful_run(task=task, tool_name=self.mic.tool_name, operation="collect_intelligence")
 
     def _execute_stock_task(self, ticket: dict[str, Any], task: dict[str, Any]) -> dict[str, Any]:
         task_type = task.get("task_type")
@@ -649,7 +748,9 @@ class IntelligenceCollectorAgent:
             # Each CLI call can take up to tool timeout; renew the lease first so a multi-call
             # task is never requeued mid-flight and double-executed.
             self._keepalive()
+            self._assert_current_work()
             res = call()
+            self._assert_current_work()
             self._record_breaker(self.stock.tool_name, res.status)
             run_id = self.persister.save_run(task=task, ticket_id=ticket["ticket_id"], result=res, demand_id=task.get("demand_id"))
             run_ids.append(run_id)
@@ -671,6 +772,7 @@ class IntelligenceCollectorAgent:
                 source_quality = q
                 if bool(self.config.get("intraday.use_query_bars_after_fetch", True)) and intraday_frequency:
                     self._keepalive()
+                    self._assert_current_work()
                     qres = self.stock.query_bars(
                         ticker=ticker,
                         start_date=(task.get("bucket_start") or task.get("as_of"))[:10],
@@ -680,6 +782,7 @@ class IntelligenceCollectorAgent:
                         trading_ready=bool(self.config.get("intraday.query_bars_trading_ready", False)),
                         minimum_quality=float(self.config.get("quality.minimum_quality_for_public_pool", 0.8)),
                     )
+                    self._assert_current_work()
                     self._record_breaker(self.stock.tool_name, qres.status)
                     qrun_id = self.persister.save_run(task=task, ticket_id=ticket["ticket_id"], result=qres, demand_id=task.get("demand_id"))
                     run_ids.append(qrun_id)
@@ -702,17 +805,18 @@ class IntelligenceCollectorAgent:
                 daily_result, history_result = self._feature_enrichment_queries(
                     ticker=ticker, task=task, intraday_frequency=intraday_frequency
                 )
-                feature = self.feature_builder.build_and_save(
-                    task=task,
-                    stock_result=source_result,
-                    quality=source_quality,
-                    source_frequency=intraday_frequency,
-                    daily_result=daily_result,
-                    history_result=history_result,
-                )
-                emit, risk_review, reasons = should_emit_feature_ticket(feature, self.config.raw)
-                if emit:
-                    self._emit_market_feature(ticket=ticket, feature=feature, risk_review=risk_review, reasons=reasons)
+                with self._result_write_guard():
+                    feature = self.feature_builder.build_and_save(
+                        task=task,
+                        stock_result=source_result,
+                        quality=source_quality,
+                        source_frequency=intraday_frequency,
+                        daily_result=daily_result,
+                        history_result=history_result,
+                    )
+                    emit, risk_review, reasons = should_emit_feature_ticket(feature, self.config.raw)
+                    if emit:
+                        self._emit_market_feature(ticket=ticket, feature=feature, risk_review=risk_review, reasons=reasons)
         usable = all(q["severity"] != "P0" and q.get("usable") for q in quality_decisions)
         retry_errors: list[dict[str, Any]] = []
         for q in quality_decisions:
@@ -729,8 +833,7 @@ class IntelligenceCollectorAgent:
                 "_message_action": "retry",
                 "_retry_error": {"error_code": "RETRYABLE_STOCK_DATA_FAILURE", "error_message": "one or more stock_data calls are retryable", "retryable": True, "errors": retry_errors},
             }
-        self.tickets.update_status(ticket["ticket_id"], "done" if usable else "failed", "stock data task completed")
-        self._publish_collection_result(ticket, status="success" if usable else "partial_or_failed", run_ids=run_ids, usable=usable)
+        self._complete_task(ticket, ticket_status="done" if usable else "failed", status="success" if usable else "partial_or_failed", run_ids=run_ids, usable=usable)
         return {"status": "success" if usable else "partial_or_failed", "run_ids": run_ids, "quality": quality_decisions, "feature": feature}
 
     def _execute_hk_connect_task(self, ticket: dict[str, Any], task: dict[str, Any]) -> dict[str, Any]:
@@ -747,18 +850,19 @@ class IntelligenceCollectorAgent:
                 ticket, tool_name=self.hk_connect.tool_name, ticker=ticker, target_id=target.get("target_id")
             )
         self._keepalive()
+        self._assert_current_work()
         result = self.hk_connect.collect_snapshot(
             target_id=target.get("target_id"),
             ticker=ticker,
             company_name=target.get("company_name"),
             as_of=task.get("as_of"),
         )
+        self._assert_current_work()
         self._record_breaker(self.hk_connect.tool_name, result.status)
         run_id = self.persister.save_run(task=task, ticket_id=ticket["ticket_id"], result=result, demand_id=task.get("demand_id"))
         if result.status == "success":
             self.persister.save_hk_connect_snapshot(task=task, result=result, run_id=run_id)
-            self.tickets.update_status(ticket["ticket_id"], "done", "hk_connect snapshot saved")
-            self._publish_collection_result(ticket, status="success", run_ids=[run_id], usable=True)
+            self._complete_task(ticket, ticket_status="done", status="success", run_ids=[run_id], usable=True)
             return {"status": "success", "run_id": run_id}
         self._emit_data_quality(
             severity="P2",
@@ -779,8 +883,7 @@ class IntelligenceCollectorAgent:
                 "_message_action": "retry",
                 "_retry_error": (result.errors or [{}])[0],
             }
-        self.tickets.update_status(ticket["ticket_id"], "failed", "hk_connect snapshot failed")
-        self._publish_collection_result(ticket, status="failed", run_ids=[run_id], usable=False)
+        self._complete_task(ticket, ticket_status="failed", status="failed", run_ids=[run_id], usable=False)
         return {"status": "failed", "run_id": run_id}
 
     def _execute_market_context_task(self, ticket: dict[str, Any], task: dict[str, Any]) -> dict[str, Any]:
@@ -800,7 +903,9 @@ class IntelligenceCollectorAgent:
         # of the internal sub-requests it spawns (e.g. the daily bars used to date a snapshot).
         trace_id = str(ticket.get("correlation_id") or ticket["ticket_id"])
         self._keepalive()
+        self._assert_current_work()
         result = self.market_context.collect_snapshot(context=target, as_of=task.get("as_of"), trace_id=trace_id)
+        self._assert_current_work()
         outcome = self._handle_market_context_result(ticket, task, context_id, result)
         tool_data = result.result if isinstance(result.result, dict) else {}
         emit(
@@ -860,11 +965,9 @@ class IntelligenceCollectorAgent:
                     parent_ticket_id=ticket["ticket_id"],
                     correlation_id=ticket.get("correlation_id"),
                 )
-                self.tickets.update_status(ticket["ticket_id"], "done", "market context snapshot saved (stale)", {"quality": result.quality})
-                self._publish_collection_result(ticket, status="stale", run_ids=[run_id], usable=False)
+                self._complete_task(ticket, ticket_status="done", status="stale", run_ids=[run_id], usable=False)
                 return {"status": "stale", "run_id": run_id, "quality": result.quality}
-            self.tickets.update_status(ticket["ticket_id"], "done", "market context snapshot saved")
-            self._publish_collection_result(ticket, status="success", run_ids=[run_id], usable=True)
+            self._complete_task(ticket, ticket_status="done", status="success", run_ids=[run_id], usable=True)
             return {"status": "success", "run_id": run_id, "quality": result.quality}
         retryable = any(err.get("retryable") for err in result.errors)
         hint = next((e.get("suggested_action") for e in result.errors if e.get("suggested_action")), None)
@@ -887,8 +990,7 @@ class IntelligenceCollectorAgent:
                 "_message_action": "retry",
                 "_retry_error": (result.errors or [{}])[0],
             }
-        self.tickets.update_status(ticket["ticket_id"], "failed", "market context snapshot failed (manual action required)", result.errors)
-        self._publish_collection_result(ticket, status="failed", run_ids=[run_id], usable=False)
+        self._complete_task(ticket, ticket_status="failed", status="failed", run_ids=[run_id], usable=False)
         return {"status": "failed", "run_id": run_id, "manual_action": hint}
 
     def _feature_enrichment_queries(
@@ -913,6 +1015,7 @@ class IntelligenceCollectorAgent:
         history_result: dict[str, Any] | None = None
         try:
             self._keepalive()
+            self._assert_current_work()
             lookback = int(enrich_cfg.get("prev_close_lookback_days", 10))
             daily = self.stock.query_bars(
                 ticker=ticker,
@@ -921,14 +1024,18 @@ class IntelligenceCollectorAgent:
                 frequency="1d",
                 adjust="none",
             )
+            self._assert_current_work()
             if daily.status == "success":
                 daily_result = daily.result
+        except WorkRevoked:
+            raise
         except Exception:
             logger.warning("prev-close enrichment query failed for %s", ticker, exc_info=True)
         try:
             history_days = int(enrich_cfg.get("same_bucket_history_days", 20))
             if history_days > 0:
                 self._keepalive()
+                self._assert_current_work()
                 # Calendar window is padded so ~history_days trading days are covered.
                 hist = self.stock.query_bars(
                     ticker=ticker,
@@ -937,17 +1044,19 @@ class IntelligenceCollectorAgent:
                     frequency=intraday_frequency,
                     adjust="none",
                 )
+                self._assert_current_work()
                 if hist.status == "success":
                     history_result = hist.result
+        except WorkRevoked:
+            raise
         except Exception:
             logger.warning("same-bucket history enrichment query failed for %s", ticker, exc_info=True)
         return daily_result, history_result
 
-    def _publish_collection_result(self, ticket: dict[str, Any], *, status: str, run_ids: list[str], usable: bool, output_status: str | None = None) -> str:
-        """collection.result message for Runtime / report builder consumers (design §5.2)."""
-        return self.queue.publish(
-            "collection.result",
-            {
+    def _complete_task(self, ticket: dict[str, Any], *, ticket_status: str, status: str,
+                       run_ids: list[str], usable: bool, output_status: str | None = None) -> None:
+        """Commit the business outcome and its result notification intent together."""
+        payload = {
                 "ticket_id": ticket["ticket_id"],
                 "ticket_type": ticket["ticket_type"],
                 "task_type": (ticket.get("payload") or {}).get("task_type"),
@@ -955,11 +1064,11 @@ class IntelligenceCollectorAgent:
                 "usable": usable,
                 "run_ids": run_ids,
                 **({"output_status": output_status} if output_status is not None else {}),
-            },
-            priority=priority_to_int("normal"),
-            correlation_id=ticket.get("correlation_id"),
-            idempotency_key=make_idempotency_key("message", "collection_result", ticket["ticket_id"]),
+            }
+        self.tickets.update_status(
+            ticket["ticket_id"], ticket_status, "collection task finalized", result_payload=payload,
         )
+        publish_ready_results(self.bus_store, self.queue, ticket_id=ticket["ticket_id"])
 
     def _handle_circuit_open(self, ticket: dict[str, Any], *, tool_name: str, ticker: str | None, target_id: str | None) -> dict[str, Any]:
         """Tool circuit is open: do not call the tool, surface a quality issue, finish the ticket."""
@@ -1256,10 +1365,12 @@ def _mic_task_profile(task: dict[str, Any], config: dict[str, Any], default_focu
             time_window = "30d"
     if task.get("test_mode"):
         cap = defaults_cfg.get("test_mode_budget_profile", {}) or {}
-        budget = {
-            key: min(int(budget.get(key, limit)), int(limit))
-            for key, limit in cap.items()
-        } or budget
+        # A partial quick-check cap must not discard task limits it does not
+        # mention (for example HTTP attempts or a shorter deadline). MIC still
+        # applies the deployment ceiling to every recognised budget key.
+        budget = dict(budget)
+        for key, limit in cap.items():
+            budget[key] = min(int(budget.get(key, limit)), int(limit))
     profile = {"focus": focus, "time_window": time_window, "budget_profile": budget}
     if "questions" in profiles:
         profile["questions"] = copy.deepcopy(profiles["questions"])
@@ -1340,11 +1451,11 @@ def _blocked_mic_result(tool_name: str, target_id: str, task_profile: dict[str, 
 
 
 def _attempt_state(result: ToolResult, outcome: dict[str, Any], *, lease_lost: bool) -> str:
-    if lease_lost:
-        return "cancelled"
     status = str(outcome.get("status") or "")
     if status == "cleanup_incomplete":
         return "cleanup_incomplete"
+    if lease_lost:
+        return "cancelled"
     if status in ("cancelled", "timed_out"):
         return "cancelled" if status == "cancelled" else "interrupted"
     if result.status == "success":

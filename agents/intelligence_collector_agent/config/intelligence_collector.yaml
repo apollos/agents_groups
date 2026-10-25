@@ -138,21 +138,35 @@ mic_task_defaults:
     focus: [risk, operating_update, policy, supply_chain]
     time_window: "30d"
     budget_profile:
-      max_queries: 20
-      max_links_to_read: 10
+      max_queries: 4
+      max_links_to_read: 4
+      max_http_read_attempts: 8
+      max_browser_read_attempts: 4
       max_model_calls: 8
+      max_gateway_requests: 8
+      max_run_seconds: 600
   black_swan:
     focus: [risk, legal_compliance, shareholder_action]
     time_window: "7d"
     budget_profile:
-      max_queries: 8
-      max_links_to_read: 4
-      max_model_calls: 3
-  # Applied as an upper bound whenever demand.test_mode is true.
+      max_queries: 2
+      max_links_to_read: 2
+      max_http_read_attempts: 4
+      max_browser_read_attempts: 2
+      max_model_calls: 4
+      max_gateway_requests: 4
+      max_run_seconds: 300
+  # Explicit quick-check upper bounds whenever demand.test_mode is true.
+  # Allow model triage plus two extractions; this is not a research acceptance.
+  # A task can request still smaller limits (including a one-call extraction check).
   test_mode_budget_profile:
     max_queries: 2
-    max_links_to_read: 1
-    max_model_calls: 1
+    max_links_to_read: 2
+    max_http_read_attempts: 2
+    max_browser_read_attempts: 2
+    max_model_calls: 3
+    max_gateway_requests: 3
+    max_run_seconds: 300
 
 quality:
   minimum_quality_for_public_pool: 0.80
@@ -244,7 +258,7 @@ tools:
     # Hard wall-clock timeout for one MIC deep collect. On timeout the task fails with a
     # retryable MIC_TIMEOUT error instead of blocking the worker indefinitely. The effective
     # deadline is min(timeout_seconds, MIC deployment max_run_seconds, task budget).
-    timeout_seconds: 900
+    timeout_seconds: 600
     # subprocess: one supervised MIC worker process per attempt (TERM -> 5s grace -> KILL of
     # its process group; cancelled on lease loss). Required for the browser search route.
     # in_process: legacy thread; its timeout only stops waiting and cannot stop the run.

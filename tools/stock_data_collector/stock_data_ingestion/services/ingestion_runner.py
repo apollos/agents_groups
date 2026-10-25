@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from stock_data_ingestion.adapters.akshare_adapter import AKShareAdapter
 from stock_data_ingestion.adapters.baostock_adapter import BaoStockAdapter
+from stock_data_ingestion.adapters.baostock_worker import WorkerCleanupError, fetch_security_master_in_worker
 from stock_data_ingestion.adapters.base import BaseDataAdapter
 from stock_data_ingestion.adapters.joinquant_adapter import JoinQuantAdapter
 from stock_data_ingestion.adapters.tushare_adapter import TushareAdapter
@@ -330,6 +331,9 @@ class IngestionRunner:
         self.database = database
         self.parquet_store = parquet_store or ParquetStore(config.storage.parquet_root)
         tushare_provider = config.data_sources.providers.get("tushare")
+        # Explicit adapter injection remains in-process (including test doubles).
+        # Only the default BaoStock security-master integration needs this guard.
+        self._isolate_baostock_security_master = not adapters
         self.adapters = adapters or {
             "tushare": TushareAdapter(rate_limit=tushare_provider.rate_limit if tushare_provider else None),
             "akshare": AKShareAdapter(market_context_sources=config.market_context),
@@ -588,6 +592,15 @@ class IngestionRunner:
 
     def _fetch(self, adapter: BaseDataAdapter, request: StockDataRequest) -> ProviderFetchResult:
         try:
+            if (
+                self._isolate_baostock_security_master
+                and adapter is self.adapters.get("baostock")
+                and str(request.request_type) == "security_master"
+            ):
+                provider = self.config.data_sources.providers.get("baostock")
+                return fetch_security_master_in_worker(
+                    request, timeout_seconds=provider.timeout_seconds if provider else 30
+                )
             dispatch: dict[RequestType, Callable[[StockDataRequest], ProviderFetchResult]] = {
                 RequestType.security_master: adapter.fetch_security_master,
                 RequestType.trade_calendar: adapter.fetch_trade_calendar,
@@ -606,6 +619,10 @@ class IngestionRunner:
             }
             request_type = RequestType(str(request.request_type))
             return dispatch.get(request_type, adapter.fetch_historical_bars)(request)
+        except WorkerCleanupError:
+            # A possibly live worker is a failed execution boundary, not a
+            # recoverable provider result. Let the CLI supervisor stop the run.
+            raise
         except Exception as exc:  # noqa: BLE001
             now = now_asia_shanghai()
             return ProviderFetchResult(
@@ -1429,7 +1446,15 @@ class IngestionRunner:
             "adjust": str(request.adjust or _value(raw, "adjust", default="none")),
             "adj_factor": _float(raw, "adj_factor"),
         }
-        return [BarRecord(**self._common_record_kwargs(result=result, request=request, ingestion_run_id=run_id, raw_row_index=idx, domain_values=domain, record_type="bar"))]
+        data = self._common_record_kwargs(result=result, request=request, ingestion_run_id=run_id, raw_row_index=idx, domain_values=domain, record_type="bar")
+        if isinstance(raw.get("amount_is_estimated"), bool):
+            for field in ("amount", "vwap"):
+                provenance = data["field_provenance"].get(field)
+                if provenance is not None:
+                    provenance["is_estimated"] = raw["amount_is_estimated"]
+                    if raw.get("amount_estimation_method"):
+                        provenance["estimation_method"] = raw["amount_estimation_method"]
+        return [BarRecord(**data)]
 
     def _normalize_volume_for_provider(self, raw: dict[str, Any], provider: str) -> tuple[float | None, str]:
         if provider == "tushare":

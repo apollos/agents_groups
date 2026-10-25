@@ -30,6 +30,7 @@ from .research_cards import ResearchCardBuilder
 from .runtime import RuntimeController
 from .session import AgentSessionRepository
 from .stores import create_stores, init_unique_stores
+from .task_lifecycle import sync_task_statuses
 from .tickets import TicketRepository
 from .time_utils import market_phase, parse_dt, validate_market_calendar
 
@@ -392,7 +393,7 @@ def main(argv: list[str] | None = None) -> None:
                 )
             )
         elif args.runtime_command == "recover":
-            recovery = RecoveryManager(bus_store, queue, tickets, cfg.runtime.agent_id, cfg.runtime.agent_group)
+            recovery = RecoveryManager(bus_store, queue, tickets, cfg.runtime.agent_id, cfg.runtime.agent_group, data_store=data_store)
             _print(recovery.recover())
         elif args.runtime_command == "heartbeat":
             hb = HeartbeatRecorder(state_store, cfg.runtime.agent_id)
@@ -420,7 +421,7 @@ def main(argv: list[str] | None = None) -> None:
             )
             _print({"status": "ok", "checkpoint_id": checkpoint_id})
         elif args.agent_command == "resume":
-            recovery = RecoveryManager(worker.bus_store, worker.queue, worker.tickets, cfg.runtime.agent_id, cfg.runtime.agent_group)
+            recovery = RecoveryManager(worker.bus_store, worker.queue, worker.tickets, cfg.runtime.agent_id, cfg.runtime.agent_group, data_store=worker.data_store)
             recovered = recovery.recover()
             result = worker.run_until_idle(max_messages=args.max_messages)
             _print({"recovered": recovered, "run": result})
@@ -665,6 +666,7 @@ def main(argv: list[str] | None = None) -> None:
 
 def _agent_status(cfg, state_store: SQLiteStore, bus_store: SQLiteStore, data_store: SQLiteStore) -> dict[str, Any]:
     """One-screen operational overview: session, checkpoint, heartbeat, queue depth, breakers."""
+    sync_task_statuses(data_store, bus_store)
     queue = SQLiteMessageQueue(bus_store)
     sessions = AgentSessionRepository(state_store, cfg.runtime.agent_id)
     checkpoints = CheckpointManager(state_store, cfg.runtime.agent_id)

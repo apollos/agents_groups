@@ -81,7 +81,11 @@ def test_clone_latest_analysis_returns_cloned_event_details(config):
     assert len(details) == 1
     assert details[0]["summary"] == "中标特高压项目"
     assert details[0]["event_type"] == "major_order"
-    assert str(details[0]["event_date"]).startswith("2026-07-03")
+    # Legacy rows have no semantic date-role approval. Their useful event
+    # details still clone, but the old date is retained only in the audit.
+    assert details[0]["event_date"] is None
+    correction, = details[0]["content_review"]["materialization_corrections"]
+    assert correction["original_materialized_value"].startswith("2026-07-03")
     assert details[0]["source_link_id"] == "link_b"
     assert details[0]["confidence"] == 0.9
 

@@ -17,6 +17,33 @@ def test_merge_limits_takes_min_of_deployment_and_task_and_ignores_unknown_task_
     assert merged["max_links_to_read"] == DEFAULT_LIMITS["max_links_to_read"]
 
 
+def test_research_defaults_bound_task_requests_and_keep_quick_checks_small():
+    research = {
+        "max_queries": 4, "max_links_to_read": 4,
+        "max_http_read_attempts": 8, "max_browser_read_attempts": 4,
+        "max_model_calls": 8, "max_gateway_requests": 8, "max_run_seconds": 600,
+    }
+    enlarged_request = {key: value * 10 for key, value in research.items()}
+    effective = merge_limits(None, enlarged_request)
+    assert {key: effective[key] for key in research} == research
+
+    quick = {"max_queries": 2, "max_links_to_read": 1,
+             "max_http_read_attempts": 2, "max_browser_read_attempts": 1,
+             "max_model_calls": 1, "max_gateway_requests": 1, "max_run_seconds": 60}
+    effective = merge_limits(research, quick)
+    assert {key: effective[key] for key in quick} == quick
+
+
+def test_missing_time_limit_uses_research_default_but_supervisor_can_shorten_it():
+    clock = FakeClock(100.0)
+    assert RunBudget(limits={}, clock=clock).remaining_seconds() == 600
+    short = RunBudget(limits={}, clock=clock, deadline_at=clock() + 90)
+    assert short.remaining_seconds() == 90
+    clock.advance(91)
+    with pytest.raises(BudgetExceeded):
+        short.reserve("http_read_attempts")
+
+
 def test_reservation_happens_before_operation_and_failures_count():
     b = RunBudget(limits={**DEFAULT_LIMITS, "max_search_pages_per_query": 3, "max_search_pages_per_run": 6,
                           "max_engines_per_query": 2})

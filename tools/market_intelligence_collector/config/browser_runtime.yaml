@@ -43,22 +43,24 @@ browser_runtime:
     save_full_dom: false
     retention_days: 7
 
+  # Deployment ceiling for bounded single-company research. Tasks (including
+  # the Agent's test_mode profile) can tighten each limit, never raise it.
   limits:
-    max_queries: 2
+    max_queries: 4
     max_search_pages_per_query: 3     # all engines + paging + explicit retries per query
     max_search_pages_per_run: 6
     max_engines_per_query: 2
     results_per_page_cap: 10
     max_hits_per_query: 30
     max_search_hits: 60
-    max_links_to_read: 2              # unique candidate URLs selected for body fetch
-    max_http_read_attempts: 2
-    max_browser_read_attempts: 2
+    max_links_to_read: 4              # successfully obtained bodies; not verified findings
+    max_http_read_attempts: 8         # failed fetches also consume attempts
+    max_browser_read_attempts: 4      # independent of HTTP attempts; includes auth retries
     max_authenticated_retries_per_origin: 1
     max_authenticated_retries_per_run: 1
-    max_model_calls: 3
-    max_gateway_requests: 3           # actual MIC -> gateway HTTP sends
-    max_run_seconds: 300
+    max_model_calls: 8
+    max_gateway_requests: 8           # actual MIC -> gateway HTTP sends, including vision
+    max_run_seconds: 600
     max_page_seconds: 25
     min_engine_interval_seconds: 3
     max_retries_per_page: 0

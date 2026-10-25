@@ -7,6 +7,9 @@ from .ids import make_idempotency_key
 from .logging_setup import get_logger
 from .queue import SQLiteMessageQueue
 from .tickets import TicketRepository, priority_to_int
+from .task_lifecycle import best_effort_sync
+from .work_guard import TERMINAL_TICKET_STATES
+from .collection_results import publish_ready_results
 
 logger = get_logger("recovery")
 
@@ -21,43 +24,64 @@ class RecoveryManager:
        (crash between ticket creation and publish).
     """
 
-    def __init__(self, store: SQLiteStore, queue: SQLiteMessageQueue, tickets: TicketRepository, agent_id: str, agent_group: str):
+    def __init__(self, store: SQLiteStore, queue: SQLiteMessageQueue, tickets: TicketRepository, agent_id: str, agent_group: str,
+                 *, data_store: SQLiteStore | None = None):
         self.store = store
         self.queue = queue
         self.tickets = tickets
         self.agent_id = agent_id
         self.agent_group = agent_group
+        self.data_store = data_store or store
 
     def recover(self) -> dict[str, Any]:
         requeued = self.queue.requeue_expired_leases()
         acked = self._ack_completed()
         faults = self._fault_dead_letters()
         republished = self._republish_orphan_task_tickets()
+        results = publish_ready_results(self.store, self.queue)
+        task_sync = best_effort_sync(self.data_store, self.store)
         summary = {
             "status": "ok",
             "requeued_expired_leases": requeued,
             "acked_completed": acked,
             "fault_tickets_for_dead_letters": faults,
             "republished_orphan_tickets": republished,
+            "task_status_sync": task_sync,
+            "collection_results": results,
         }
         logger.info("recovery complete: %s", summary)
         return summary
 
     def _ack_completed(self) -> list[str]:
+        """Retire only collection work whose Ticket is still terminal under the bus lock."""
         acked: list[str] = []
         with self.store.session() as con:
-            rows = con.execute(
-                "SELECT message_id, payload_json FROM messages WHERE status IN ('open', 'in_progress')"
-            ).fetchall()
-        for row in rows:
-            payload = loads_json(row["payload_json"], {})
-            ticket_id = payload.get("ticket_id")
-            if not ticket_id:
-                continue
-            ticket = self.tickets.get(ticket_id)
-            if ticket and ticket.get("status") == "done":
-                self.queue.ack(str(row["message_id"]))
-                acked.append(str(row["message_id"]))
+            con.execute("BEGIN IMMEDIATE")
+            try:
+                rows = con.execute(
+                    """SELECT message_id, payload_json FROM messages
+                       WHERE status IN ('open', 'in_progress') AND topic='intelligence.collection'"""
+                ).fetchall()
+                for row in rows:
+                    payload = loads_json(row["payload_json"], {})
+                    ticket_id = payload.get("ticket_id") if isinstance(payload, dict) else None
+                    if not ticket_id:
+                        continue
+                    ticket = con.execute(
+                        "SELECT status, ticket_type FROM tickets WHERE ticket_id=?", (ticket_id,),
+                    ).fetchone()
+                    if (ticket and ticket["ticket_type"] in {"COLLECTION_REQUEST_TICKET", "COLLECTION_TASK_TICKET"}
+                            and ticket["status"] in TERMINAL_TICKET_STATES):
+                        con.execute(
+                            """UPDATE messages SET status='done', lease_owner=NULL, lease_until=NULL,
+                               updated_at=datetime('now') WHERE message_id=?""",
+                            (row["message_id"],),
+                        )
+                        acked.append(str(row["message_id"]))
+                con.execute("COMMIT")
+            except BaseException:
+                con.execute("ROLLBACK")
+                raise
         return acked
 
     def _fault_dead_letters(self) -> list[str]:

@@ -141,6 +141,17 @@ events = api.get_recent_events("company_300750", since="30d")
 
 ## 接入真实模型与搜索源
 
+正文抽取在现有模型策略执行后，如果末次返回 `json_invalid` 且没有任何可解析的成功结果，
+会在原预算内最多重新生成一次。整个 MIC run 最多一次，使用同一模型配置、同一来源材料和审核规则；
+不把坏 JSON 当作证据，不自动补括号。开关为
+`call_governance.yaml -> call_governance.extraction.json_recovery.enabled`（默认 `true`；设为 `false` 关闭）。
+该请求占用既有 model、Gateway、每来源调用数与时间额度，可能减少后续来源可用的调用名额；
+不提高总预算。提取、分块和仲裁共享每来源额度。初筛、视觉、仲裁、分块提取不触发这种恢复，
+网络失败、输出截断和可解析但证据不足的结果也不触发。
+原失败与后继结果分别留审计，`model_requests[].json_recovery` 关联原 ModelRun；
+完整原始正文仍仅由已启用的受限 acceptance trace 保存，不默认扩大日志范围。
+后继结果仍须通过原 schema、统一内容审核、日期窗口和入库检查，格式恢复不等于业务验收通过。
+
 1. 在 `.env` 填入密钥（`DEEPSEEK_API_KEY`、`DASHSCOPE_API_KEY`、`SILICONFLOW_API_KEY`、`SERPAPI_API_KEY` 等）。视觉救援（扫描版 PDF / 页面图片转写）还需：
    - `OPENCLAW_GATEWAY_TOKEN`：网关 token
    - `OPENCLAW_GATEWAY_BASE_URL`：本机 OpenClaw 地址（如 `http://127.0.0.1:18789/v1`），覆盖 `model_registry.yaml` 里的 endpoint，换环境不必改 yaml
@@ -394,13 +405,30 @@ CLI 等价写法：`mic collect company_300750 --question "…" --time-window ""
 `questions` 的作用贯穿整条流水线（通用机制，不含任何公司/关键词特判）：
 
 - 规划：每个问题生成 `task_question` family 的 query，排在 `focus` 推导 query 之前，一起受 `max_queries` 约束；
-- 初筛：命中问题词的 hit 加分（`task_question_match`），画像里 `official_domains` 列出的官网域名视作目标身份命中（`target_official_domain`），即使标题/摘要不含公司名；
-- 读取队列：`max_links_to_read` 计的是**读成功**的链接数，读失败（反爬、正文范围无法确定、HTTP 失败）不占名额，队列继续下一个候选，直到传输预算（`max_http_read_attempts` / `max_browser_read_attempts`）耗尽；队列头部保留一个一手来源（公告 / 官网）名额；`summary["read_queue_stopped_by_budget"]` 给出因传输预算未尝试的候选数；
-- 正文：PDF 抽取保留表格块（`section` 以 `表格` 开头的 passage），问题词参与段落打分；
+- 初筛：原规则评分提供候选基线；开启批量初筛且预算允许时，完整研究问题送入现有模型调用，比较所有分值段候选的读取顺序。有效排名只调整同批候选所占位置，未评估候选及跨批次顺序保留基线；初筛理由仅用于导航，不能证明日期、最新性或正文事实；
+- 读取队列：`max_links_to_read` 计的是**读成功**的链接数，读失败（反爬、正文范围无法确定、HTTP 失败）不占名额，队列继续下一个候选，直到传输预算（`max_http_read_attempts` / `max_browser_read_attempts`）耗尽；基线队列保留一手来源优先位置，模型可在同批候选内重新排序，最终读取门禁仍生效；`summary["read_queue_stopped_by_budget"]` 给出因传输预算未尝试的候选数；
+- 正文：PDF 抽取保留表格块（`section` 以 `表格` 开头的 passage），在既定段落数和字符预算内补充已抽取范围的首尾上下文；这不保证读到整份文件末页，也不自动证明发布日期；
 - 模型：`task_context` 随 bundle 提示一起下发，要求优先回答问题并按原文数值/单位/报告期输出，不得推断替代年份或口径；
 - 复核：来源原文直接给出的同比属于 comparability claim，可为 `source_supported`；模型自行计算的比较仍为 inference。
 
 `report["task_questions"]` 回显解析后的问题（含实际使用的检索短语）。
+
+模型在同一次抽取中按 `q1/q2/...` 填写逐问题的覆盖评估，由统一审核模块在最终准入后核对回答引用。
+`report["task_coverage"]` 保留原问题、来源、`covered / partial / unanswered / not_assessed`
+状态、回答 claim 引用和未覆盖的需求原文片段。缺失或无效评估明确记为 `not_assessed`；
+缓存复用不会沿用旧问题的覆盖结论，也不会为补评估额外调用模型。
+这些结论限定当前来源材料，不能解释成公司没有发生某事项，也不是跨来源的整体完成判定。
+具体缺口同时进入正式 `get_coverage_gaps` 和本批 `report["coverage_gaps"]`，供 Agent 保存和回读。
+正常结束但没有可评估产出的任务也返回未评估缺口；取消或超时后不会为此追加写入。
+
+来源发布日期通过统一审核中的 `/source_publication` observation 绑定正文证据。
+启用时间窗时，读取阶段日期未知的材料可在原有抽取调用内接受日期审核，审核后仍未知、冲突、
+超窗或未来的来源不能发布结构化内容；已知超窗材料仍在模型调用前过滤，不增加专门的日期调用。
+报告期、签署日、搜索摘要或 URL 日期不能自动作为披露日期。确认某份报告的日期也不等于证明其最新性，
+缺少截至任务时点的披露范围或比较依据时，应保留原需求中的最新性缺口。
+`explain_source_analysis` 的 `source.publish_time` 仅返回已确认的来源日期，
+`source.publication_time` 保留审核依据，搜索猜测单列为 `source.publish_time_guess`。
+原始读取诊断不回写；缓存旧日期审核另存 `cached_source_publication` 并绑定旧来源。
 
 返回 dict 的关键字段（取数时注意字段名）：
 
@@ -408,6 +436,10 @@ CLI 等价写法：`mic collect company_300750 --question "…" --time-window ""
 |---|---|
 | `report["search_run_id"]` | 本次 run id |
 | `report["task_questions"]` | 本次采集携带的研究问题（解析后） |
+| `report["task_coverage"]` | 按问题、来源记录的模型覆盖评估及统一审核结果；不以产出计数推断覆盖 |
+| `report["task_triage_reviews"]` | 批量初筛的原始排序与协议检查结果，仅作读取导航审核 |
+| `report["source_publications"]` | 来源日期的最终证据、原读取判断及时间窗准入结果 |
+| `report["coverage_gaps"]` | 仅当前 run 的正式缺口明细，含 `gap_id / search_run_id / source_link_id`，与正式查询一致 |
 | `report["summary"]["links_selected_for_read"]` / `["links_read"]` | 尝试读取 / 读取成功的链接数；差值即读失败数 |
 | `report["summary"]["read_queue_stopped_by_budget"]` | 因传输预算耗尽未尝试的读取候选数 |
 | `report["summary"]["queries_executed"]` | 实际执行 query 数 |
@@ -466,7 +498,7 @@ api.submit_feedback({
 
 - **去重复用**：相同 `canonical_url` / `content_hash` 只分析一次；多 query/多搜索源命中同一链接只读一次。**跨 run 复用**：同一目标在历史 run 已分析过的链接会直接克隆结构化结果（`clone_latest_analysis`），不再重复读取与调模型。
 - **规则先行**：标题/摘要/来源/时间足够判断低价值时不调模型。
-- **批量初筛**：边界分值的搜索结果合并到一次模型调用判断（带独立子预算，不挤占抽取调用）。
+- **批量初筛**：无研究问题时处理边界分值候选；有问题时按完整需求比较各分值段候选。沿用批大小和调用预算，至少预留一次抽取机会；协议无效时保留原排序，不重试。
 - **段落选择**：只把相关段落送模型，而非全文。
 - **视觉救援按需触发**：PDF 先走免费的 `pypdf` 文字层，只有扫描版（文字层过短）才渲染前 N 页送多模态模型（OpenClaw 网关）；页面图片转写默认关闭，需正文极短才触发。视觉调用有独立的 per-run 上限（`vision_extract.max_calls_per_run`）。
 - **一次性 bundle 抽取**：一篇文章尽量一次完成多类抽取；正文过长时才分块。

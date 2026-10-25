@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from typing import Any
+from contextlib import nullcontext
+from functools import wraps
 
 from .adapters.common import ToolResult
 from .db import SQLiteStore, dumps_json, loads_json
@@ -13,14 +15,31 @@ from .variable_mapper import CandidateVariableMapper
 MODEL_LINK_ACCEPT_CONFIDENCE = 0.65
 
 
+def _guard_result_write(method):
+    @wraps(method)
+    def guarded(self, *args, **kwargs):
+        with self.write_guard():
+            return method(self, *args, **kwargs)
+    return guarded
+
+
 class ResultPersister:
     def __init__(self, store: SQLiteStore):
         self.store = store
         self.candidate_mapper = CandidateVariableMapper()
+        self.write_guard = nullcontext
 
+    @_guard_result_write
     def save_run(self, *, task: dict[str, Any], ticket_id: str | None, result: ToolResult, demand_id: str | None = None) -> str:
+        """Keep each delivery's result while deduplicating local persistence of that result.
+
+        A retry is new execution evidence, even when the prior execution failed. Callers that
+        predate delivery keys retain their original idempotency key for compatibility.
+        """
         run_id = new_id("run")
         idem = make_idempotency_key("run", task.get("idempotency_key"), result.tool_name, result.operation)
+        if task.get("_execution_key") is not None:
+            idem = make_idempotency_key(idem, "execution", task["_execution_key"])
         with self.store.session() as con:
             existing = con.execute("SELECT run_id FROM collection_runs WHERE idempotency_key=?", (idem,)).fetchone()
             if existing:
@@ -54,6 +73,26 @@ class ResultPersister:
             )
         return run_id
 
+    def successful_run(self, task: dict[str, Any], tool_name: str, operation: str) -> str | None:
+        """Locate prior successful execution evidence without mistaking a failed run for it."""
+        if not task.get("task_id") and not task.get("idempotency_key"):
+            return None
+        base_key = make_idempotency_key("run", task.get("idempotency_key"), tool_name, operation)
+        execution_prefix = base_key + ":execution:"
+        query = (
+            "SELECT run_id FROM collection_runs WHERE tool_name=? AND operation=? AND status='success' "
+            "AND (idempotency_key=? OR substr(idempotency_key,1,?)=?)"
+        )
+        params = [tool_name, operation, base_key, len(execution_prefix), execution_prefix]
+        if task.get("task_id"):
+            query += " AND task_id=?"
+            params.append(task["task_id"])
+        query += " ORDER BY created_at DESC, rowid DESC LIMIT 1"
+        with self.store.session() as con:
+            row = con.execute(query, params).fetchone()
+        return str(row["run_id"]) if row else None
+
+    @_guard_result_write
     def save_mic_structures(self, *, task: dict[str, Any], result: ToolResult) -> dict[str, int]:
         report = result.result if isinstance(result.result, dict) else {}
         if report.get("event_resolution_protocol"):
@@ -186,7 +225,8 @@ class ResultPersister:
             # coverage_gaps are not always returned inline. If MIC returns count only, this stays 0.
             for gap in report.get("coverage_gaps", []) or []:
                 description = gap.get("description") or str(gap)[:300]
-                gap_id = gap.get("gap_id") or new_id("gap")
+                gap_id = gap.get("gap_id") or "gap_" + stable_hash(
+                    [task.get("task_id"), target_id, report.get("search_run_id"), gap], 24)
                 con.execute(
                     """
                     INSERT OR IGNORE INTO coverage_gaps(
@@ -350,6 +390,7 @@ class ResultPersister:
             inserted += cur.rowcount if cur.rowcount > 0 else 0
         return inserted
 
+    @_guard_result_write
     def save_hk_connect_snapshot(self, *, task: dict[str, Any], result: ToolResult, run_id: str | None = None) -> int:
         """Upsert one HK-connect structured snapshot per (ticker, as_of)."""
         data = result.result if isinstance(result.result, dict) else {}
@@ -405,6 +446,7 @@ class ResultPersister:
             )
         return 1
 
+    @_guard_result_write
     def save_market_context_snapshot(self, *, task: dict[str, Any], result: ToolResult, run_id: str | None = None) -> int:
         """Upsert one market-context snapshot per (context_id, as_of)."""
         data = result.result if isinstance(result.result, dict) else {}

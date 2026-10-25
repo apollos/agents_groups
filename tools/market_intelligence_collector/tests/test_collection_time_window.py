@@ -53,7 +53,7 @@ def collect(pipe, window="30d"):
         "budget_profile": {"max_queries": 1, "max_search_hits": 10, "max_links_to_read": 10, "max_model_calls": 10}})
 
 
-def test_only_verified_recent_source_reaches_extraction(config, monkeypatch):
+def test_only_verified_recent_source_is_published_after_date_review(config, monkeypatch):
     pipe = pipeline(config, monkeypatch, {"old": "2025-08-06", "unknown": None,
                                          "future": "2026-10-05", "recent": "2026-10-03"})
     report = collect(pipe)
@@ -61,11 +61,16 @@ def test_only_verified_recent_source_reaches_extraction(config, monkeypatch):
     assert diag["passed"] == 1
     assert diag["filtered_by_reason"] == {"outside_time_window": 1,
         "publication_time_unverified": 1, "future_publication_time": 1}
-    assert report["summary"]["links_model_analyzed"] == 1
+    # An unknown date may be reviewed in its existing extraction call; without
+    # a supported publication claim its output still cannot pass the window.
+    assert report["summary"]["links_model_analyzed"] == 2
     assert report["structured_outputs"]["briefs"] == 1
     with pipe.repo.db.session() as db:
         analyzed = db.query(m.SourceLink).join(m.ModelRun, m.ModelRun.source_link_id == m.SourceLink.id).all()
-        assert analyzed and all(link.url.endswith("/recent") for link in analyzed)
+        assert {link.url.rsplit("/", 1)[-1] for link in analyzed} == {"unknown", "recent"}
+        published = db.query(m.SourceLink).join(
+            m.MergedAnalysis, m.MergedAnalysis.source_link_id == m.SourceLink.id).all()
+        assert published and all(link.url.endswith("/recent") for link in published)
         assert db.query(m.CoverageGapRow).count() >= 3
         rejected = db.query(m.SourceLink).filter(m.SourceLink.url.endswith("/unknown")).one()
         assert rejected.triage_decision == "link_record_only"
@@ -75,9 +80,12 @@ def test_only_verified_recent_source_reaches_extraction(config, monkeypatch):
 
 
 def test_all_stale_or_unknown_report_filtered_not_model_failure(config, monkeypatch):
+    # Isolate date admission from the default two-model fallback policy. An
+    # unknown date uses the normal extraction, not a separate date-only call.
+    config.raw["model_policies"]["tasks"]["bundle_extraction"]["call_mode"] = "single_model"
     pipe = pipeline(config, monkeypatch, {"old": "2025-08-06", "unknown": None})
     report = collect(pipe)
-    assert report["summary"]["model_calls"] == 0
+    assert report["summary"]["model_calls"] == 1
     assert report["collection_diagnostics"]["output_status"] == "time_window_filtered"
     assert not report["collection_diagnostics"]["usable"]
     assert report["structured_outputs"]["coverage_gaps"] == 2
@@ -91,7 +99,7 @@ def test_historical_cache_cannot_bypass_current_window(config, monkeypatch, date
     current = collect(pipe)
     assert current["summary"]["links_read"] == 1
     assert current["summary"]["cached_or_reused_results"] == 0
-    assert current["summary"]["links_model_analyzed"] == 0
+    assert current["summary"]["links_model_analyzed"] == (1 if date is None else 0)
     assert current["structured_outputs"]["briefs"] == 0
 
 

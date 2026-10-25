@@ -7,6 +7,7 @@ from typing import Any
 from .db import SQLiteStore, dumps_json, loads_json
 from .ids import make_idempotency_key, new_id
 from .queue import SQLiteMessageQueue
+from .task_lifecycle import sync_task_statuses
 from .tickets import TicketRepository
 from .time_utils import local_day_utc_range
 
@@ -80,6 +81,7 @@ class DailyReportBuilder:
         }
 
     def _summary(self, trade_date: str, *, top_n: int = 10) -> dict[str, Any]:
+        sync_task_statuses(self.data_store, self.bus_store)
         # trade_date is a local trading day; created_at columns store naive UTC strings, so all
         # date filters use the local day's UTC range instead of date(created_at) comparison.
         day = local_day_utc_range(trade_date, self.timezone)

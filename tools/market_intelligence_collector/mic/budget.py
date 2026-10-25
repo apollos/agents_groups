@@ -59,22 +59,24 @@ SCOPED_LIMITS = (
     "min_engine_interval_seconds",
 )
 
+# Bounded single-company research defaults. Quick checks should request a smaller
+# task budget explicitly; deployment limits remain the ceiling for every task.
 DEFAULT_LIMITS: dict[str, int] = {
-    "max_queries": 2,
+    "max_queries": 4,
     "max_search_pages_per_query": 3,
     "max_search_pages_per_run": 6,
     "max_engines_per_query": 2,
     "results_per_page_cap": 10,
     "max_hits_per_query": 30,
     "max_search_hits": 60,
-    "max_links_to_read": 2,
-    "max_http_read_attempts": 2,
-    "max_browser_read_attempts": 2,
+    "max_links_to_read": 4,
+    "max_http_read_attempts": 8,
+    "max_browser_read_attempts": 4,
     "max_authenticated_retries_per_origin": 1,
     "max_authenticated_retries_per_run": 1,
-    "max_model_calls": 3,
-    "max_gateway_requests": 3,
-    "max_run_seconds": 300,
+    "max_model_calls": 8,
+    "max_gateway_requests": 8,
+    "max_run_seconds": 600,
     "max_page_seconds": 25,
     "min_engine_interval_seconds": 3,
     "max_retries_per_page": 0,
@@ -145,11 +147,13 @@ class RunBudget:
         for c in COUNTERS:
             self.used.setdefault(c, 0)
         if self.deadline_at is None:
-            self.deadline_at = self.started_at + float(self.limits.get("max_run_seconds", 300))
+            self.deadline_at = self.started_at + float(
+                self.limits.get("max_run_seconds", DEFAULT_LIMITS["max_run_seconds"]))
         else:
             # A supervisor deadline may only shorten the run.
             self.deadline_at = min(self.deadline_at,
-                                   self.started_at + float(self.limits.get("max_run_seconds", 300)))
+                                   self.started_at + float(self.limits.get(
+                                       "max_run_seconds", DEFAULT_LIMITS["max_run_seconds"])))
 
     # --- time / cancellation -------------------------------------------
 

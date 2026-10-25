@@ -61,6 +61,21 @@ SQLiteMessageQueue
 Tool Run / Event / Feature / Quality Ticket
 ```
 
+`collection_tasks.status` 是 Ticket 与投递状态的查询投影，不是独立状态机。
+Agent、Runtime 和 Recovery 在转换后尽力同步；Reader、状态命令、Dashboard 与日报
+在读取任务状态前同步。如果同步失败，正式读取报告错误，不把旧状态当作当前状态。
+这一步只修复状态，不触发工具调用。`done` 表示工作已结束，是否有可用内容仍须看
+`usable`、`output_status` 和内容证据。
+
+每次领取消息递增 `lease_generation`；人工重试可重置次数，但不会重置代次。
+工作线程写入结果、更新 Ticket 或 ack/nack 时核对当前租约，暂停取消与这些本地写入
+通过 bus 事务互斥。工具调用期间不持有数据库写锁；状态、bus、data 共用同一文件时，
+嵌套本地写入复用连接并保留外层事务。
+
+采集完成的 Ticket 终态与原始 `collection.result` 待发送载荷在同一事务保存。
+通知发送失败时，Recovery 按记录幂等补发，不重做采集，也不替缺少该记录的历史任务
+推断业务结果。不同执行代次分别保存运行记录，避免后续成功被首次失败的幂等记录遮住。
+
 ## 5. 独立 Memory
 
 `agent_memories.agent_id = config.agent.agent_id`。

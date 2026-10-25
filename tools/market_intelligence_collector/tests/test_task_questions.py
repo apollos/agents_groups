@@ -62,7 +62,7 @@ def test_terms_come_from_explicit_search_terms_only_when_given():
 def test_task_context_is_none_without_questions_and_lists_question_and_period():
     assert task_context([]) is None
     ctx = task_context(parse_task_questions({"questions": [QUESTION]}))
-    assert ctx["questions"] == [{"question": QUESTION["question"], "period": "2025年度"}]
+    assert ctx["questions"] == [{"question_id": "q1", "question": QUESTION["question"], "period": "2025年度"}]
 
 
 # --- planner --------------------------------------------------------------------------

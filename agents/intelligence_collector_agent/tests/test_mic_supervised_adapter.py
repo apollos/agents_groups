@@ -422,12 +422,12 @@ def test_lease_loss_cancels_worker_and_leaves_message_to_new_owner(tmp_path, stu
     real_extend = agent.queue.extend_lease
     calls = {"n": 0}
 
-    def steal_then_extend(message_id, worker_id, lease_seconds):
+    def steal_then_extend(message_id, worker_id, lease_seconds, **lease_kwargs):
         calls["n"] += 1
         if calls["n"] == 3:  # another consumer re-leased the message
             with agent.bus_store.session() as con:
                 con.execute("UPDATE messages SET lease_owner='other-worker' WHERE message_id=?", (message_id,))
-        return real_extend(message_id, worker_id, lease_seconds)
+        return real_extend(message_id, worker_id, lease_seconds, **lease_kwargs)
 
     monkeypatch.setattr(agent.queue, "extend_lease", steal_then_extend)
     t0 = time.monotonic()

@@ -28,6 +28,28 @@ PARTIES = {
     "award_catl": {"subject": "宁德时代", "counterparty": None, "product": "钠离子储能系统"},
     "award_yuanjing": {"subject": "远景能源", "counterparty": None, "product": "磷酸铁锂储能系统"},
 }
+# Human-reviewed scopes for the positive contract example only. p0 locates the
+# project, p1/p2 name each lot and its product. This is not company domicile or
+# an inferred reporting region. One observation reused by amount and capacity
+# records has ONE scope value; retain the capacity in its metric, not a second
+# spelling of the same lot's scope. The saved real response remains untouched.
+PROJECT_SCOPE = {"product": "磷酸铁锂+钠电池储能系统", "region": "河北任丘",
+                 "segment": "全项目（100MW/400MWh）"}
+SODIUM_SCOPE = {"product": "钠离子储能系统", "region": "河北任丘",
+                "segment": "二标段（10MW/40MWh）"}
+LFP_SCOPE = {"product": "磷酸铁锂电池储能系统", "region": "河北任丘",
+             "segment": "一标段（30MW/120MWh+60MW/240MWh）"}
+SCOPE_LABELS = {
+    "project_result": (PROJECT_SCOPE, ("p0",)),
+    "project_public": (PROJECT_SCOPE, ("p0",)),
+    "award_catl": (SODIUM_SCOPE, ("p0", "p2")),
+    "price_catl": (SODIUM_SCOPE, ("p0", "p2")),
+    "amount_catl": (SODIUM_SCOPE, ("p0", "p2")),
+    "unit_price_catl": (SODIUM_SCOPE, ("p0", "p2")),
+    "award_yuanjing": (LFP_SCOPE, ("p0", "p1")),
+    "price_yuanjing": (LFP_SCOPE, ("p0", "p1")),
+    "unit_price_yuanjing": (LFP_SCOPE, ("p0", "p1")),
+}
 
 
 def passages(sample):
@@ -46,6 +68,15 @@ def gold_response(index, context):
     review.update(protocol=PROTOCOL, bindings={})
     claims = {c["id"]: c for c in review["claims"]}
     body = {p["passage_id"]: p["text"] for p in sample["passages"]}
+    for cid, (scope, pids) in SCOPE_LABELS.items():
+        if cid not in claims:
+            continue
+        claim = claims[cid]
+        claim.setdefault("field_values", {})["scope"] = deepcopy(scope)
+        for pid in pids:
+            evidence = {"passage_id": pid, "quote": body[pid]}
+            if evidence not in claim["evidence"]:
+                claim["evidence"].append(evidence)
     raw = {"decision": "save_structured", "overall_score": 76, "confidence": .85,
            "events": [], "metrics": [], "facts": [], "content_review": review}
     for i, original in enumerate(sample["events"]):
@@ -57,7 +88,7 @@ def gold_response(index, context):
         if event.get("metrics", {}).get("amount_input"):
             event["metrics"] = deepcopy(event["metrics"]["amount_input"])
         # Source p0 explicitly dates the announcement; p1/p2 give the lots.
-        if not any(e["passage_id"] == "p0" for e in claims[cid]["evidence"]):
+        if {"passage_id": "p0", "quote": body["p0"]} not in claims[cid]["evidence"]:
             claims[cid]["evidence"].append({"passage_id": "p0", "quote": body["p0"]})
         party_id = "roles_" + cid
         review["claims"].append({"id": party_id, "kind": "identity", "status": "source_supported",
@@ -65,7 +96,12 @@ def gold_response(index, context):
             "depends_on": [cid], "evidence": deepcopy(claims[cid]["evidence"]),
             "field_values": {"entities": deepcopy(PARTIES[cid])}})
         claims[cid]["field_values"] = {**(claims[cid].get("field_values") or {}),
-                                       "event_type": event["event_type"]}
+                                       "event_type": event["event_type"],
+                                       "event_date": "2026-09-15",
+                                       "event_date_assessment": {
+                                           "protocol": "date_review_v1", "possible_roles": ["source_publication"],
+                                           "selected_role": "source_publication", "basis": "explicit_publication",
+                                           "evidence": [{"passage_id": "p0", "quote": body["p0"]}]}}
         review["bindings"][f"/events/{i}"] = [cid]
         review["bindings"][f"/events/{i}/entities"] = [party_id]
         evidence = deepcopy(claims[cid]["evidence"])
@@ -92,8 +128,11 @@ def gold_response(index, context):
     for i, original in enumerate(sample["metric_candidates"]):
         metric = deepcopy(original)
         metric.update(interpretation="", impact_channels=[], comparison={})
+        ids = sample["model_review"]["bindings"][f"/metrics/{i}/metric_value"]
+        assert len(ids) == 1
+        metric["scope"] = deepcopy(SCOPE_LABELS[ids[0]][0])
         raw["metrics"].append(metric)
-        review["bindings"][f"/metrics/{i}"] = sample["model_review"]["bindings"][f"/metrics/{i}/metric_value"]
+        review["bindings"][f"/metrics/{i}"] = ids
     return raw
 
 
@@ -116,8 +155,11 @@ def test_whole_record_review_preserves_actual_metric_names_values_units_and_date
     raw = gold_response(index, build_context(None, []))
     bundle = validate(raw, SAMPLES[index])
     assert len(bundle.metrics) == 6
+    assert len(bundle.events) == len(FOCUS[index])
     assert [(m.metric_name, m.metric_value, m.unit, m.period) for m in bundle.metrics] == [
         (m["metric_name"], m["metric_value"], m["unit"], m["period"]) for m in raw["metrics"]]
+    assert [{key: metric.scope[key] for key in ("product", "region", "segment")}
+            for metric in bundle.metrics] == [metric["scope"] for metric in raw["metrics"]]
     assert all(e.event_date == "2026-09-15" and e.event_type != "unknown" for e in bundle.events)
     assert all(e.entities == PARTIES[FOCUS[index][i]] for i, e in enumerate(bundle.events))
     assert contract_diagnostics([bundle.content_review])["complete"] is True

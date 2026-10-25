@@ -45,6 +45,12 @@ def case():
               claim("quote", "来源报道磷酸铁锂标段合单价0.518元/Wh。", "p1"),
               claim("comparison", compare, "p1", "pending_review", kind="comparability"),
               claim("profit", "由价格对标可以证明盈利优势。", "p1", dependencies=["comparison"], kind="analysis")]
+    # p0 explicitly dates the public award notice; the date shares the existing
+    # observation rather than borrowing its supported status without a value.
+    claims[0]["field_values"] = {"event_date": "2026-09-15", "event_date_assessment": {
+        "protocol": "date_review_v1", "possible_roles": ["source_publication"],
+        "selected_role": "source_publication", "basis": "explicit_publication",
+        "evidence": deepcopy(claims[0]["evidence"])}}
     parties = claim("parties", "宁德时代为获标方；业主未确认。", kind="identity")
     parties["field_values"] = {"entities": {"subject": "宁德时代"}}
     project_role = claim("project_role", "文中该名称是项目名称。", "p0", kind="identity")

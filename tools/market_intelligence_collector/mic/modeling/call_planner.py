@@ -10,7 +10,9 @@ NOT decide cheap-vs-strong; all model selection comes from config.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass, field
+from hashlib import sha256
 from typing import TYPE_CHECKING
 
 from mic.config import MICConfig
@@ -19,9 +21,12 @@ from mic.modeling.prompts import (
     build_arbitration_messages,
     build_batch_triage_messages,
     build_bundle_messages,
+    build_json_recovery_messages,
 )
 from mic.profile import TargetProfile
 from mic.schemas import Passage, TriageResult
+from mic.task_triage import (PROTOCOL as TASK_TRIAGE_PROTOCOL, INDEX_BASIS,
+                             SEARCH_BASIS, validate_task_triage)
 
 if TYPE_CHECKING:  # type-hint only; a runtime import would be circular
     # (reader -> modeling.vision -> modeling/__init__ -> call_planner -> reader)
@@ -78,12 +83,43 @@ class ModelCallPlanner:
         self.budgets_cfg = gov.get("budgets", {})
         self.batching_cfg = gov.get("batching", {})
         self.extraction_cfg = gov.get("extraction", {})
-        self.max_input_chars = self.budgets_cfg.get("max_input_chars_per_model_call", 8000)
+        self.max_input_chars = self.budgets_cfg.get("max_input_chars_per_model_call", 32000)
         self.output_limits = (config.output_schema or {}).get("limits", {})
         self.triage_results: list[ModelCallResult] = []
+        self.task_triage_reviews: list[dict] = []
         # Run-level research questions (mic.task_questions.task_context); set by the
         # pipeline per run and attached to every extraction / arbitration prompt.
         self.task_context: dict | None = None
+        # Snapshot of effective run limits/remaining before each existing triage call.
+        self.triage_budget_context: dict | None = None
+        self.acceptance_trace = None
+        self._source_calls: dict[str, int] = {}
+        self._json_recovery_used = False
+
+    def _complete(self, adapter, messages, *, json_recovery=None):
+        if self.acceptance_trace is None:
+            result = adapter.complete(messages)
+            if json_recovery is not None:
+                result.json_recovery = dict(json_recovery)
+            return result
+        if json_recovery is not None:
+            return self.acceptance_trace.complete(adapter, messages, json_recovery=json_recovery)
+        return self.acceptance_trace.complete(adapter, messages)
+
+    @contextmanager
+    def _source_budget(self, source_link_id):
+        # Extraction, chunks, recovery and arbitration share one source ceiling.
+        # Dispatch is synchronous; restore the configured ceiling on every exit.
+        ceiling = self.budget.max_model_calls_per_source_link
+        self.budget.max_model_calls_per_source_link = max(
+            0, ceiling - self._source_calls.get(source_link_id, 0))
+        before = self.budget.calls_used
+        try:
+            yield
+        finally:
+            self._source_calls[source_link_id] = self._source_calls.get(source_link_id, 0) + (
+                self.budget.calls_used - before)
+            self.budget.max_model_calls_per_source_link = ceiling
 
     # --- decision ----------------------------------------------------------
 
@@ -153,16 +189,58 @@ class ModelCallPlanner:
         policy = self.policies.get(task, {})
         call_mode = policy.get("call_mode", "single_model")
 
-        chunks = self._passage_chunks(read.passages)
-        if len(chunks) > 1 and self._split_enabled():
-            outputs = self._run_split(profile, source_metadata, chunks, policy)
-            return LinkModelResult(read.source_link_id, task, call_mode,
-                                   outputs=outputs, was_split=True)
+        with self._source_budget(read.source_link_id):
+            if self.budget.max_model_calls_per_source_link <= 0:
+                return LinkModelResult(read.source_link_id, task, "no_model",
+                                       skipped_reason="source_model_budget_exhausted")
+            chunks = self._passage_chunks(read.passages)
+            if len(chunks) > 1 and self._split_enabled():
+                outputs = self._run_split(profile, source_metadata, chunks, policy)
+                return LinkModelResult(read.source_link_id, task, call_mode,
+                                       outputs=outputs, was_split=True)
 
-        messages = build_bundle_messages(profile, source_metadata, read.passages,
-                                         self.output_limits, task_context=self.task_context)
-        outputs = self._dispatch(call_mode, policy, messages)
-        return LinkModelResult(read.source_link_id, task, call_mode, outputs=outputs)
+            messages = build_bundle_messages(profile, source_metadata, read.passages,
+                                             self.output_limits, task_context=self.task_context)
+            outputs = self._dispatch(call_mode, policy, messages)
+            self._recover_json(outputs, messages)
+            return LinkModelResult(read.source_link_id, task, call_mode, outputs=outputs)
+
+    def _recover_json(self, outputs, messages):
+        """One explicit source re-extraction, inside all existing budgets.
+
+        Ordinary fallback runs first. No valid JSON output is retried for weak
+        evidence, low scores or failed review; malformed text is never repaired
+        locally or reused as source material. Split/triage/arbitration do not use
+        this path. A failed recovery never starts another fallback chain.
+        """
+        if (not self.extraction_cfg.get("json_recovery", {}).get("enabled", True)
+                or self._json_recovery_used or not outputs
+                or outputs[-1].status != "json_invalid"
+                or any(r.status == "success" and r.parsed is not None for r in outputs)
+                or len(outputs) >= self.budget.max_model_calls_per_source_link
+                or not self.budget.can_call()):
+            return
+        parent = outputs[-1]
+        adapter = self.registry.get(parent.model_config_id)
+        if adapter is None or not adapter.usable:
+            return
+        runtime_budget = adapter.budget
+        if runtime_budget is not None and not runtime_budget.can("gateway_requests_sent"):
+            return  # Includes cancellation/deadline; do not create a phantom send.
+        recovery = {
+            "strategy": "reextract_original_input", "attempt": 1,
+            "parent_output_index": len(outputs) - 1,
+            "parent_response_sha256": sha256(parent.raw_text.encode("utf-8")).hexdigest(),
+        }
+        if parent.provider_request_id:
+            recovery["parent_provider_request_id"] = parent.provider_request_id
+        if parent.acceptance_trace and parent.acceptance_trace.get("trace_id"):
+            recovery["parent_trace_id"] = parent.acceptance_trace["trace_id"]
+        self._json_recovery_used = True
+        result = self._complete(adapter, build_json_recovery_messages(messages),
+                                json_recovery=recovery)
+        self.budget.record()
+        outputs.append(result)
 
     def _dispatch(self, call_mode: str, policy: dict,
                   messages: list[dict]) -> list[ModelCallResult]:
@@ -179,13 +257,13 @@ class ModelCallPlanner:
     def _single_model(self, policy: dict, messages: list[dict]) -> list[ModelCallResult]:
         """Call exactly one configured model (spec 11.1 single_model)."""
         models = sorted(policy.get("models", []), key=lambda x: x.get("priority", 99))
-        if not self.budget.can_call(1):
+        if self.budget.max_model_calls_per_source_link <= 0 or not self.budget.can_call(1):
             return []
         for spec in models:
             adapter = self.registry.get(spec["model_id"])
             if adapter is None or not adapter.usable:
                 continue
-            res = adapter.complete(messages)
+            res = self._complete(adapter, messages)
             self.budget.record(1)
             return [res]
         return []
@@ -201,7 +279,7 @@ class ModelCallPlanner:
             adapter = self.registry.get(spec["model_id"])
             if adapter is None or not adapter.usable:
                 continue
-            res = adapter.complete(messages)
+            res = self._complete(adapter, messages)
             self.budget.record(1)
             results.append(res)
             if self._early_stop(res, conf_threshold):
@@ -222,7 +300,7 @@ class ModelCallPlanner:
             adapter = self.registry.get(spec["model_id"])
             if adapter is None or not adapter.usable:
                 continue
-            res = adapter.complete(messages)
+            res = self._complete(adapter, messages)
             self.budget.record(1)
             results.append(res)
         return results
@@ -240,7 +318,7 @@ class ModelCallPlanner:
             adapter = self.registry.get(spec["model_id"])
             if adapter is None or not adapter.usable:
                 continue
-            res = adapter.complete(messages)
+            res = self._complete(adapter, messages)
             self.budget.record(1)
             results.append(res)
             # Unlike fallback, cascade keeps prior outputs; it only stops calling
@@ -252,10 +330,13 @@ class ModelCallPlanner:
 
     # --- batch SERP triage (spec 11.1 batch_triage + 15.2 D) --------------
 
-    def batch_triage(self, items: list[dict]) -> dict[str, dict]:
+    def batch_triage(self, items: list[dict], *,
+                     navigation_context: dict | None = None) -> dict[str, dict]:
         """Triage a batch of search-hit summaries in a single model call.
 
-        ``items`` = [{"id", "title", "snippet"}]. Returns id -> decision dict.
+        ``items`` includes id/title/snippet and optional URL/domain/rule priority.
+        Returns id -> decision dict. With research questions, only a complete
+        validated model ranking may alter task-directed reading order.
         Respects a dedicated batch-triage sub-budget so it never starves
         extraction calls.
         """
@@ -265,17 +346,46 @@ class ModelCallPlanner:
         if not self.budget.can_call_batch_triage():
             return {}
         models = sorted(policy.get("models", []), key=lambda x: x.get("priority", 99))
-        messages = build_batch_triage_messages(items)
+        task_aware = bool(self.task_context and self.task_context.get("questions"))
+        if navigation_context is not None and not task_aware:
+            return {}  # Directory following requires a complete task-bound ranking.
+        messages = build_batch_triage_messages(
+            items, task_context=self.task_context, reading_budget=self.triage_budget_context,
+            navigation_context=navigation_context)
+        if navigation_context is not None and len(messages[-1]["content"]) > self.max_input_chars:
+            return {}  # Never silently truncate the evidence-to-URL binding.
+        basis = INDEX_BASIS if navigation_context is not None else SEARCH_BASIS
         for spec in models:
             adapter = self.registry.get(spec["model_id"])
             if adapter is None or not adapter.usable:
                 continue
-            res = adapter.complete(messages)
+            res = self._complete(adapter, messages)
             self.budget.record(1)
             self.budget.batch_triage_calls_used += 1
             # Triage requests have no model_run row; keep them reportable so
             # every gateway send stays traceable (A4).
             self.triage_results.append(res)
+            if task_aware:
+                review = {
+                    "protocol": TASK_TRIAGE_PROTOCOL,
+                    "model_config_id": res.model_config_id,
+                    "provider_request_id": res.provider_request_id,
+                    "request_status": res.status,
+                    "raw_text": res.raw_text,
+                    "reading_budget": self.triage_budget_context,
+                    "basis": basis,
+                }
+                if navigation_context is not None:
+                    review["navigation_context"] = navigation_context
+                if res.status == "success":
+                    out = validate_task_triage(items, res.parsed, review=review, basis=basis)
+                else:
+                    out = {}
+                    review.update({"status": "not_assessed", "raw": res.parsed,
+                                   "input_ids": [item.get("id") for item in items],
+                                   "errors": ["model_request_unsuccessful"]})
+                self.task_triage_reviews.append(review)
+                return out
             if res.status == "success" and res.parsed:
                 out = {}
                 for r in res.parsed.get("results", []):
@@ -298,7 +408,8 @@ class ModelCallPlanner:
         messages = build_arbitration_messages(
             profile, source_metadata, read.passages, self.output_limits, conflicts,
             task_context=self.task_context)
-        return self._priority_fallback(policy, messages)
+        with self._source_budget(read.source_link_id):
+            return self._priority_fallback(policy, messages)
 
     @staticmethod
     def arbitration_triggered(conflicts: list[dict], config: MICConfig) -> bool:
@@ -334,8 +445,10 @@ class ModelCallPlanner:
             size += len(p.text)
         if current:
             chunks.append(current)
-        # Bound chunk count by the per-link call budget.
-        return chunks[: self.budget.max_model_calls_per_source_link]
+        # Preserve the split decision even if only one source slot remains.
+        # _run_split bounds actual calls; truncating here could turn multiple
+        # chunks into a "single" unsplit request with all original passages.
+        return chunks
 
     def _run_split(self, profile: TargetProfile, source_metadata: dict,
                    chunks: list[list[Passage]], policy: dict) -> list[ModelCallResult]:
@@ -349,11 +462,12 @@ class ModelCallPlanner:
             return []
         results: list[ModelCallResult] = []
         for chunk in chunks:
-            if not self.budget.can_call(1):
+            if (len(results) >= self.budget.max_model_calls_per_source_link
+                    or not self.budget.can_call(1)):
                 break
             messages = build_bundle_messages(profile, source_metadata, chunk,
                                              self.output_limits, task_context=self.task_context)
-            res = adapter.complete(messages)
+            res = self._complete(adapter, messages)
             self.budget.record(1)
             results.append(res)
         return results

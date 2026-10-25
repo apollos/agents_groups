@@ -14,6 +14,9 @@ from typing import Any
 from sqlalchemy import func, select
 
 from mic import schemas
+from mic.content_review import (cache_comparisons_current, enforce_reviewed_comparisons,
+                                cache_scopes_current, enforce_reviewed_scope, enforce_scope_coverage,
+                                enforce_reviewed_dates, enforce_source_publication_dates)
 from mic.store import models as m
 from mic.store.database import Database
 from mic.utils import new_id, now, parse_time_window_days
@@ -194,7 +197,7 @@ class Repository:
                 stmt = stmt.where(m.SourceLink.search_run_id != exclude_run_id)
             if reviewed_only:
                 stmt = self._reviewed_analysis(stmt)
-            return s.scalars(stmt.order_by(m.MergedAnalysis.created_at.desc())).first()
+            return self._first_date_compatible_link(s, stmt, target_id, reviewed_only=reviewed_only)
 
     def find_analyzed_link_by_content_hash(
         self, content_hash: str, target_id: str,
@@ -216,7 +219,74 @@ class Repository:
                 stmt = stmt.where(m.SourceLink.id != exclude_link_id)
             if reviewed_only:
                 stmt = self._reviewed_analysis(stmt)
-            return s.scalars(stmt.order_by(m.MergedAnalysis.created_at.desc())).first()
+            return self._first_date_compatible_link(s, stmt, target_id, reviewed_only=reviewed_only)
+
+    def _first_date_compatible_link(self, session, stmt, target_id: str, *, reviewed_only=True):
+        """Old review seals cannot silently authorize newly required date roles."""
+        for link in session.scalars(stmt.order_by(m.MergedAnalysis.created_at.desc())).unique():
+            query = select(m.MergedAnalysis).where(
+                m.MergedAnalysis.source_link_id == link.id,
+                m.MergedAnalysis.target_id == target_id)
+            if reviewed_only:
+                query = self._reviewed_analysis(query)
+            merged = session.scalars(query.order_by(m.MergedAnalysis.created_at.desc())).first()
+            if merged is not None and self._cache_dates_current(session, merged, check_events=reviewed_only):
+                return link
+        return None
+
+    @staticmethod
+    def _cache_comparisons_current(session, merged) -> bool:
+        if not cache_comparisons_current(merged.content_review or {}):
+            return False
+        for metric in session.scalars(select(m.MetricObservationRow).where(
+                m.MetricObservationRow.merged_analysis_id == merged.id)):
+            raw = {"comparison": metric.comparison, "content_review": metric.content_review or {}}
+            if enforce_reviewed_comparisons("metrics", raw, merged.content_review).get("comparison") != metric.comparison:
+                return False
+        return True
+
+    @staticmethod
+    def _scope_records(session, merged):
+        return [{"scope": metric.scope or {}, "content_review": metric.content_review or {}}
+                for metric in session.scalars(select(m.MetricObservationRow).where(
+                    m.MetricObservationRow.merged_analysis_id == merged.id))]
+
+    @staticmethod
+    def _cache_scopes_current(session, merged) -> bool:
+        return cache_scopes_current(merged.content_review or {}, Repository._scope_records(session, merged))
+
+    @staticmethod
+    def _cache_dates_current(session, merged, *, check_events: bool = True) -> bool:
+        """Reject legacy comparison/date approvals using shared review only.
+
+        Reject the entire old analysis when its fields would be withheld: its
+        summary/dependent claims may repeat the same unsupported judgment. A
+        new extraction uses the caller's budget, never a hidden retry.
+        """
+        if not Repository._cache_comparisons_current(session, merged):
+            return False
+        if not Repository._cache_scopes_current(session, merged):
+            return False
+        source = session.get(m.SourceLink, merged.source_link_id)
+        publications = [(merged.content_review or {}).get("source_publication")]
+        if source is not None:
+            publications.append((source.metadata_ or {}).get("publication_time"))
+        for publication in publications:
+            if not isinstance(publication, dict):
+                continue
+            projected = enforce_source_publication_dates(publication)
+            if (projected.get("status"), projected.get("published_at")) != (
+                    publication.get("status"), publication.get("published_at")):
+                return False
+        if not check_events:
+            return True
+        for event in session.scalars(select(m.EventCardRow).where(
+                m.EventCardRow.merged_analysis_id == merged.id)):
+            raw = {"event_date": event.event_date.isoformat() if event.event_date else None,
+                   "content_review": event.content_review or {}}
+            if enforce_reviewed_dates("events", raw, stored_utc=True).get("event_date") != raw["event_date"]:
+                return False
+        return True
 
     @staticmethod
     def _reviewed_analysis(stmt):
@@ -227,7 +297,8 @@ class Repository:
     def update_link_triage(self, link_id: str, score: float, decision: str,
                            reason: str | None = None,
                            signals: list[str] | None = None,
-                           need_model: bool | None = None) -> None:
+                           need_model: bool | None = None,
+                           task_review: dict | None = None) -> None:
         with self.db.session() as s:
             row = s.get(m.SourceLink, link_id)
             if row:
@@ -235,7 +306,8 @@ class Repository:
                 row.triage_decision = decision
                 # Persist explainability metadata so explain_source_analysis can
                 # answer "why was this source selected?" (spec section 20).
-                if reason is not None or signals is not None or need_model is not None:
+                if (reason is not None or signals is not None or need_model is not None
+                        or task_review is not None):
                     meta = dict(row.metadata_ or {})
                     if reason is not None:
                         meta["triage_reason"] = reason
@@ -243,7 +315,16 @@ class Repository:
                         meta["matched_signals"] = list(signals)
                     if need_model is not None:
                         meta["need_model"] = bool(need_model)
+                    if task_review is not None:
+                        meta["task_triage"] = deepcopy(task_review)
                     row.metadata_ = meta
+
+    def update_link_publication(self, link_id: str, publication: dict) -> None:
+        """Keep reviewed publication evidence separate from the original SERP guess."""
+        with self.db.session() as s:
+            row = s.get(m.SourceLink, link_id)
+            if row:
+                row.metadata_ = {**(row.metadata_ or {}), "publication_time": deepcopy(publication)}
 
     def update_link_read(self, link_id: str, read_status: str,
                          content_hash: str | None, simhash: str | None,
@@ -576,11 +657,13 @@ class Repository:
         return merged_id
 
     def save_coverage_gaps(self, run_id: str, target_id: str,
-                          gaps: Sequence[schemas.CoverageGap]) -> None:
+                          gaps: Sequence[schemas.CoverageGap], *,
+                          source_link_id: str | None = None) -> None:
         with self.db.session() as s:
             for gap in gaps:
                 s.add(m.CoverageGapRow(
                     id=new_id("gap"), search_run_id=run_id, target_id=target_id,
+                    source_link_id=source_link_id,
                     gap_type=gap.gap_type, description=gap.description,
                     suggested_next_queries=gap.suggested_next_queries,
                     priority=gap.priority, status="open", created_at=now(),
@@ -588,7 +671,7 @@ class Repository:
 
     def clone_latest_analysis(
         self, previous_source_link_id: str, new_source_link_id: str, target_id: str,
-        *, reviewed_only: bool = False,
+        *, reviewed_only: bool = False, publication: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Clone the latest merged structured objects from one link to another.
 
@@ -613,22 +696,45 @@ class Repository:
             merged = s.scalars(query.order_by(m.MergedAnalysis.created_at.desc())).first()
             if merged is None:
                 return counts
-            if merged.content_review:
-                counts["content_review"] = deepcopy(merged.content_review)
+            if not self._cache_dates_current(s, merged, check_events=reviewed_only):
+                counts["cache_reuse_rejected"] = ("comparison_review_requires_refresh"
+                    if not self._cache_comparisons_current(s, merged) else "scope_review_requires_refresh"
+                    if not self._cache_scopes_current(s, merged) else "date_review_requires_refresh")
+                return counts
+            reused_review = deepcopy(merged.content_review or {})
+            # A matching body does not bind the old source's publication date
+            # to the current URL. Keep the old review as historical evidence.
+            if "source_publication" in reused_review:
+                reused_review["cached_source_publication"] = {
+                    "source_link_id": previous_source_link_id,
+                    "publication_time": reused_review.pop("source_publication"),
+                }
+            if publication is not None:
+                reused_review["source_publication"] = enforce_source_publication_dates(publication)
+            # Task coverage belongs to the old question and run, unlike the
+            # source-supported facts. Preserve it as historical audit only.
+            if "task_coverage" in reused_review:
+                reused_review["cached_task_coverage"] = {
+                    "source_link_id": previous_source_link_id,
+                    "task_coverage": reused_review.pop("task_coverage"),
+                    "generated_gaps": reused_review.pop("task_coverage_generated_gaps", []),
+                }
+            if reused_review:
+                counts["content_review"] = reused_review
             def source_rows(model):
                 query = select(model).where(model.source_link_id == previous_source_link_id)
+                if hasattr(model, "merged_analysis_id"):
+                    query = query.where(model.merged_analysis_id == merged.id)
                 if reviewed_only:
                     from mic.content_review_policy import PROTOCOL
                     query = query.where(model.content_review["protocol"].as_string() == PROTOCOL)
-                    if hasattr(model, "merged_analysis_id"):
-                        query = query.where(model.merged_analysis_id == merged.id)
                 return query
 
             new_merged_id = new_id("merged")
             s.add(m.MergedAnalysis(
                 id=new_merged_id, source_link_id=new_source_link_id, target_id=target_id,
                 decision=merged.decision, overall_score=merged.overall_score,
-                content_review=merged.content_review, confidence=merged.confidence, disagreement_level=merged.disagreement_level,
+                content_review=reused_review, confidence=merged.confidence, disagreement_level=merged.disagreement_level,
                 merge_method=f"cache_reuse:{merged.merge_method or 'unknown'}",
                 model_outputs=merged.model_outputs, field_conflicts=merged.field_conflicts,
                 created_at=now(),
@@ -672,10 +778,14 @@ class Repository:
                 counts["metrics"] += 1
 
             for event in s.scalars(source_rows(m.EventCardRow)).all():
+                published = enforce_reviewed_dates("events", {
+                    "event_date": event.event_date.isoformat() if event.event_date else None,
+                    "content_review": event.content_review or {},
+                }, stored_utc=True)
                 s.add(m.EventCardRow(
                     id=new_id("evt"), merged_analysis_id=new_merged_id,
                     source_link_id=new_source_link_id, target_id=target_id,
-                    event_type=event.event_type, event_date=event.event_date,
+                    event_type=event.event_type, event_date=_to_dt(published["event_date"]),
                     summary=event.summary, entities=event.entities, metrics=event.metrics,
                     impact=event.impact, evidence_locator=event.evidence_locator,
                     event_resolution={"protocol": "semantic_event_v1", "status": "pending",
@@ -683,14 +793,14 @@ class Repository:
                     source_context=event.source_context,
                     tracking_variables=event.tracking_variables,
                     source_corroboration_status=event.source_corroboration_status,
-                    content_review=event.content_review, confidence=event.confidence, created_at=now(),
+                    content_review=published["content_review"], confidence=event.confidence, created_at=now(),
                 ))
                 counts["events"] += 1
                 counts["cloned_events"].append({
-                    "content_review": deepcopy(event.content_review),
+                    "content_review": deepcopy(published["content_review"]),
                     "summary": event.summary,
                     "event_type": event.event_type,
-                    "event_date": event.event_date.isoformat() if event.event_date else None,
+                    "event_date": published["event_date"],
                     "impact_channels": (event.impact or {}).get("channels", []),
                     "confidence": event.confidence,
                     "source_link_id": new_source_link_id,
@@ -719,12 +829,17 @@ class Repository:
                 counts["relations"] += 1
 
             for risk in s.scalars(source_rows(m.RiskFlagRow)).all():
+                from mic.content_review import enforce_reviewed_defaults
+                published = enforce_reviewed_defaults("risks", {
+                    "severity": risk.severity, "time_horizon": risk.time_horizon,
+                    "content_review": risk.content_review,
+                })
                 s.add(m.RiskFlagRow(
                     id=new_id("risk"), merged_analysis_id=new_merged_id,
                     source_link_id=new_source_link_id, target_id=target_id,
                     risk_type=risk.risk_type, risk_summary=risk.risk_summary,
-                    severity=risk.severity, time_horizon=risk.time_horizon,
-                    impact_channels=risk.impact_channels, content_review=risk.content_review, confidence=risk.confidence,
+                    severity=published["severity"], time_horizon=published["time_horizon"],
+                    impact_channels=risk.impact_channels, content_review=published["content_review"], confidence=risk.confidence,
                     created_at=now(),
                 ))
                 counts["risks"] += 1
@@ -864,7 +979,7 @@ class Repository:
                 stmt = stmt.where(m.EventCardRow.event_type.in_(event_types))
             stmt = stmt.where(m.EventCardRow.confidence >= min_confidence)
             rows = s.scalars(stmt.order_by(m.EventCardRow.confidence.desc())).all()
-            return [self._event_to_dict(r) for r in rows]
+            return [self._comparison_projection(s, r, "events", self._event_to_dict(r)) for r in rows]
 
     def get_metric_observations(self, target_id: str, metrics: list[str] | None = None,
                                since: str | None = None) -> list[dict]:
@@ -877,7 +992,7 @@ class Repository:
             if metrics:
                 stmt = stmt.where(m.MetricObservationRow.metric_name.in_(metrics))
             rows = s.scalars(stmt.order_by(m.MetricObservationRow.created_at.desc())).all()
-            return [{
+            return [self._comparison_projection(s, r, "metrics", {
                 "metric_id": r.id, "metric_name": r.metric_name,
                 "metric_value": r.metric_value, "unit": r.unit, "period": r.period,
                 "scope": r.scope, "comparison": r.comparison,
@@ -885,7 +1000,7 @@ class Repository:
                 "interpretation": r.interpretation, "impact_channels": r.impact_channels,
                 "content_review": r.content_review or {},
                 "confidence": r.confidence, "source_link_id": r.source_link_id,
-            } for r in rows]
+            }) for r in rows]
 
     def get_relations(self, target_id: str, relation_types: list[str] | None = None,
                      since: str | None = None) -> list[dict]:
@@ -905,23 +1020,24 @@ class Repository:
             # ("多家锂电设备商") are filtered out entirely.
             out: dict[str, dict] = {}
             for r in rows:
-                subj = schemas.EntityRef(**(r.subject_entity or {}))
-                obj = schemas.EntityRef(**(r.object_entity or {}))
-                if subj.is_vague() or obj.is_vague():
-                    continue
-                key = f"{subj.identity_key()}|{r.relation_type}|{obj.identity_key()}"
-                if key in out:
-                    if r.source_link_id not in out[key]["source_link_ids"]:
-                        out[key]["source_link_ids"].append(r.source_link_id)
-                    continue
-                out[key] = {
+                projected = self._comparison_projection(s, r, "relations", {
                     "relation_id": r.id, "subject_entity": r.subject_entity,
                     "relation_type": r.relation_type, "object_entity": r.object_entity,
                     "qualifiers": r.qualifiers, "confidence": r.confidence,
                     "content_review": r.content_review or {},
                     "source_link_id": r.source_link_id,
                     "source_link_ids": [r.source_link_id],
-                }
+                })
+                subj = schemas.EntityRef(**(projected["subject_entity"] or {}))
+                obj = schemas.EntityRef(**(projected["object_entity"] or {}))
+                if subj.is_vague() or obj.is_vague() or not projected["relation_type"]:
+                    continue
+                key = f"{subj.identity_key()}|{projected['relation_type']}|{obj.identity_key()}"
+                if key in out:
+                    if r.source_link_id not in out[key]["source_link_ids"]:
+                        out[key]["source_link_ids"].append(r.source_link_id)
+                    continue
+                out[key] = projected
             return list(out.values())
 
     def search_facts(self, target_id: str, query: str | None = None,
@@ -935,14 +1051,14 @@ class Repository:
             if fact_types:
                 stmt = stmt.where(m.FactItemRow.fact_type.in_(fact_types))
             rows = s.scalars(stmt.order_by(m.FactItemRow.confidence.desc())).all()
-            results = [{
+            results = [self._comparison_projection(s, r, "facts", {
                 "fact_id": r.id, "fact_type": r.fact_type,
                 "fact_statement": r.fact_statement, "entities": r.entities,
                 "metrics": r.metrics, "period": r.period, "direction": r.direction,
                 "evidence_locator": r.evidence_locator,
                 "content_review": r.content_review or {},
                 "confidence": r.confidence, "source_link_id": r.source_link_id,
-            } for r in rows]
+            }) for r in rows]
             if query:
                 # No-match means empty result; silently returning everything
                 # would make the keyword filter meaningless to callers.
@@ -955,21 +1071,22 @@ class Repository:
 
     def get_risks(self, target_id: str, since: str | None = None,
                  severity: list[str] | None = None) -> list[dict]:
+        from mic.content_review import enforce_reviewed_defaults
         with self.db.session() as s:
             stmt = select(m.RiskFlagRow).where(m.RiskFlagRow.target_id == target_id)
             since_dt = self._since_dt(since)
             if since_dt is not None:
                 stmt = stmt.where(m.RiskFlagRow.created_at >= since_dt)
-            if severity:
-                stmt = stmt.where(m.RiskFlagRow.severity.in_(severity))
             rows = s.scalars(stmt.order_by(m.RiskFlagRow.confidence.desc())).all()
-            return [{
+            results = [enforce_reviewed_defaults("risks", self._comparison_projection(s, r, "risks", {
                 "risk_id": r.id, "risk_type": r.risk_type,
                 "risk_summary": r.risk_summary, "severity": r.severity,
                 "time_horizon": r.time_horizon, "impact_channels": r.impact_channels,
                 "content_review": r.content_review or {},
                 "confidence": r.confidence, "source_link_id": r.source_link_id,
-            } for r in rows]
+            })) for r in rows]
+            # Filter the formal rating, never a legacy default withheld by review.
+            return [row for row in results if not severity or row["severity"] in severity]
 
     def get_catalysts(self, target_id: str, from_date: str | None = None,
                      to_date: str | None = None) -> list[dict]:
@@ -982,13 +1099,13 @@ class Repository:
             if td is not None:
                 stmt = stmt.where(m.CatalystItemRow.expected_date <= td)
             rows = s.scalars(stmt.order_by(m.CatalystItemRow.expected_date.asc())).all()
-            return [{
+            return [self._comparison_projection(s, r, "catalysts", {
                 "catalyst_id": r.id, "catalyst_type": r.catalyst_type,
                 "expected_date": r.expected_date.isoformat() if r.expected_date else None,
                 "description": r.description, "potential_impact": r.potential_impact,
                 "content_review": r.content_review or {},
                 "confidence": r.confidence, "source_link_id": r.source_link_id,
-            } for r in rows]
+            }) for r in rows]
 
     def get_analyst_questions(self, target_id: str, priority: str | None = None,
                              status: str | None = None) -> list[dict]:
@@ -1010,7 +1127,8 @@ class Repository:
             } for r in rows]
 
     def get_coverage_gaps(self, target_id: str, priority: str | None = None,
-                          status: str | None = None) -> list[dict]:
+                          status: str | None = None, *,
+                          search_run_id: str | None = None) -> list[dict]:
         with self.db.session() as s:
             stmt = select(m.CoverageGapRow).where(
                 m.CoverageGapRow.target_id == target_id)
@@ -1018,6 +1136,8 @@ class Repository:
                 stmt = stmt.where(m.CoverageGapRow.priority == priority)
             if status:
                 stmt = stmt.where(m.CoverageGapRow.status == status)
+            if search_run_id is not None:
+                stmt = stmt.where(m.CoverageGapRow.search_run_id == search_run_id)
             rows = s.scalars(stmt.order_by(m.CoverageGapRow.created_at.desc())).all()
             return [{
                 "gap_id": r.id, "gap_type": r.gap_type, "description": r.description,
@@ -1082,7 +1202,7 @@ class Repository:
                 "source_link_id": r.id, "title": r.title, "url": r.url,
                 "source_type": r.source_type, "triage_score": r.triage_score,
                 "triage_decision": r.triage_decision, "read_status": r.read_status,
-                "metadata": r.metadata_ or {},
+                "metadata": self._source_metadata_projection(r.metadata_),
             } for r in rows]
 
     def explain_source_analysis(self, source_link_id: str) -> dict:
@@ -1106,18 +1226,42 @@ class Repository:
                 m.AnalystQuestionRow.source_link_id == source_link_id)).all()
             runs = s.scalars(select(m.ModelRun).where(
                 m.ModelRun.source_link_id == source_link_id)).all()
+            publication = (link.metadata_ or {}).get("publication_time") if link else None
+            if publication is None and link:
+                # Legacy rows can have genuine parser evidence, but an engine's
+                # publish_time_guess never becomes verified publication evidence.
+                last_read = s.scalars(select(m.LinkReadAttempt).where(
+                    m.LinkReadAttempt.source_link_id == source_link_id).order_by(
+                    m.LinkReadAttempt.created_at.desc())).first()
+                publication = ((last_read.diagnostics or {}).get("publication_time")
+                               if last_read else None)
+            publication = publication or {"status": "unknown", "published_at": None,
+                                           "reason": "publication_evidence_missing"}
+            publication = enforce_source_publication_dates(publication)
+            review = deepcopy(merged.content_review or {"status": "legacy_unreviewed"}) if merged else None
+            if merged is not None:
+                review = enforce_scope_coverage(review, self._scope_records(s, merged))
+            if isinstance(review, dict) and isinstance(review.get("source_publication"), dict):
+                review["source_publication"] = enforce_source_publication_dates(review["source_publication"])
+            relation_records = [self._comparison_projection(s, r, "relations", {
+                "subject_entity": r.subject_entity, "relation_type": r.relation_type,
+                "object_entity": r.object_entity, "content_review": r.content_review or {}}) for r in relations]
             return {
                 "source": {
                     "title": link.title if link else None,
                     "url": link.url if link else None,
                     "source_type": link.source_type if link else None,
-                    "publish_time": (link.publish_time_guess.isoformat()
-                                     if link and link.publish_time_guess else None),
+                    "publish_time": (publication.get("published_at")
+                                     if publication.get("status") == "known" else None),
+                    "publication_time": publication,
+                    "publish_time_guess": (link.publish_time_guess.isoformat()
+                                           if link.publish_time_guess else None),
                 } if link else {},
                 "why_selected": (link.metadata_ or {}).get("triage_reason")
                 if link else None,
                 "matched_signals": (link.metadata_ or {}).get("matched_signals", [])
                 if link else [],
+                "task_triage": (link.metadata_ or {}).get("task_triage") if link else None,
                 "triage_decision": link.triage_decision if link else None,
                 "models_used": [r.model_config_id for r in runs],
                 # One entry per real request: what was asked for and what the
@@ -1132,22 +1276,45 @@ class Repository:
                                                  "is_mock": None, "output_truncated": None}),
                 } for r in runs],
                 "merged_decision": merged.decision if merged else None,
-                "content_review": (merged.content_review or {"status": "legacy_unreviewed"}) if merged else None,
-                "uncertainty": brief.uncertainty if brief else None,
-                "facts": [f.fact_statement for f in facts],
-                "metrics": [{"name": x.metric_name, "value": x.metric_value} for x in metrics],
-                "events": [e.summary for e in events],
-                "relations": [{"subject": r.subject_entity, "type": r.relation_type,
-                               "object": r.object_entity} for r in relations],
-                "risks": [r.risk_summary for r in risks],
+                "content_review": review,
+                "uncertainty": self._comparison_projection(s, brief, "brief", {
+                    "uncertainty": brief.uncertainty, "content_review": brief.content_review or {}})["uncertainty"] if brief else None,
+                "facts": [self._comparison_projection(s, f, "facts", {
+                    "fact_statement": f.fact_statement, "content_review": f.content_review or {}})["fact_statement"] for f in facts],
+                "metrics": [{"name": projected["metric_name"], "value": projected["metric_value"],
+                    "scope": projected["scope"], "content_review": projected["content_review"]}
+                    for x in metrics for projected in [self._comparison_projection(s, x, "metrics", {
+                        "metric_name": x.metric_name, "metric_value": x.metric_value, "scope": x.scope,
+                        "content_review": x.content_review or {}})]],
+                "events": [self._comparison_projection(s, e, "events", {
+                    "summary": e.summary, "content_review": e.content_review or {}})["summary"] for e in events],
+                "relations": [{"subject": r["subject_entity"], "type": r["relation_type"],
+                               "object": r["object_entity"]} for r in relation_records],
+                "risks": [self._comparison_projection(s, r, "risks", {
+                    "risk_summary": r.risk_summary, "content_review": r.content_review or {}})["risk_summary"] for r in risks],
                 "questions": [q.question for q in questions],
             }
 
     # --- helpers -----------------------------------------------------------
 
     @staticmethod
+    def _comparison_projection(session, row, group, record):
+        merged = session.get(m.MergedAnalysis, row.merged_analysis_id)
+        review = merged.content_review if merged else None
+        projected = enforce_reviewed_comparisons(group, record, review)
+        return enforce_reviewed_scope(group, projected, review,
+            scope_records=Repository._scope_records(session, merged) if merged else ())
+
+    @staticmethod
+    def _source_metadata_projection(metadata) -> dict:
+        result = deepcopy(metadata or {})
+        if isinstance(result.get("publication_time"), dict):
+            result["publication_time"] = enforce_source_publication_dates(result["publication_time"])
+        return result
+
+    @staticmethod
     def _event_to_dict(r: m.EventCardRow) -> dict:
-        return {
+        return enforce_reviewed_dates("events", {
             "event_id": r.id, "event_type": r.event_type,
             "event_date": r.event_date.isoformat() if r.event_date else None,
             "summary": r.summary, "entities": r.entities, "metrics": r.metrics,
@@ -1157,4 +1324,4 @@ class Repository:
             "source_corroboration_status": r.source_corroboration_status,
             "content_review": r.content_review or {},
                 "confidence": r.confidence, "source_link_id": r.source_link_id,
-        }
+        }, stored_utc=True)

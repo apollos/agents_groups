@@ -42,10 +42,14 @@ def fixture_bundle():
         ]})
 
 
-def pipeline_without_services():
+def pipeline_without_services(repo=None):
     pipeline = Pipeline.__new__(Pipeline)
     pipeline.config = MICConfig(raw={'target_profiles':{'company_300750':{'canonical_name':'宁德时代'}}})
     pipeline.triage = SimpleNamespace(source_type=lambda domain:'industry')
+    # Fresh event-only fixtures have no persisted coverage gaps. Cache exports
+    # must use their real repository so summary readback still exercises storage.
+    pipeline.repo = repo if repo is not None else SimpleNamespace(
+        get_coverage_gaps=lambda target_id, *, search_run_id: [])
     return pipeline
 
 
@@ -67,7 +71,24 @@ def export_fresh(bundle, source):
     return report
 
 
-def export_cached(bundle, source, root):
+def stored_event_rows(db, source_link_id):
+    with db.session() as session:
+        rows = session.query(models.EventCardRow).filter_by(source_link_id=source_link_id).all()
+        return {row.id: {column.key: copy.deepcopy(getattr(row, column.key))
+                         for column in models.EventCardRow.__table__.columns} for row in rows}
+
+
+def legacy_date_review():
+    # A historical approval has no typed date or date-role assessment. It is
+    # retained as audit history, never upgraded to current date authorization.
+    return {'protocol': 'content_review_v2',
+            'claims': {'old-observation': {'kind': 'observation', 'effective_status': 'source_supported',
+                       'evidence': [{'passage_id': 'p4', 'quote': '测试总项目'}], 'field_values': {}}},
+            'fields': {'event_date': {'status': 'source_supported', 'claim_ids': ['old-observation']}},
+            'materialized_digest': 'historical-unverified-digest'}
+
+
+def export_cached(bundle, source, root, *, original_rows=None):
     root.mkdir(parents=True, exist_ok=True)
     db = Database('sqlite:///'+str(root/'mic-cache.db'))
     try:
@@ -79,10 +100,12 @@ def export_cached(bundle, source, root):
             session.add(models.SourceLink(id=previous,url=source['url']))
             session.add(models.SourceLink(id=target,url=source['url']))
         repo.save_merged_analysis('company_300750',previous,bundle,{'merge_method':'single_model'},'offline-old-run', allow_legacy_write=True)
+        if original_rows is not None:
+            original_rows.update(stored_event_rows(db, previous))
         cloned = repo.clone_latest_analysis(previous,target,'company_300750')
         hit = SearchHit(query='offline replay',url=source['url'],title=source.get('title') or '',domain=source.get('source_name') or '',
                         publish_time_guess=source.get('publish_time'),query_family=source.get('query_family'))
-        pipeline, stats = pipeline_without_services(), RunStats()
+        pipeline, stats = pipeline_without_services(repo), RunStats()
         stats.cached_or_reused_results = 1
         pipeline._tally_cloned(stats,cloned,hit)
         return pipeline._summary('offline-cache-replay','company_300750',{},stats), cloned
@@ -168,16 +191,39 @@ class EventEvidenceExportTests(unittest.TestCase):
         self.assertTrue(result['outcomes'][1]['result']['reused'])
 
     def test_cache_exports_review_fields_and_new_source(self):
-        report,cloned=export_cached(self.bundle,SOURCE,self.root/'cache')
+        self.bundle.events[1].content_review=legacy_date_review()
+        original_bundle=self.bundle.model_dump(mode='json')
         expected={e.summary:e.model_dump(mode='json') for e in self.bundle.events}
+        original_rows={}
+        report,cloned=export_cached(self.bundle,SOURCE,self.root/'cache',original_rows=original_rows)
+        self.assertEqual(self.bundle.model_dump(mode='json'),original_bundle)
         for event in report['all_events']:
             self.assertEqual(event['source_link_id'],'offline-cloned-source')
             for field in EVIDENCE_FIELDS:self.assertEqual(event[field],expected[event['summary']][field])
-            self.assertEqual((event.get('event_date') or '').split('T')[0],
-                             (expected[event['summary']].get('event_date') or '').split('T')[0])
+            self.assertIsNone(event['event_date'])
+            old=expected[event['summary']]
+            review=event['content_review']
+            if old['event_date'] is not None:
+                self.assertEqual(review['claims'],old['content_review']['claims'])
+                self.assertEqual(review['fields'],old['content_review']['fields'])
+                self.assertEqual(review['prior_materialized_digest'],old['content_review']['materialized_digest'])
+                self.assertNotIn('materialized_digest',review)
+                self.assertEqual(review['materialization_corrections'],[{
+                    'field':'event_date','original_materialized_value':'2026-09-15T00:00:00',
+                    'published_value':None,'status':'pending_review',
+                    'reason':'stored_date_review_missing_or_unverified'}])
+            else:
+                self.assertEqual(review,old['content_review'])
         self.assertEqual(cloned['events'],2)
+        # Read raw rows: the public projection must not rewrite historical data.
+        db=Database('sqlite:///'+str(self.root/'cache'/'mic-cache.db'))
+        try:
+            self.assertEqual(stored_event_rows(db,self.bundle.source_link_id),original_rows)
+        finally:
+            db.engine.dispose()
 
     def test_cache_without_fresh_comparison_keeps_evidence_pending(self):
+        self.bundle.events[1].content_review=legacy_date_review()
         report,_=export_cached(self.bundle,SOURCE,self.root/'cache')
         result=through_agent(report,self.root/'agent')
         self.assertEqual(result['events'], [])
@@ -185,6 +231,17 @@ class EventEvidenceExportTests(unittest.TestCase):
         for expected, actual in zip(report['all_events'], result['pending']):
             for field in EVIDENCE_FIELDS:
                 self.assertEqual(expected.get(field), actual.get(field))
+            self.assertIsNone(expected['event_date'])
+            self.assertIsNone(actual['event_date'])
+            self.assertEqual(actual['content_review'],expected['content_review'])
+        corrected=[event for event in result['pending']
+                   if event['content_review'].get('materialization_corrections')]
+        self.assertEqual(len(corrected),1)
+        correction,=corrected[0]['content_review']['materialization_corrections']
+        self.assertEqual(correction['original_materialized_value'],'2026-09-15T00:00:00')
+        self.assertIsNone(correction['published_value'])
+        self.assertEqual(correction['status'],'pending_review')
+        self.assertEqual(correction['reason'],'stored_date_review_missing_or_unverified')
         self.assertEqual(result['saved_report_deliveries'],1)
 
     def test_legacy_agent_report_keeps_unknown_evidence_unknown(self):
@@ -199,9 +256,26 @@ class EventEvidenceExportTests(unittest.TestCase):
         try:
             with db.session() as s:
                 s.add(models.MergedAnalysis(id='old',source_link_id='source',decision='save_structured',overall_score=80))
-                s.add(models.EventCardRow(id='old-event',source_link_id='source',summary='旧记录',event_type='other',confidence=0.5))
+                s.add(models.EventCardRow(id='old-event',source_link_id='source',merged_analysis_id='old',
+                                         summary='旧记录',event_type='other',confidence=0.5))
             event=Repository(db).clone_latest_analysis('source','new','company_300750')['cloned_events'][0]
             for name in ('entities','metrics','impact','evidence_locator','source_corroboration_status'):self.assertIsNone(event[name])
+        finally:db.engine.dispose()
+
+    def test_legacy_orphan_event_is_not_assigned_to_latest_analysis_for_cache(self):
+        db=Database('sqlite:///'+str(self.root/'orphan.db'));db.create_all()
+        try:
+            with db.session() as s:
+                s.add(models.MergedAnalysis(id='old',source_link_id='source',decision='save_structured',overall_score=80))
+                s.add(models.EventCardRow(id='orphan-event',source_link_id='source',
+                                         summary='未关联的旧记录',event_type='other',confidence=0.5))
+            original=stored_event_rows(db,'source')
+            result=Repository(db).clone_latest_analysis('source','new','company_300750')
+            self.assertEqual(result['events'],0)
+            self.assertEqual(result['cloned_events'],[])
+            self.assertEqual(stored_event_rows(db,'new'),{})
+            self.assertEqual(stored_event_rows(db,'source'),original)
+            self.assertIsNone(original['orphan-event']['merged_analysis_id'])
         finally:db.engine.dispose()
 
     def test_empty_bundle_stays_empty(self):

@@ -124,7 +124,7 @@ class CollectionAttemptRepository:
                 UPDATE collection_attempt
                 SET heartbeat_at=?, state=COALESCE(?, state), worker_pid=COALESCE(?, worker_pid),
                     updated_at=datetime('now')
-                WHERE attempt_id=? AND state IN ('starting', 'running', 'cancelling')
+                WHERE attempt_id=? AND state IN ('starting', 'running')
                 """,
                 (_iso(_now()), state, worker_pid, attempt_id),
             )
@@ -135,19 +135,21 @@ class CollectionAttemptRepository:
 
     def finish(self, attempt_id: str, *, state: str, error_code: str | None = None,
                cleanup: str | None = None, result_path: str | None = None,
-               budget_used: dict[str, Any] | None = None, worker_pid: int | None = None) -> None:
+               budget_used: dict[str, Any] | None = None, worker_pid: int | None = None,
+               expected_states: tuple[str, ...] = ACTIVE_STATES) -> bool:
         if state not in TERMINAL_STATES:
             raise ValueError(f"not a terminal state: {state}")
         with self.store.session() as con:
-            con.execute(
-                """
+            cur = con.execute(
+                f"""
                 UPDATE collection_attempt
                 SET state=?, error_code=?, cleanup=COALESCE(?, cleanup), result_path=COALESCE(?, result_path),
                     budget_used_json=?, worker_pid=COALESCE(?, worker_pid), updated_at=datetime('now')
-                WHERE attempt_id=?
+                WHERE attempt_id=? AND state IN ({','.join('?' for _ in expected_states)})
                 """,
-                (state, error_code, cleanup, result_path, dumps_json(budget_used or {}), worker_pid, attempt_id),
+                (state, error_code, cleanup, result_path, dumps_json(budget_used or {}), worker_pid, attempt_id, *expected_states),
             )
+        return bool(cur.rowcount)
 
     # --- queries ------------------------------------------------------------------------
 
@@ -182,7 +184,7 @@ class CollectionAttemptRepository:
             if pid_owns_attempt(row.get("worker_pid"), row["attempt_id"]):
                 return row
             self.finish(row["attempt_id"], state="interrupted", error_code="cleanup_incomplete_worker_gone",
-                        cleanup=row.get("cleanup"))
+                        cleanup=row.get("cleanup"), expected_states=("cleanup_incomplete",))
         return None
 
     def _is_stale(self, row: dict[str, Any]) -> bool:

@@ -36,7 +36,7 @@ class AKShareAdapter(BaseDataAdapter):
 
     provider_name = "akshare"
     source_site = "akshare"
-    adapter_version = "0.5.0"
+    adapter_version = "0.5.1"
 
     def __init__(self, market_context_sources: MarketContextSourcesConfig | None = None) -> None:
         super().__init__()
@@ -455,15 +455,10 @@ class AKShareAdapter(BaseDataAdapter):
     def _normalize_tencent_hist_row(self, row: dict[str, Any], *, normalized: str, tx_symbol: str, request: StockDataRequest) -> dict[str, Any]:
         """Map stock_zh_a_hist_tx output to the common raw aliases used by the runner.
 
-        AKShare's Tencent daily endpoint is more stable in some WSL/proxy
-        environments, but its public schema is narrower than Eastmoney's
-        stock_zh_a_hist. It reliably provides OHLC and a field named
-        ``amount`` that represents trading volume in hands. It usually does
-        not provide trading amount in CNY or turnover rate. Since the current
-        standard BarRecord requires ``amount``, we provide a clearly-marked
-        estimate based on typical price * volume. Comparisons later skip
-        amount/vwap checks for Tencent-derived AKShare bars so this estimate
-        will not create false conflicts against Tushare.
+        AKShare 1.19.1 returns volume in shares, amount in CNY and turnover
+        as a ratio. Older six-column output instead names volume in hands
+        ``amount`` and supplies no monetary amount. Recognize these source
+        schemas explicitly; never infer units from a ticker or value size.
         """
         mapped = dict(row)
         date_value = self._value(row, "日期", "date")
@@ -472,19 +467,29 @@ class AKShareAdapter(BaseDataAdapter):
         high_value = self._value(row, "最高", "high")
         low_value = self._value(row, "最低", "low")
 
-        # In stock_zh_a_hist_tx the column named ``amount`` is volume in hands.
-        volume_hands = self._value(row, "成交量", "volume", "vol", "amount")
-        actual_amount = self._value(row, "成交额", "turnover", "money", "amount_cny")
+        modern_columns = {"date", "open", "close", "high", "low", "volume", "turnover", "amount"}
+        legacy_columns = {"date", "open", "close", "high", "low", "amount"}
+        if modern_columns.issubset(row):
+            volume_value = row["volume"]
+            volume_unit = "share"
+            actual_amount = row["amount"]
+            schema = "volume_shares_amount_cny"
+        elif set(row) == legacy_columns:
+            volume_value = row["amount"]
+            volume_unit = "hand"
+            actual_amount = None
+            schema = "legacy_amount_volume_hands"
+        else:
+            raise KeyError(f"AKShare Tencent volume/amount schema changed. Columns={sorted(row)}")
 
         estimated_amount = None
         if self._is_missing(actual_amount):
-            volume_number = self._numeric(volume_hands)
+            volume_number = self._numeric(volume_value)
             prices = [self._numeric(v) for v in [open_value, high_value, low_value, close_value]]
             prices = [v for v in prices if v is not None]
             if volume_number is not None and prices:
                 typical_price = sum(prices) / len(prices)
-                # Tencent volume is in hands, so multiply by 100 shares/hand.
-                estimated_amount = typical_price * volume_number * 100.0
+                estimated_amount = typical_price * volume_number * (100.0 if volume_unit == "hand" else 1.0)
 
         mapped.update(
             {
@@ -493,9 +498,11 @@ class AKShareAdapter(BaseDataAdapter):
                 "最高": high_value,
                 "最低": low_value,
                 "收盘": close_value,
-                "成交量": volume_hands,
-                "volume": volume_hands,
-                "volume_unit": "hand",
+                "成交量": volume_value,
+                "volume": volume_value,
+                "volume_unit": volume_unit,
+                "raw_source_record": dict(row),
+                "source_schema": schema,
                 "provider_symbol": tx_symbol,
                 "normalized_ticker": normalized,
                 "trade_date": self._date_text(date_value),
@@ -505,16 +512,27 @@ class AKShareAdapter(BaseDataAdapter):
                 "source_site_detail": "tencent",
             }
         )
+        if schema == "volume_shares_amount_cny":
+            turnover = self._numeric(row["turnover"])
+            # The standard field, like Eastmoney/Tushare, uses percentage points.
+            mapped["turnover_rate"] = turnover * 100.0 if turnover is not None else None
         if not self._is_missing(actual_amount):
             mapped["成交额"] = actual_amount
             mapped["amount"] = actual_amount
             mapped["amount_unit"] = "CNY"
+            mapped["amount_is_estimated"] = False
         elif estimated_amount is not None:
             mapped["成交额"] = estimated_amount
             mapped["amount"] = estimated_amount
             mapped["amount_unit"] = "CNY"
             mapped["amount_is_estimated"] = True
-            mapped["amount_estimation_method"] = "typical_price_x_tencent_volume_hands_x_100"
+            mapped["amount_estimation_method"] = (
+                "typical_price_x_tencent_volume_hands_x_100" if volume_unit == "hand"
+                else "typical_price_x_tencent_volume_shares"
+            )
+        else:
+            # Never leave legacy trading volume under the monetary amount alias.
+            mapped["amount"] = None
         return mapped
 
     def _add_identity(self, row: dict[str, Any], ticker: str | None = None) -> dict[str, Any]:

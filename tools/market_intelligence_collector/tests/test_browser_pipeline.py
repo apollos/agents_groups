@@ -335,7 +335,7 @@ def test_batch_triage_cannot_repromote_gated_hit(strict_cfg, monkeypatch):
             gated.append(hit.url)
         return out
 
-    def repromote_everything(self, call_planner, triaged, stats):
+    def repromote_everything(self, call_planner, triaged, stats, *, context, max_links_to_read):
         for _lid, _h, t in triaged:
             t.triage_decision, t.need_model, t.read_priority = "read", True, 200.0
         stats.batch_triage_calls += 1

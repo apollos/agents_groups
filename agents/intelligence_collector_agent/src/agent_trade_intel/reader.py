@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .db import SQLiteStore, loads_json
+from .task_lifecycle import sync_task_statuses
 from .tickets import TicketRepository
 
 
@@ -71,6 +72,7 @@ class IntelligenceReader:
         return {"status": "success", "items": [_feature_row(r) for r in rows]}
 
     def read_collection_status(self, *, demand_id: str | None = None, limit: int = 100) -> dict[str, Any]:
+        sync_task_statuses(self.data_store, self.bus_store)
         with self.data_store.session() as con:
             if demand_id:
                 demand = con.execute("SELECT * FROM collection_demands WHERE demand_id=?", (demand_id,)).fetchone()

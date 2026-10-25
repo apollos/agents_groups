@@ -76,6 +76,17 @@ def test_browser_runtime_defaults_when_block_absent():
     assert rt["channel"] == "msedge" and rt["headless"] is False
 
 
+def test_repo_budget_ceiling_and_missing_config_defaults_agree():
+    """Explicit and omitted deployment limits must select the same research budget."""
+    from pathlib import Path
+
+    repo_cfg = Path(__file__).resolve().parent.parent / "config"
+    default_limits = validate_browser_runtime(None)["limits"]
+    assert load_config(repo_cfg).browser_runtime["limits"] == default_limits
+    tightened = validate_browser_runtime({"limits": {"max_run_seconds": 45}})["limits"]
+    assert tightened == {**default_limits, "max_run_seconds": 45}
+
+
 @pytest.mark.parametrize("bad, fragment", [
     ({"enabled": "yes"}, "enabled"),
     ({"bogus": 1}, "unknown field"),

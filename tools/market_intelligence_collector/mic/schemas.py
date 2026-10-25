@@ -8,7 +8,9 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from mic.content_review_policy import REVIEWED_DEFAULTS
 
 # --- Enumerations (kept as Literal for validation, open via str fallbacks) ---
 
@@ -86,6 +88,13 @@ class MetricObservation(ReviewedContent):
     evidence_locator: EvidenceLocator = Field(default_factory=EvidenceLocator)
     confidence: float = 0.0
 
+    @field_validator("comparison", mode="before")
+    @classmethod
+    def _empty_comparison(cls, value: Any) -> Any:
+        # Canonical policy treats null/empty as no comparison judgment. This
+        # only normalizes its shape; shared review still authorizes any values.
+        return {} if value is None else value
+
 
 class EventImpact(BaseModel):
     direction: str = "unclear"
@@ -123,7 +132,7 @@ class EventCard(ReviewedContent):
 
 class EntityRef(BaseModel):
     name: str = ""
-    type: str = "company"
+    type: str = "unknown"
     ticker: str | None = None
 
     def identity_key(self) -> str:
@@ -168,8 +177,10 @@ class RiskFlag(ReviewedContent):
     risk_id: str | None = None
     risk_type: str = "unknown"
     risk_summary: str = ""
-    severity: str = "low"
-    time_horizon: str = "near_term"
+    # Shared review uses schema defaults for held fields. These must express
+    # absence of a judgment, never manufacture a risk rating or a deadline.
+    severity: str = REVIEWED_DEFAULTS["risks"]["severity"]
+    time_horizon: str = REVIEWED_DEFAULTS["risks"]["time_horizon"]
     impact_channels: list[str] = Field(default_factory=list)
     evidence_locator: EvidenceLocator = Field(default_factory=EvidenceLocator)
     confidence: float = 0.0
@@ -189,7 +200,7 @@ class AnalystQuestion(ReviewedContent):
     related_event_id: str | None = None
     question: str = ""
     reason: str = ""
-    priority: str = "medium"
+    priority: str = "unknown"
     suggested_queries: list[str] = Field(default_factory=list)
     status: str = "open"
 
@@ -301,5 +312,12 @@ class TriageResult(BaseModel):
     read_priority: float = 0.0
     matched_signals: list[str] = Field(default_factory=list)
     need_model: bool = False
+    # Only accepted model task triage may select the directory material path.
+    read_intent: Literal["content", "index"] = "content"
     suggested_task: str = "bundle_extraction"
     reason: str = ""
+    # Model review controls reading order/material intent, never fact approval.
+    # The site/entity gate and shared evidence review still apply.
+    task_read_rank: int | None = None
+    task_read_priority: float | None = None
+    task_review: dict = Field(default_factory=dict)
