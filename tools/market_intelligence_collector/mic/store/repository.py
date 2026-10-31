@@ -14,7 +14,7 @@ from typing import Any
 from sqlalchemy import func, select
 
 from mic import schemas
-from mic.content_review import (cache_comparisons_current, enforce_reviewed_comparisons,
+from mic.content_review import (cache_review_current, cache_comparisons_current, enforce_reviewed_comparisons,
                                 cache_scopes_current, enforce_reviewed_scope, enforce_scope_coverage,
                                 enforce_reviewed_dates, enforce_source_publication_dates)
 from mic.store import models as m
@@ -263,6 +263,8 @@ class Repository:
         summary/dependent claims may repeat the same unsupported judgment. A
         new extraction uses the caller's budget, never a hidden retry.
         """
+        if check_events and not cache_review_current(merged.content_review or {}):
+            return False
         if not Repository._cache_comparisons_current(session, merged):
             return False
         if not Repository._cache_scopes_current(session, merged):
@@ -697,7 +699,8 @@ class Repository:
             if merged is None:
                 return counts
             if not self._cache_dates_current(s, merged, check_events=reviewed_only):
-                counts["cache_reuse_rejected"] = ("comparison_review_requires_refresh"
+                counts["cache_reuse_rejected"] = ("content_review_requires_refresh"
+                    if reviewed_only and not cache_review_current(merged.content_review or {}) else "comparison_review_requires_refresh"
                     if not self._cache_comparisons_current(s, merged) else "scope_review_requires_refresh"
                     if not self._cache_scopes_current(s, merged) else "date_review_requires_refresh")
                 return counts
@@ -1145,6 +1148,23 @@ class Repository:
                 "priority": r.priority, "status": r.status,
                 "search_run_id": r.search_run_id, "source_link_id": r.source_link_id,
             } for r in rows]
+
+    def published_metric_periods(self, run_id: str) -> list[dict[str, Any]]:
+        """Period identities for one run. Values are not included."""
+        with self.db.session() as s:
+            rows = s.execute(
+                select(
+                    m.MetricObservationRow.id,
+                    m.MetricObservationRow.period,
+                    m.MetricObservationRow.source_link_id,
+                )
+                .join(m.SourceLink, m.SourceLink.id == m.MetricObservationRow.source_link_id)
+                .where(m.SourceLink.search_run_id == run_id)
+            ).all()
+        return [
+            {"metric_id": row.id, "period": row.period, "source_link_id": row.source_link_id}
+            for row in rows
+        ]
 
     def count_rows_for_run(self, run_id: str) -> dict[str, Any]:
         """Row counts per table for a run; used by the e2e validation harness."""

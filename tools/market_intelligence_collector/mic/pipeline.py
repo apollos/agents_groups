@@ -1528,6 +1528,7 @@ class Pipeline:
         # part of the user's request is still missing to the downstream Agent.
         coverage_gaps = self.repo.get_coverage_gaps(target_id, search_run_id=run_id)
         stats.structured["coverage_gaps"] = len(coverage_gaps)
+        published_metric_periods = self.repo.published_metric_periods(run_id)
         return {
             "search_run_id": run_id,
             "event_resolution_protocol": PROTOCOL,
@@ -1577,6 +1578,7 @@ class Pipeline:
             },
             "structured_outputs": stats.structured,
             "coverage_gaps": coverage_gaps,
+            "published_metric_periods": published_metric_periods,
             "task_coverage": stats.task_coverage,
             "source_publications": stats.source_publications,
             "task_triage_reviews": stats.task_triage_reviews,

@@ -4,6 +4,11 @@ See .cursor/rules/intelligence-content-review.mdc before changing this contract.
 """
 
 PROTOCOL = "content_review_v2"
+# A prompt change needs a fresh semantic assessment before a cached analysis
+# can be reused. This is provenance, not a new source-approval heuristic.
+REVIEW_REVISION = "amount_scale_currency_20261031"
+# Disclosed to the model; the configured merger remains the admission authority.
+OVERALL_SCORE_ADMISSION_THRESHOLD = 70
 TASK_COVERAGE_PROTOCOL = "task_coverage_v1"
 DATE_REVIEW_PROTOCOL = "date_review_v1"
 SCOPE_REVIEW_PROTOCOL = "scope_review_v1"
@@ -103,6 +108,15 @@ RULE_TEXT = """
    pending_review（证据不足/冲突）|unsupported（原文不支持）。
    source_supported 不等于现实事实已独立核实；模型自信、分数或重复转载不能提升状态。
    evidence=[{passage_id,quote}]；quote 必须是当前输入正文中的连续原文。
+   语义理解与原文摘录分开：statement 可整理断行后的名称，quote 必须逐字复制对应 passage.text，
+   不把整理后的名称写回证据。表格/OCR 中各行的空格可能不同；不要补齐、删除或统一空格，
+   不要改换行、负号、标点或数值格式。JSON 中用转义表达原有换行，解码后仍须与原文相同。
+   跨行或跨段的依据可以分成多条连续 quote；逐条复制，各自保留 passage_id，不拼成一条原文不存在的句子。
+   同时保留支持行名、期间列、单位及数值归属的上下文，不能只摘一个易匹配的数字来代替证据。
+   输出前对每组 evidence 自问：每条 quote 在所指 passage 中具体是哪一段？我是否将理解后的名称
+   或排版代替了原字串？跨行时有哪些独立片段共同支持这个判断？将答案落实到 quote 与原有 reason。
+   amount.evidence、比较输入和日期审核等嵌套引用也复用已摘录片段，不重新排版；它们须被同一
+   claim.evidence 中相同 passage_id 的引用覆盖。确实无法定位时保持待审，不猜测原文或补造引用。
    passage_id 不能是 title：标题不是正文，evidence 列表里只要出现一条 title 引用，整条 claim 的引用
    即判为无效（citation_missing_or_unverified），即使其他引用正确。需要标题信息时引用正文中
    重复该标题的首段（如 p0）。
@@ -133,6 +147,16 @@ RULE_TEXT = """
    无效来源日期会使该日期 claim 及其下游依赖均降为待审；摘要不得复述同一个未获支持日期。
 3. 同一判断在事实、指标、事件、关系、摘要等位置必须复用同一 claim id。
    分析判断用 depends_on 引用其前提；缺失/循环/未支持的前提不能被下游措辞绕过。
+   depends_on 的方向是“当前判断需要哪些前提”，不是双向关联或“哪些判断用到了我”。
+   请逐条自问：去掉这个依赖判断，我的 statement 能否仅凭所引原文独立成立？
+   同表、同段、共用引用或绑定在同一指标上，不自动构成互相依赖。
+   原始数值 observation 只陈述它审核的数值、期间、单位和范围，不夹带另由 comparability
+   审核的变化结论；比较判断依赖其实际需要的前提，汇总句依赖数值和比较，数值不反向依赖汇总句。
+   直接披露的变化可独立引用；如果比较对象/期间等确实依赖其他 observation，就显式保留这些依赖。
+   如果当前 observation 已把数值与比较揉成一句，先按语义拆分独立观察、比较和汇总陈述，
+   再分别绑定，不能仅为消除环而删掉真实前提，也不能复制无依赖的同一复合判断来绕过审核。
+   输出前沿每条 depends_on 检查是否回到自己、是否引用了自己派生的摘要；发现环时重新审视判断边界。
+   确实无法消除证据上的相互依赖就保留待审，独立判断继续按自身证据审核。
    bindings 优先按整条记录绑定，例如 {"/facts/0":["award"], "/events/0":["award"],
     "/metrics/0":["price_quote"], "/events/0/entities":["award_parties"],
     "/metrics/0/interpretation":["price_comparison"], "/brief/why_it_matters":["price_comparison"]}。
@@ -207,21 +231,55 @@ RULE_TEXT = """
    claim 明确审核其 field_values.scope.usable_as_price_benchmark=true 且 source_supported 才能开启。
    metrics[].comparison 同样属于 comparability：来源原文直接给出的同比/环比（如“同比增长 17.04%”、
    表格“本年比上年增减”列）用独立 comparability claim 审核，status 可为 source_supported，
-   evidence 引用该数值原文，field_values 给出 {"comparison":{"yoy":0.1704}}，并绑定到
-   /metrics/i/comparison；模型自行计算或推断的比较仍为 inference。
+   evidence 引用该数值原文，field_values.comparison_input 给出来源数值与单位，并绑定到
+   /metrics/i/comparison，前提是该比较描述的对象正是 metrics[i] 的指标本身；
+   模型自行计算或推断的比较仍为 inference。不能把同一来源中任意相关的同比填进该字段。
+   填写每个非空 comparison 前，请结合所属指标完整记录与引用回答以下问题，写入原 claim.reason：
+   - 这条 metric 的数值表示什么？来源比较的是同一个量，还是这个量的比率、增速或其他相关指标？
+   - 比较的本期、基期和统计口径分别是什么？相对变化的分子、分母或百分点差值各代表什么？
+     两期数值不必都可发布，但来源直接披露的比较必须明确对应当前指标；不推算缺失数据。
+   - 将 comparison 与该 metric 连起来完整复述后，是否仍是原文支持的判断？仅数值相等、
+     引用有效、换算正确或两条 claim 有依赖，都不能替代比较对象一致。
+   不一致或依据不足时，该比较 claim 设为 unsupported/pending_review（计算推断为 inference），
+   保留独立受支持的指标值，不为保留比较而改写指标含义；缺口限定在当前已读材料。
+   若金额待审，但来源直接列示的百分比有独立依据，可另建百分比指标：该记录用 observation
+   审核“来源列示此统计值”，metric_value 保留原百分数、unit="%"；不要将 comparability
+   直接绑定到整条 fact/metric。comparability 只授权 comparison 等比较字段，不能授权其父记录。
+   比较字段所在金额指标若被隔离，该比较也不能充当已交付答案；不要据此提升金额的审核状态。
+   独立百分比指标已经表达那一次比较，不能再把同一比较复制进其 comparison；无第二层比较
+   依据时 comparison={}。例如原文“收入同比增长20%”可生成“收入同比增速=20%”，但不能据此
+   填它的 comparison.yoy=0.2，那将表示增速自身的同比变化。不要为同一判断重复造 observation
+   和 comparability 来填满模板。若原文另行明确该比率/增速本身的变化，则仍可审核发布；
+   例如“毛利率20%，同比提高4个百分点”可发布毛利率指标及 comparison.yoy_change_pp=4。
+   这些关系由你理解语义，不按名称是否含“同比”或单位是否为“%”机械禁止比较。
    比较中的比例数值使用窄 comparison_input 契约，不新增 claim 或调用：同一 comparability claim 的
-   field_values 同时给 comparison_input={"yoy":{"value":17.04,"unit":"percent",
+   field_values 只给原始 comparison_input={"yoy":{"value":17.04,"unit":"percent",
    "evidence":[{"passage_id":"p1","quote":"同比增长17.04%"}]}}。
    value 是来源原值，unit 是你依据表头、上下文审核的原单位：ratio、percent、percentage_point
    或 basis_point。evidence 为同 claim 已验证 evidence 内同 passage_id 的连续精确子引用，
    数值和单位在不同位置时可给多个引用；不得先把错写的输出数值当成“原值”。
    yoy/qoq/mom/change_ratio 输出单位为 ratio；yoy_change_pp/qoq_change_pp/change_pp 输出单位为
-   percentage_point。例如17.04 percent应为0.1704 ratio，-4.8 percentage_point仍为-4.8。
-   程序只按显式原值及单位核算，不从正文搜索数字或猜尺度；缺输入、单位不明或输出冲突时
-   整个比较 claim 待审并传播依赖，不自动把业务输出改成另一数值。其他价格/金额比较仍用原有单位契约。
-   来源明确标注比较“不适用”时，可由独立 comparability claim 将 comparison 写成
-   {"yoy":null,"yoy_status":"not_applicable"}，field_values.comparison 必须给出相同值并有原文引用。
-   仅 null 或空 comparison 只表示没有交付比较判断，不等于已发布“不适用”的语义。
+   percentage_point。这是共享模块的交付格式，不要求你再次换算或重复生成数值。
+   数值比较在模型输出中保持 metrics[i].comparison={}，省略 field_values.comparison 的对应数值成员，
+   但保留 /metrics/i/comparison 到该 comparability claim 的显式绑定。程序在语义状态、引用和依赖
+   均通过后从 comparison_input 生成交付值（如17.04 percent变为0.1704 ratio），并记录换算依据。
+   请自问：我是否已提供原始数值、原单位和适用对象？是否又在comparison中重复填写了一个换算值？
+   保留前者及原文语义陈述，省略后者；不要把百分数先行移动小数点再作为原值。
+   程序只按显式原值及单位换算，不从正文搜索数字或猜尺度；缺输入、单位不明、维度冲突时
+   整个比较 claim 待审并传播依赖，不提升模型给出的 inference/pending_review/unsupported。
+   若响应仍显式提供旧式数值输出，则必须与输入换算一致；矛盾值仍隔离，不自动改写成通过。
+   其他价格/金额比较仍用原有单位契约。
+   比较状态和说明与数值采用同一交付路径：来源明确标注“不适用”时，在独立 comparability
+   claim 的 field_values.comparison 中只写一次 {"yoy":null,"yoy_status":"not_applicable"}，
+   附原文引用并显式绑定 /metrics/i/comparison，指标本身 comparison={}，不再重复填写状态。
+   其他来源支持的比较说明、嵌套口径也只在 field_values.comparison 中给出；不得根据金额正负、
+   空值或审核通过标签推断“不适用”。由你判断原文含义、适用范围和支持状态，程序只执行这些判断。
+   程序从已支持且有绑定的 claim 生成完整 comparison，父/子路径各按其显式绑定执行，不借同一
+   claim 发布未绑定的兄弟字段。数值、状态、说明或嵌套成员若有显式冲突，保持待审并传播依赖。
+   输出前自问：每个回答引用的比较判断，是否有正确类型、依据和绑定，能从该 claim 实际生成
+   正式指标字段？已写入摘要或审核记录，不等于该结构化状态已交付。不要为通过覆盖删除真实缺口。
+   无输入和绑定的 null 或空 comparison 只表示没有交付比较判断，不等于已发布“不适用”的语义。
+   数值比较不要使用null占位；数值输入与同一成员的“不适用”不能同时成立。
 5. 总金额和单价分开：总金额用 amount，单价用 unit_price 与 unit_price_unit，
    指标记录则使用 metric_value 与 unit；元/Wh 等含分母的单价不得转换为总金额。
    一个数字是合同总额、单价、还是某一年/某一行的会计数据，由你结合表头、行名、年份列、
@@ -242,6 +300,35 @@ RULE_TEXT = """
    无法换算的单位或非人民币金额按原值、原单位、原币种保留，并单独标注未换算。
    原始 currency="CNY万元" 不是证据不足，依据 amount 的拆分结果规范化。
    格式不能规范化时标记 format_pending，保留原值、引用与原因，不冒充 unsupported。
+   每条金额 claim 必须在 amount.basis 中分别给出数值、尺度、币种三项判断，不另加调用，不另造审核协议：
+   amount.basis={value:{status,evidence}, unit:{status,evidence}, currency:{status,evidence}}。
+   status 使用既有四种审核状态。evidence 沿用 [{passage_id,quote}]；quote 必须是当前 selected_passages
+   的连续原文，并被同一 claim.evidence 里相同 passage_id 与 quote 覆盖。三项可以引用不同片段。
+   输出前逐项填写，再据此决定该金额 claim 的 status、amount.currency 与 depends_on：
+   - value：哪段原文支持这个数字所属的行、期间和正负号？
+   - unit：哪段原文说明元/千元/万元/亿元等尺度，以及它是否适用于这一行？
+     引用可跨段。同一指标在当前材料里出现两次时，一次写明尺度（如万元），另一次的数字与该值按尺度换算一致
+     （万元×10000=元，千元×1000=元），你可以把尺度判为换算后的单位，并同时引用这两段。
+     这是你对同一指标的判断。同一张表已经由此确定共用一个尺度时，该表其他行可以沿用，并引用确定尺度的那一对原文。
+     只是觉得数字大或小，不能作为尺度依据。表头原文不在选段里，也不否定已经由上述对应成立的尺度。
+   - currency：哪段原文说明 CNY/USD 等币种？原文同时写出尺度和币种时，同一条 quote 可以同时作为
+     unit 与 currency 的依据；只写出尺度时，不能把该 quote 标成币种依据。
+   公司惯例、问题文字或历史事件候选不能补尺度或币种。历史候选仅用于事项比较，不是当前来源的金额依据。
+   value 与 unit 都是有引用的 source_supported 时，金额 observation 就是 source_supported，按原文尺度发布数值和单位。
+   此时 amount.currency 只有在 currency 也是有引用的 source_supported 时才填写；否则留空，陈述、指标、摘要和事件里
+   不要写 CNY 或人民币。可以保留“币种未写明”的缺口，这个缺口不能再写尺度尚未证实。
+   不要因为币种未支持，把已经支持的数值和尺度改成 pending_review。
+   value 或 unit 不是 source_supported 时，整笔金额才是 pending_review，reason 说明缺的是数值还是尺度。
+   一个判断只留一种结论：已经支持的尺度，不要在缺口或 limitation 里再说它没有依据。
+   共享模块核对 value 与 unit 的状态和引用。两者都成立时发布数值和尺度；currency 未成立时不写入币种，
+   也不把整笔退回待审，更不把金额换算成带 CNY 的元。模块不阅读缺口或 reason，不搜索正文，不自行做跨段换算。
+   - 哪些判断真正依赖这项未解决的依据？用 depends_on 连接实际前提，不要只在自由文本里提到另一 claim。
+     摘要、事件陈述和覆盖回答若包含这些金额，必须依赖对应金额 observation；不要另写一条无依赖的
+     source_supported 复述。缺口被正确描述不等于金额已获批准。
+   - 去掉未获支持的金额后，哪些独立内容仍能交付？原文单独给出的比例、每股单位、产品规格或报告身份
+     按各自证据审核。金额尺度或币种未知不自动否定原文给出的百分比；由未审核金额自行计算的比较仍依赖这些金额。
+     不要全篇丢弃，也不要借独立内容批准金额。
+   将上述判断落实到 amount.basis、status、evidence、reason、depends_on 和 coverage_gaps。
 6. 合并、缓存、导出必须保留审核状态和引用；禁止重新拼出未经审核的事实/分析。
    缺失审核不是审核通过。旧数据未审核不得自动升级；新线上抽取必须执行本协议。
    旧记录若因默认值曾出现未经审核的风险等级或期限，正式读取及缓存复用仅投影为 unknown/unclear，
@@ -268,12 +355,23 @@ RULE_TEXT = """
    status=covered（本来源回答整个问题）|partial（只回答部分）|unanswered（本来源未回答）。
    结合问题全文理解所有需求方面，包括同一句话中的多个方向、期间、口径和证据要求；不要因为
    有一条相关事实就判整个问题 covered。语义拆分与回答程度由你判断，程序不按关键词推断。
+   输出前请逐项回答：问题要求哪些指标、哪些期间？每个“指标×期间”的已支持数值落在哪条
+   metrics 记录、由哪个 observation 审核？要求本期和上期时，两期分别生成独立指标与 claim，
+   period 明确对应表格列；各自引用行名、期间列、单位/币种依据，金额 amount 与该期数值一致。
+   不能只在 fact_statement 写上期数字，也不能用同比、摘要或当前期记录代替上期指标。
+   无依据的期间或单位保持待审和缺口；不要为填满两期数据使用候选事件或其他未读来源。
    answer_claim_ids 引用本次输出中回答该问题、且实际发布在正式结构化记录字段上的 claim；
    可引用核心事实，也可引用 comparison 等辅助字段的独立审核 claim，但字段必须非空且通过统一审核。
    只有所在记录通过最终准入、字段仍可发布时，引用才有效；仅存在于审核元数据中的 claim 无效。
    不得引用摘要、待核查内容、空值比较或仅提出问题的 claim。比较字段只有 null 时，不要引用
    对应 comparability claim；只有确实交付非空 not_applicable 等审核状态时，才可据此回答可比性。
    事件还须通过共享事件审核（event_resolution.status=resolved）；事件待核查不影响独立受支持的事实或指标。
+   再逐一反查 answer_claim_ids：它绑定到哪条正式记录的哪个非空字段？kind 是否适合该字段？
+   该记录、字段及所有 depends_on 能否通过审核？只在 claims 内、只绑到 brief、或父记录待审
+   都不算交付。若事件比较仍不确定，请用已有独立受支持事实/指标回答其确实支持的方面，
+   未支持的发生/阶段判断保留缺口；不能只为形成回答引用而复制或改写待审事件。
+   同时核对非空 entities、direction、impact、uncertainty 等字段：分别给出适用 kind 的独立
+   字段绑定及 field_values；没有依据时留空/未知，不照抄示例占位值。不新增第二套审核状态。
    uncovered_aspects 用问题原文中的连续片段指出未回答的方面，不写外部事实或自由改写。
    covered 必须有有效 answer_claim_ids 且 uncovered_aspects 为空；partial 必须同时有有效回答引用
    和未覆盖方面；unanswered 的回答引用为空，未覆盖方面非空（可引用整个问题）。
@@ -286,10 +384,42 @@ RULE_TEXT = """
    comparability claim 审核；缺少该证据时保持 pending_review/inference。即使财务数值准确，
    仍应将相应问题记 partial（无回答则 unanswered），在 uncovered_aspects 引用原需求中关于
    最新性的连续片段；不得用旧期或较新期数据准确代替最新性需求已完成。
+8. 来源整体决策与逐项审核、事件关联、问题覆盖分别判断，再核对是否自洽。
+   overall_score（0-100）衡量“本来源可提取的、与目标直接相关的结构化事实的材料价值”。
+   它不是来源信誉分：来源信誉单独填 source_quality.source_credibility_score，
+   是否一手单独填 source_quality.is_original_source，佐证状态单独填
+   events[].source_corroboration_status，不把这些因素再折算成同一项扣分。标尺：
+   - 85-100：一手来源（公司公告、交易所/监管披露、招标方公示原文），关键要素完整、可直接引用。
+   - 70-84：与目标直接相关、关键要素完整且可核验的具体事实，证据段落直接支持；
+     如中标、订单、价格、产能变动、客户/供应商变化或有明确期间与单位的经营指标，
+     来源可以是媒体或行业站转载。
+   - 50-69：可提取内容的关键依据缺失，无法形成上述完整具体事实；或主要为分析观点、
+     预期、传闻、尚未落地的意向。
+   - 0-49：与目标弱相关或无关、无具体事实、营销软文，或对当前需求无可用价值的过时/重复内容。
+   系统以 overall_score >= 70 作为结构化入库门槛；decision 与评分应一致：
+   save_structured 对应 >= 70，link_only 对应 50-69，skip 对应 < 50。不要为达到门槛而提高评分。
+   评分前请回答：去掉所有待审/推断内容后，还剩哪些与问题相关、可独立引用的具体事实？
+   每条事实实际需要什么关键要素，缺口影响的是该事实、另一个判断，还是整个问题的覆盖？
+   例如金额需要币种与尺度，比例需要单位、归属与适用期间，交易阶段需要行为依据；
+   不把金额、交易对手、披露日期等当成每种事实都必须具备的固定清单。
+   一项金额缺单位，不能据此断定来源中所有独立比例或每股指标也缺单位；
+   发布日期缺失仍不能确认时间窗，但它不自动推翻有明确报告期的来源数值。
+   不完整回答整个问题不等于没有结构化材料价值；部分覆盖和最新性/日期缺口应分别保留。
+   source_supported 本身也不保证材料有足够研究价值，仍须按上述标尺判断相关性、完整性及重要性。
+   再问：same_event 只说明当前与候选讲同一事项，是否真的证明当前需求已有合格回答？
+   历史事件候选不是当前任务的事实/指标交付清单，也不保证历史内容已通过当前审核版本。
+   同一事件可关联已有事件，当前来源独立支持的事实/指标仍按自身证据和价值审核；
+   不因已见同一事件就自动选 link_only/skip，也不把候选的单位、数值或审核状态搬入当前来源。
+   最后在 content_review.decision_reason 简短说明所选分数档和决策的依据，引用相关claim id，
+   说明剩余独立价值、影响准入的缺口及事件重复是否真正影响本次回答；它仅是审计说明，
+   不是新的批准凭证，程序不从这段文字改分、改decision或推断业务语义。
+   link_only/skip 不发布正式结构化记录；此时不能将已抽取但不会发布的claim写作有效覆盖回答，
+   task_coverage 应如实为unanswered并保留问题缺口。不要用空结果覆盖已审核的历史记录。
 """
 
 SCHEMA_HINT = {
     "protocol": PROTOCOL,
+    "decision_reason": "结合已审核claim、独立材料价值和缺口说明来源整体评分与decision；仅审计，不作事实依据或批准凭证。",
     "scope_review_contract": {
         "protocol": SCOPE_REVIEW_PROTOCOL,
         "说明": "同一指标 observation 的 field_values.scope 只给原文支持的业务范围，与记录一致；未知成员留空，不新增基础字段 claim。",
@@ -344,17 +474,51 @@ SCHEMA_HINT = {
                 "evidence": [{"passage_id": "p2", "quote": "指标的连续原文"}], "depends_on": []},
                {"id": "revenue_2025", "statement": "表格列示 2025 年营业收入 423,701,834 千元",
                 "kind": "observation", "status": "source_supported",
-                "reason": "行名、年份列与表头单位说明共同支持该数值、尺度与归属",
+                "reason": "行名、年份列与表头单位及币种说明共同支持该数值、尺度、币种与归属",
                 "evidence": [{"passage_id": "t1", "quote": "营业收入 423,701,834 362,012,554 17.04%"},
-                             {"passage_id": "t1", "quote": "单位：千元"}],
+                             {"passage_id": "t1", "quote": "单位：千元 币种：人民币"}],
                 "depends_on": [],
                 "amount": {"currency": "CNY", "value": 423701834, "unit": "千元",
                            "evidence": [{"passage_id": "t1", "quote": "营业收入 423,701,834 362,012,554 17.04%"},
-                                        {"passage_id": "t1", "quote": "单位：千元"}]}}],
+                                        {"passage_id": "t1", "quote": "单位：千元 币种：人民币"}],
+                           "basis": {
+                               "value": {"status": "source_supported", "evidence": [
+                                   {"passage_id": "t1", "quote": "营业收入 423,701,834 362,012,554 17.04%"}]},
+                               "unit": {"status": "source_supported", "evidence": [
+                                   {"passage_id": "t1", "quote": "单位：千元 币种：人民币"}]},
+                               "currency": {"status": "source_supported", "evidence": [
+                                   {"passage_id": "t1", "quote": "单位：千元 币种：人民币"}]}}}}],
     "bindings": {"/events/0": ["award"], "/metrics/0": ["price_quote"], "/facts/0": ["revenue_2025"],
                  "/events/0/entities": ["award_parties"], "/brief/what_happened": ["award"]},
     "binding_examples": {
         "说明": "事件记录、身份、分析、摘要分别绑定；名称与数值为示例，不是模板值。",
+        "dependency_direction": {
+            "source": "本期毛利率20%，上年同期16%，同比提高4个百分点。",
+            "claims": [
+                {"id": "margin_now", "kind": "observation", "statement": "本期毛利率20%。", "depends_on": []},
+                {"id": "margin_prior", "kind": "observation", "statement": "上年同期毛利率16%。", "depends_on": []},
+                {"id": "margin_change", "kind": "comparability", "statement": "来源披露本期毛利率同比提高4个百分点。",
+                 "depends_on": ["margin_now", "margin_prior"]},
+                {"id": "margin_summary", "kind": "observation", "statement": "本期毛利率20%，上年同期16%，同比提高4个百分点。",
+                 "depends_on": ["margin_now", "margin_prior", "margin_change"]}],
+            "bindings": {"/metrics/0": ["margin_now"], "/metrics/1": ["margin_prior"],
+                         "/metrics/0/comparison": ["margin_change"], "/brief/one_sentence": ["margin_summary"]},
+            "说明": "只演示判断边界与依赖方向；实际每条还须有status/reason/evidence，比较须给comparison_input。"
+                    "margin_now不包含变化结论，不反向依赖margin_change；汇总句不绑定为原子指标。"},
+        "verbatim_table_evidence": {
+            "selected_passages": [
+                {"passage_id": "table", "text": "项目 本期 上期\n期 末 应 收\n款余额 120 100"},
+                {"passage_id": "units", "text": "单位：元 币种：人民币"}],
+            "statement": "本期应收款余额120元。",
+            "evidence": [
+                {"passage_id": "table", "quote": "项目 本期 上期"},
+                {"passage_id": "table", "quote": "期 末 应 收"},
+                {"passage_id": "table", "quote": "款余额 120 100"},
+                {"passage_id": "units", "quote": "单位：元 币种：人民币"}],
+            "reason": "上下两行共同说明指标，表头说明数值期间，另段说明单位；每条证据保留其原有空格。",
+            "注意": "陈述可整理名称；不要把quote改成‘期末应收款余额 120 100’或‘款 余 额 120 100’。"
+                    "amount.evidence复用相同摘录；这些仅是格式示例，不可引用为当前材料的证据。",
+        },
         "event": {
             "claims": [
                 {"id": "disclosure_obs", "kind": "observation", "status": "source_supported",
@@ -399,6 +563,73 @@ SCHEMA_HINT = {
                          "/brief/why_it_matters": ["growth_impact"]},
             "注意": "one_sentence 的 statement 必须完整等于要发布的句子；"
                     "不要用只含部分数值的 disclosure_obs 绑定它，也不要并列绑定多条无依赖关系的 claim。",
+        },
+        "comparison_subject": {
+            "说明": "模型须核对比较对象与所属指标；数值只作例子，不是公司或名称匹配规则。",
+            "standalone_rate": {
+                "source": "本期收入同比增长20%；当前材料未说明金额单位。",
+                "metric": {"metric_name": "收入同比增速", "metric_value": 20, "unit": "%", "comparison": {}},
+                "reason": "该指标已经是收入的同比增速；原文没有比较增速自身，不能再附同比0.2。记录由observation审核。"},
+            "rate_with_own_comparison": {
+                "source": "本期毛利率20%，上年同期16%，同比提高4个百分点。",
+                "metric": {"metric_name": "毛利率", "metric_value": 20, "unit": "%",
+                           "comparison": {}},
+                "comparability_field_values": {"comparison_input": {"yoy_change_pp": {
+                    "value": 4, "unit": "percentage_point", "evidence": [
+                        {"passage_id": "p1", "quote": "同比提高4个百分点"}]}}},
+                "reason": "被比较的两期对象均为毛利率，与所属指标一致；数值observation与比较comparability分别绑定。"
+                          "原始4及percentage_point只填写一次，共享模块生成comparison中的数值。"},
+        },
+        "comparison_status": {
+            "source": "本期净利润-20元，上年同期-30元；同比栏为不适用。",
+            "metric": {"metric_name": "净利润", "metric_value": -20, "unit": "元", "comparison": {}},
+            "comparability_claim": {
+                "id": "profit_comparison", "kind": "comparability", "status": "source_supported",
+                "statement": "来源将本期净利润的同比标注为不适用。",
+                "reason": "原文明示同比栏状态；未由两期负数自行推断或计算。",
+                "evidence": [{"passage_id": "p1", "quote": "本期净利润-20元，上年同期-30元；同比栏为不适用。"}],
+                "depends_on": [], "field_values": {"comparison": {"yoy": None, "yoy_status": "not_applicable"}}},
+            "bindings": {"/metrics/0/comparison": ["profit_comparison"]},
+            "注意": "金额记录另由observation审核；本例只展示比较状态。程序将状态生成到指标，模型不在两处重复写。",
+        },
+        "unresolved_amount_unit": {
+            "说明": "以下是模型理解后的示例，不是根据词语匹配自动判定。表格行有数值但当前已读材料缺金额单位；百分比列有独立依据。",
+            "claims": [
+                {"id": "revenue", "kind": "observation", "status": "pending_review",
+                 "statement": "本期营业收入120元。", "reason": "数值120有引用，但当前材料未说明金额尺度或币种，不能批准元。",
+                 "evidence": [{"passage_id": "table", "quote": "营业收入 | 120 | 100 | 20"}],
+                 "depends_on": [], "amount": {"currency": "CNY", "value": 120, "unit": "元",
+                     "evidence": [{"passage_id": "table", "quote": "营业收入 | 120 | 100 | 20"}],
+                     "basis": {
+                         "value": {"status": "source_supported", "evidence": [
+                             {"passage_id": "table", "quote": "营业收入 | 120 | 100 | 20"}]},
+                         "unit": {"status": "pending_review", "evidence": []},
+                         "currency": {"status": "pending_review", "evidence": []}}}},
+                {"id": "growth", "kind": "observation", "status": "source_supported",
+                 "statement": "原表列示营业收入同比增长20%。", "reason": "同比百分比列有独立表头；直接保留原文，不由未审核金额计算。",
+                 "evidence": [{"passage_id": "table", "quote": "同比增减(%)"},
+                              {"passage_id": "table", "quote": "营业收入 | 120 | 100 | 20"}], "depends_on": []},
+                {"id": "summary", "kind": "observation", "status": "pending_review",
+                 "statement": "本期营业收入120元，同比增长20%。", "reason": "整句包含尚未批准的金额单位。",
+                 "evidence": [{"passage_id": "table", "quote": "营业收入 | 120 | 100 | 20"}],
+                 "depends_on": ["revenue", "growth"]},
+            ],
+            "bindings": {"/facts/0": ["revenue"], "/metrics/0": ["revenue"],
+                         "/metrics/1": ["growth"], "/brief/one_sentence": ["summary"]},
+            "注意": "待审金额只留在审核记录；正式事实、指标及包含金额的摘要不得发布。独立的同比指标可保留。",
+        },
+        "scale_without_currency": {
+            "说明": "原文已经写出数值和万元。币种没有出现。发布原值与尺度，币种留空；不要把整笔改成待审，也不要写尺度未证实。",
+            "amount": {"currency": None, "value": 120, "unit": "万元",
+                       "basis": {
+                           "value": {"status": "source_supported", "evidence": [
+                               {"passage_id": "p1", "quote": "本期营业收入120万元"}]},
+                           "unit": {"status": "source_supported", "evidence": [
+                               {"passage_id": "p1", "quote": "本期营业收入120万元"}]},
+                           "currency": {"status": "pending_review", "evidence": []}}},
+            "status": "source_supported",
+            "coverage_gaps": ["当前选段未写明币种。"],
+            "同一指标换算": "正文“净利润-10.50万元”与表内“-105,000.00”由你判断为同一指标时，尺度可为元，两段都要引用。表内其他行沿用该尺度。程序不搜索数字，也不自行乘 10000。",
         },
     },
 }

@@ -15,7 +15,7 @@ import json
 
 from mic.content_review_policy import (COMPARISON_RATE_UNITS, CORE_FIELDS, DATE_BASES, DATE_REVIEW_PROTOCOL, DATE_ROLES, DATE_ROLE_BASES,
                                        GROUPS, INDEX_FACT_TYPE, INDEX_PASSAGE_SECTIONS, METADATA_FIELDS,
-                                       NARRATIVE_FIELDS, PROTOCOL, REVIEWED_DEFAULTS, STATES,
+                                       NARRATIVE_FIELDS, PROTOCOL, REVIEW_REVISION, REVIEWED_DEFAULTS, STATES,
                                        SCOPE_DERIVED_FIELDS, SCOPE_REVIEW_PROTOCOL,
                                        TASK_COVERAGE_PROTOCOL, field_kinds)
 from mic.money import normalize_cny_fields, normalize_quoted_price, reason_status
@@ -38,6 +38,59 @@ def _quote_supported(evidence, passages):
                     and e["quote"] in passages.get(e.get("passage_id"), "") for e in evidence))
 
 
+# Model-authored amount components. Absence is a historical response and is not
+# a downgrade; a supplied basis constrains publication without reading reasons.
+_AMOUNT_BASIS_PARTS = ("value", "unit", "currency")
+
+
+def _citations_covered(evidence, claim_evidence):
+    if not isinstance(claim_evidence, list):
+        return False
+    covered = {(item.get("passage_id"), item.get("quote"))
+               for item in claim_evidence if isinstance(item, dict)}
+    return all(isinstance(item, dict) and (item.get("passage_id"), item.get("quote")) in covered
+               for item in evidence)
+
+
+def _basis_component_issue(component, claim, passages):
+    if (not isinstance(component, dict) or component.get("status") not in STATES
+            or not isinstance(component.get("evidence"), list)):
+        return "invalid"
+    if component["status"] != "source_supported":
+        return "not_supported"
+    evidence = component["evidence"]
+    if (not _quote_supported(evidence, passages)
+            or not _citations_covered(evidence, claim.get("evidence"))):
+        return "citation"
+    return None
+
+
+def _amount_basis_outcome(claim, passages):
+    """Return ``(hold_reason, publish_currency)``.
+
+    Value and unit gate the amount. An open currency judgment clears the
+    currency label and leaves the supported scale in place. Responses with no
+    basis keep the model's own currency. This does not read reason text or
+    search passages for numbers.
+    """
+    amount = claim.get("amount")
+    if not isinstance(amount, dict) or "basis" not in amount:
+        return None, True
+    basis = amount.get("basis")
+    if not isinstance(basis, dict) or any(part not in basis for part in _AMOUNT_BASIS_PARTS):
+        return "amount_basis_invalid", False
+    issues = {part: _basis_component_issue(basis.get(part), claim, passages) for part in _AMOUNT_BASIS_PARTS}
+    for part in ("value", "unit"):
+        issue = issues[part]
+        if issue == "invalid":
+            return "amount_basis_invalid", False
+        if issue == "not_supported":
+            return "amount_basis_not_supported", False
+        if issue == "citation":
+            return "amount_basis_citation_unverified", False
+    return None, issues["currency"] is None
+
+
 def _digest(item):
     value = item.model_dump(mode="json") if hasattr(item, "model_dump") else deepcopy(item)
     # Event comparison and context are attached later, with their own fingerprint.
@@ -55,6 +108,12 @@ def _reviewed_value(claims, ids, field):
     values = []
     for cid in ids:
         current = claims[cid].get("field_values", {})
+        if field.split("/")[0] == "comparison":
+            comparison, reason = _comparison_values(claims[cid])
+            if reason:
+                return False, None
+            if comparison is not None:
+                current = {**current, "comparison": comparison}
         for part in field.split("/"):
             if not isinstance(current, dict) or part not in current:
                 break
@@ -66,12 +125,69 @@ def _reviewed_value(claims, ids, field):
     if all(isinstance(v, dict) for v in values):
         combined = {}
         for value in values:
+            if field.split("/")[0] == "comparison":
+                valid, combined = _merge_comparison_members(combined, value)
+                if not valid:
+                    return False, None
+                continue
             for key, item in value.items():
                 if key in combined and combined[key] != item:
                     return False, None
                 combined[key] = item
+        if field == "comparison" and _comparison_inconsistent(combined):
+            return False, None
         return True, deepcopy(combined)
-    return (True, deepcopy(values[0])) if all(v == values[0] for v in values) else (False, None)
+    equal = _same_comparison_value if field.split("/")[0] == "comparison" else lambda a, b: a == b
+    return (True, deepcopy(values[0])) if all(equal(v, values[0]) for v in values) else (False, None)
+
+
+def _same_comparison_value(left, right):
+    # JSON booleans are judgments, not the numbers zero/one.
+    if isinstance(left, bool) != isinstance(right, bool):
+        return False
+    if isinstance(left, dict) and isinstance(right, dict):
+        return left.keys() == right.keys() and all(_same_comparison_value(left[k], right[k]) for k in left)
+    if isinstance(left, list) and isinstance(right, list):
+        return len(left) == len(right) and all(_same_comparison_value(a, b) for a, b in zip(left, right))
+    return left == right
+
+
+def _merge_comparison_members(left, right):
+    result = deepcopy(left)
+    for key, value in right.items():
+        if key in result:
+            if isinstance(result[key], dict) and isinstance(value, dict):
+                valid, value = _merge_comparison_members(result[key], value)
+                if not valid:
+                    return False, None
+            elif not _same_comparison_value(result[key], value):
+                return False, None
+        result[key] = deepcopy(value)
+    return True, result
+
+
+def _comparison_inconsistent(value):
+    return any(value.get(key) is not None and value.get(key + "_status") == "not_applicable"
+               for key in COMPARISON_RATE_UNITS)
+
+
+def _comparison_leaves(value, prefix=()):
+    for key, item in value.items():
+        parts = (*prefix, key)
+        if isinstance(item, dict) and item:
+            yield from _comparison_leaves(item, parts)
+        else:
+            yield parts, item
+
+
+def _comparison_explicit_conflict(proposed, approved, parts=()):
+    """Omission is fillable; an explicitly different value is not."""
+    if isinstance(approved, dict) and isinstance(proposed, dict):
+        return any(key in proposed and _comparison_explicit_conflict(proposed[key], value, (*parts, key))
+                   for key, value in approved.items())
+    if len(parts) == 1 and parts[0] in COMPARISON_RATE_UNITS and approved is not None:
+        return _finite_number(proposed) != _finite_number(approved)
+    return not _same_comparison_value(proposed, approved)
 
 
 def _original_claim(claim):
@@ -287,47 +403,73 @@ def _finite_number(value):
         return None
 
 
-def _comparison_claim_reason(claim):
-    """Verify model-specified rate inputs; never discover numbers in prose."""
+def _comparison_values(claim):
+    """Resolve explicit typed inputs, without altering model claims or statuses.
+
+    An omitted output is derived. An explicitly supplied conflicting output is
+    still rejected, including historical dual-value responses.
+    """
     values = claim.get("field_values", {})
-    comparison = values.get("comparison") if isinstance(values, dict) else None
-    if not isinstance(comparison, dict):
-        return None
+    if not isinstance(values, dict):
+        return None, None  # invalid_claim is handled by the shared state check
+    if "comparison" not in values and "comparison_input" not in values:
+        return None, None
+    comparison = values.get("comparison", {})
     inputs = values.get("comparison_input", {})
-    if isinstance(inputs, dict) and any(key not in COMPARISON_RATE_UNITS for key in inputs):
-        return "comparison_input_member_invalid"
+    if not isinstance(comparison, dict) or not isinstance(inputs, dict):
+        return None, "comparison_input_missing_or_invalid"
+    if (comparison or inputs) and claim.get("kind") not in field_kinds("metrics", "comparison"):
+        return None, "comparison_claim_kind_invalid"
+    if any(key not in COMPARISON_RATE_UNITS for key in inputs):
+        return None, "comparison_input_member_invalid"
+    resolved = deepcopy(comparison)
     for key, target_unit in COMPARISON_RATE_UNITS.items():
-        if key not in comparison or comparison[key] is None:
+        if key not in inputs and comparison.get(key) is None:
             continue  # null / N/A semantics still use the existing review contract
+        if key in inputs and comparison.get(key + "_status") == "not_applicable":
+            return None, "comparison_value_conflicting"
         if claim.get("kind") != "comparability":
-            return "comparison_claim_kind_invalid"
-        item = inputs.get(key) if isinstance(inputs, dict) else None
+            return None, "comparison_claim_kind_invalid"
+        item = inputs.get(key)
         if not isinstance(item, dict):
-            return "comparison_input_missing_or_invalid"
-        number, output = _finite_number(item.get("value")), _finite_number(comparison[key])
-        if number is None or output is None:
-            return "comparison_input_missing_or_invalid"
+            return None, "comparison_input_missing_or_invalid"
+        number = _finite_number(item.get("value"))
+        if number is None:
+            return None, "comparison_input_missing_or_invalid"
         factors = {"ratio": Decimal(1), "percent": Decimal("0.01"),
                    "percentage_point": Decimal("0.01"), "basis_point": Decimal("0.0001")}
         unit = item.get("unit")
         if not isinstance(unit, str) or unit not in factors:
-            return "comparison_unit_missing_or_invalid"
+            return None, "comparison_unit_missing_or_invalid"
         # Percentage points measure a difference, not a relative growth rate.
         if target_unit == "ratio" and unit == "percentage_point":
-            return "comparison_unit_incompatible"
+            return None, "comparison_unit_incompatible"
         if target_unit == "percentage_point" and unit == "percent":
-            return "comparison_unit_incompatible"
+            return None, "comparison_unit_incompatible"
         if not _evidence_within(item.get("evidence"), claim.get("evidence")):
-            return "comparison_evidence_missing_or_unverified"
+            return None, "comparison_evidence_missing_or_unverified"
         try:
             expected = number * factors[unit]
             if target_unit == "percentage_point":
                 expected *= 100
-        except DecimalException:
-            return "comparison_input_missing_or_invalid"
-        if output != expected:
-            return "comparison_value_conflicting"
-    return None
+            output = float(expected)
+        except (DecimalException, OverflowError, ValueError):
+            return None, "comparison_input_missing_or_invalid"
+        # Do not silently overflow, underflow or round an unrepresentable input.
+        if _finite_number(output) != expected:
+            return None, "comparison_input_missing_or_invalid"
+        if key in comparison:
+            explicit = _finite_number(comparison[key])
+            if explicit is None:
+                return None, "comparison_input_missing_or_invalid"
+            if explicit != expected:
+                return None, "comparison_value_conflicting"
+        resolved[key] = output
+    return resolved, None
+
+
+def _comparison_claim_reason(claim):
+    return _comparison_values(claim)[1]
 
 
 def _date_assessment_reason(assessment, allowed_roles, evidence):
@@ -573,20 +715,22 @@ def enforce_reviewed_comparisons(group, record, review=None):
             corrections.add(path.split("/")[0])
     comparison = result.get("comparison")
     if group == "metrics" and isinstance(comparison, dict):
-        for key in COMPARISON_RATE_UNITS:
-            if comparison.get(key) is None:
+        if _comparison_inconsistent(comparison):
+            corrections.add("comparison")
+        for parts, candidate in _comparison_leaves(comparison):
+            if not _present(candidate):
                 continue
-            field = fields.get("comparison/" + key, fields.get("comparison", {}))
-            field = field if isinstance(field, dict) else {}
+            path = "comparison/" + "/".join(parts)
+            field = _nearest_field(fields, path)
             ids = field.get("claim_ids", [])
             valid = (audit.get("protocol") == PROTOCOL and field.get("status") == "source_supported"
                      and isinstance(ids, list) and bool(ids)
                      and all(isinstance(cid, str) and isinstance(claims.get(cid), dict)
                              and claims[cid].get("effective_status") == "source_supported"
-                             and claims[cid].get("kind") == "comparability"
+                             and claims[cid].get("kind") in field_kinds("metrics", "comparison")
                              and not _comparison_claim_reason(claims[cid]) for cid in ids))
-            found, value = _reviewed_value(claims, ids, "comparison/" + key) if valid else (False, None)
-            if not found or value != comparison[key]:
+            found, value = _reviewed_value(claims, ids, path) if valid else (False, None)
+            if not found or not _same_comparison_value(value, candidate):
                 corrections.add("comparison")
     for field in sorted(corrections):
         if field not in result or not _present(result[field]):
@@ -642,13 +786,30 @@ class ContentReview:
             self.bindings = {}
         self.states = {}
         self.reasons = {}
+        self.currency_withheld = set()
         self.held = []
         self.fields = {}
         self.date_rejections = {}
         self.scope_dependency_blocks = set()
         self.publication_conflict = None
+        self.comparison_rejections = {}
         for cid in self.claims:
             self.state(cid)
+        # Check coupled rate/status members even when bound through different
+        # child paths. Only supported claims contribute; no prose interpretation.
+        for index, metric in enumerate(self.proposed.get("metrics", [])):
+            path = f"/metrics/{index}/comparison"
+            candidate, _ = self.comparison_candidates(path, metric.get("comparison", {}))
+            for key in COMPARISON_RATE_UNITS:
+                if candidate.get(key) is not None and candidate.get(key + "_status") == "not_applicable":
+                    for member in (key, key + "_status"):
+                        for cid in self.comparison_ids(path, (member,)):
+                            self.comparison_rejections[cid] = "comparison_materialized_value_conflicting"
+        if self.comparison_rejections:
+            self.states.clear()
+            self.reasons.clear()
+            for cid in self.claims:
+                self.state(cid)
         for index, metric in enumerate(self.proposed.get("metrics", [])):
             path = f"/metrics/{index}"
             record_ids = self.ids(path)
@@ -697,7 +858,14 @@ class ContentReview:
         if state == "source_supported" and not _quote_supported(claim.get("evidence"), self.passages):
             state, reason = "pending_review", "citation_missing_or_unverified"
         if state == "source_supported":
-            comparison_reason = _comparison_claim_reason(claim) or self.comparison_output_reason(cid)
+            hold_reason, publish_currency = _amount_basis_outcome(claim, self.passages)
+            if hold_reason:
+                state, reason = "pending_review", hold_reason
+            elif not publish_currency:
+                self.currency_withheld.add(cid)
+        if state == "source_supported":
+            comparison_reason = (self.comparison_rejections.get(cid) or _comparison_claim_reason(claim)
+                                 or self.comparison_output_reason(cid))
             if comparison_reason:
                 state, reason = "pending_review", comparison_reason
         publication_ids = self.bindings.get("/source_publication", [])
@@ -720,11 +888,11 @@ class ContentReview:
         return state
 
     def comparison_output_reason(self, cid):
-        """A conflicting bound rate cannot be repaired into an approved answer."""
-        values = self.claims[cid].get("field_values", {})
-        comparison = values.get("comparison") if isinstance(values, dict) else None
-        if not isinstance(comparison, dict) or not any(
-                key in comparison and comparison[key] is not None for key in COMPARISON_RATE_UNITS):
+        """Apply the same conflict check to numbers, statuses and nested values."""
+        comparison, reason = _comparison_values(self.claims[cid])
+        if reason:
+            return reason
+        if not isinstance(comparison, dict) or not comparison:
             return None
         for path, ids in self.bindings.items():
             if not isinstance(path, str) or not isinstance(ids, list) or cid not in ids:
@@ -732,24 +900,78 @@ class ContentReview:
             parts = path.strip("/").split("/")
             if len(parts) < 3 or parts[0] != "metrics" or parts[2] != "comparison":
                 continue
+            # Multiple claims at one binding must agree on overlapping members.
+            if any(other not in self.claims for other in ids):
+                return "comparison_materialized_value_conflicting"
+            valid, approved = self.reviewed_value(ids, "/".join(parts[2:]))
+            if not valid:
+                return "comparison_materialized_value_conflicting"
+            missing = object()
             output = self.proposed
-            for part in parts:
+            output_comparison = missing
+            for index, part in enumerate(parts):
                 if isinstance(output, list) and part.isdigit() and int(part) < len(output):
                     output = output[int(part)]
                 else:
-                    output = output.get(part) if isinstance(output, dict) else None
-            approved = comparison
-            for part in parts[3:]:
-                approved = approved.get(part) if isinstance(approved, dict) else None
-            # At a combined binding, each claim owns only its explicit members.
-            if isinstance(output, dict) and isinstance(approved, dict):
-                mismatch = any(key in COMPARISON_RATE_UNITS and output.get(key) != value
-                               for key, value in approved.items())
-            else:
-                mismatch = output != approved
-            if mismatch:
+                    if output is not missing and not isinstance(output, dict):
+                        return "comparison_materialized_value_conflicting"
+                    output = output.get(part, missing) if isinstance(output, dict) else missing
+                if index == 2:
+                    output_comparison = output
+            if output is not missing and _comparison_explicit_conflict(output, approved, tuple(parts[3:])):
                 return "comparison_materialized_value_conflicting"
+            if isinstance(output_comparison, dict):
+                for key in COMPARISON_RATE_UNITS:
+                    if (comparison.get(key) is not None and output_comparison.get(key + "_status") == "not_applicable"
+                            or comparison.get(key + "_status") == "not_applicable" and output_comparison.get(key) is not None):
+                        return "comparison_materialized_value_conflicting"
         return None
+
+    def comparison_ids(self, path, parts):
+        ids = self.ids(path)
+        for part in parts:
+            path += "/" + part
+            ids = self.ids(path, ids)
+        return ids
+
+    def comparison_candidates(self, path, value):
+        """Materialize all explicitly bound comparison members through one path."""
+        result, conversions = deepcopy(value), {}
+        members = set()
+        for binding, ids in self.bindings.items():
+            if not isinstance(binding, str) or not (binding == path or binding.startswith(path + "/")):
+                continue
+            suffix = tuple(binding[len(path):].strip("/").split("/")) if binding != path else ()
+            for cid in self.ids(binding):
+                comparison, reason = _comparison_values(self.claims.get(cid, {}))
+                if reason or comparison is None:
+                    continue
+                members.update(parts for parts, _ in _comparison_leaves(comparison)
+                               if parts[:len(suffix)] == suffix)
+        for parts in sorted(members):
+            ids = self.comparison_ids(path, parts)
+            if not ids or any(cid not in self.claims or self.state(cid) != "source_supported"
+                              or self.claims[cid].get("kind") not in field_kinds("metrics", "comparison") for cid in ids):
+                continue
+            valid, approved = self.reviewed_value(ids, "comparison/" + "/".join(parts))
+            if not valid:
+                continue
+            parent = result
+            for part in parts[:-1]:
+                if not isinstance(parent, dict):
+                    break
+                parent = parent.setdefault(part, {})
+            key = parts[-1]
+            if not isinstance(parent, dict) or key in parent:
+                continue
+            parent[key] = deepcopy(approved)
+            if len(parts) == 1 and key in COMPARISON_RATE_UNITS and approved is not None:
+                conversions[key] = {"output_value": approved, "output_unit": COMPARISON_RATE_UNITS[key],
+                    "inputs": [{"claim_id": cid, **{k: item[k] for k in ("value", "unit")}}
+                               for cid in ids
+                               if isinstance(item := self.claims[cid].get("field_values", {}).get(
+                                   "comparison_input", {}).get(key), dict)]}
+        return result, conversions
 
     def ids(self, path, inherited=None):
         value = self.bindings.get(path, inherited)
@@ -924,6 +1146,9 @@ class ContentReview:
         start = len(self.held)
         group = path.split("/")[1]
         record_ids = self.ids(path)
+        conversions = {}
+        if group == "metrics":
+            before["comparison"], conversions = self.comparison_candidates(path + "/comparison", before["comparison"])
         if (group == "facts" and self.index_only(self.ids(path + "/fact_statement", record_ids))
                 and before.get("fact_type") != INDEX_FACT_TYPE):
             self.hold(path, before, "index_fact_requires_document_listing", record_ids)
@@ -953,6 +1178,19 @@ class ContentReview:
                               if cid in self.claims and self.claims[cid].get("amount") is not None
                               and self.state(cid) == "source_supported"]
             pid = before.get("evidence_locator", {}).get("passage_id")
+            withheld_currency = [cid for cid in ids if cid in self.currency_withheld
+                                 and self.state(cid) == "source_supported"]
+            if withheld_currency and specifications:
+                units = {spec.get("unit") for spec in specifications if isinstance(spec, dict)}
+                if len(units) == 1 and None not in units:
+                    out[name] = {**values, "currency": None, "amount_unit": next(iter(units)),
+                                 "amount_currency_status": "pending_review",
+                                 "amount_currency_reason": "currency_basis_not_supported"}
+                    self.fields[money_path + "/amount"] = {
+                        "claim_ids": ids, "states": {cid: self.state(cid) for cid in ids},
+                        "status": "source_supported", "currency_status": "pending_review",
+                        "reason": "currency_basis_not_supported"}
+                    continue
             updated, reason = normalize_quoted_price(values, self.passages, pid, specifications)
             if reason == "not_unit_price":
                 updated, reason = normalize_cny_fields(values, self.passages, specifications)
@@ -970,6 +1208,12 @@ class ContentReview:
                     "status": status, "reason": reason}
                 out[name] = {**values, "amount": None, "amount_candidate": values["amount"],
                              "amount_status": status, "amount_reason": reason}
+        for key, conversion in conversions.items():
+            if out.get("comparison", {}).get(key) != conversion["output_value"]:
+                continue
+            check = self.fields.get(path + "/comparison/" + key, self.fields.get(path + "/comparison"))
+            if check and check.get("status") == "source_supported":
+                check.setdefault("conversion", {})[key] = conversion
         audit = {"protocol": PROTOCOL,
                  "fields": {k[len(path) + 1:]: v for k, v in self.fields.items() if k.startswith(path + "/")},
                  "held_fields": deepcopy(self.held[start:])}
@@ -1015,6 +1259,7 @@ class ContentReview:
             setattr(self.bundle, group, kept)
         self.bundle.content_review = {
             "protocol": PROTOCOL, "status": "applied", "model_review": self.raw,
+            "review_revision": REVIEW_REVISION,
             "claims": {cid: {"status": self.state(cid), "reason": self.reasons[cid],
                              "dependency_status": "pending_review" if cid in self.scope_dependency_blocks else self.state(cid)}
                        for cid in self.claims}, "held": self.held,
@@ -1198,6 +1443,15 @@ def _coverage_leaves(review):
     if isinstance(children, list) and children:
         return [leaf for child in children for leaf in _coverage_leaves(child)]
     return [review]
+
+
+def cache_review_current(review):
+    """Require each contribution to have run under the current review policy.
+
+    Old model judgments need re-extraction, not a keyword-based reinterpretation
+    of their free-form reasons. Keep the historical records and seals intact.
+    """
+    return all(leaf.get("review_revision") == REVIEW_REVISION for leaf in _coverage_leaves(review))
 
 
 def _coverage_answer_claims(bundle, review):

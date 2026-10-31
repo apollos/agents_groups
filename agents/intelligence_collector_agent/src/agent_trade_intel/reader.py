@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .db import SQLiteStore, loads_json
+from .report_period_alignment import alignment_for_runs
 from .task_lifecycle import sync_task_statuses
 from .tickets import TicketRepository
 
@@ -82,11 +83,16 @@ class IntelligenceReader:
                 demand = None
                 tasks = con.execute("SELECT * FROM collection_tasks ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
                 runs = con.execute("SELECT * FROM collection_runs ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+        delivered_runs = [
+            dict(r) | {"request": loads_json(r["request_json"], {}), "quality": loads_json(r["quality_json"], {})}
+            for r in runs
+        ]
         return {
             "status": "success",
             "demand": loads_json(demand["payload_json"], {}) if demand else None,
             "tasks": [dict(r) | {"payload": loads_json(r["payload_json"], {})} for r in tasks],
-            "runs": [dict(r) | {"request": loads_json(r["request_json"], {}), "quality": loads_json(r["quality_json"], {})} for r in runs],
+            "runs": delivered_runs,
+            "report_period_alignment": alignment_for_runs(delivered_runs),
         }
 
     def read_ticket_chain(self, *, correlation_id: str) -> dict[str, Any]:
