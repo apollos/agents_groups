@@ -531,6 +531,7 @@ class ProviderComparisonModel(AuditMixin, Base):
     checked_fields: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     matched_fields: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     conflicted_fields: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    not_comparable_fields: Mapped[Optional[list[dict[str, Any]]]] = mapped_column(JSON, default=list)
     conflicts: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
     request_id: Mapped[Optional[str]] = mapped_column(String(80), index=True)
     ingestion_run_id: Mapped[Optional[str]] = mapped_column(String(80), index=True)

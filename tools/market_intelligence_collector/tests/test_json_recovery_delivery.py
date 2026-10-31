@@ -38,7 +38,7 @@ UNKNOWN = {"status": "unknown", "published_at": None,
 
 def _reviewed_output():
     return {
-        "decision": "save_structured", "overall_score": 85, "confidence": .9,
+        "schema_version": "bundle_extraction_v0.3", "decision": "save_structured", "overall_score": 85, "confidence": .9,
         "facts": [{"fact_type": "claim", "fact_statement": FACT, "confidence": .9,
                    "evidence_locator": {"passage_id": "p1"}}],
         "metrics": [{"metric_name": "出货量", "metric_value": 120, "unit": "台",

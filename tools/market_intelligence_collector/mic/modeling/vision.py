@@ -64,11 +64,12 @@ class VisionExtractor:
         # backend to force via the x-openclaw-model header. The override must
         # name a text+image model on the OpenClaw side; without it the
         # gateway's default (often text-only) model would receive the request
-        # and never see the images. OPENCLAW_VISION_MODEL (.env) wins over
-        # the yaml value since model names are deployment-specific.
+        # and never see the images. The request route follows the registry's
+        # dedicated MIC agent; a vision model override only selects the
+        # upstream multimodal model, not an unrestricted OpenClaw agent.
         self.request_model = (
-            os.environ.get("OPENCLAW_REQUEST_MODEL", "").strip()
-            or vcfg.get("request_model", "openclaw/default")
+            os.environ.get("MIC_OPENCLAW_REQUEST_MODEL", "").strip()
+            or vcfg.get("request_model", "")
         )
         self.model_override = (
             os.environ.get("OPENCLAW_VISION_MODEL", "").strip()
@@ -80,6 +81,10 @@ class VisionExtractor:
         # The registry entry supplies endpoint + token; the actual HTTP call
         # uses the Responses API rather than the adapter's chat-completions.
         self.adapter = registry.get(self.model_config_id)
+        if not self.request_model and self.adapter is not None:
+            self.request_model = self.adapter.model
+        if not self.request_model:
+            self.request_model = "openclaw/mic-extract"
         self.calls_used = 0
         self.estimated_cost = 0.0
 

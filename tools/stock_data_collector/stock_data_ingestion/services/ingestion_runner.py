@@ -57,6 +57,7 @@ from stock_data_ingestion.schemas.requests import RequestType, StockDataRequest
 from stock_data_ingestion.schemas.responses import ResponseStatus, StockDataResponse
 from stock_data_ingestion.storage.parquet_store import ParquetStore
 from stock_data_ingestion.storage.raw_object_store import RawObjectStore
+from stock_data_ingestion.normalization.field_semantics import map_semantic_fields
 from stock_data_ingestion.utils.hashing import sha256_json
 from stock_data_ingestion.validation.comparison import DEFAULT_BAR_FIELDS, build_comparison_key, compare_standard_records
 from stock_data_ingestion.validation.merge_policy import apply_canonical_merge_policy, mark_provider_specific_append
@@ -1281,10 +1282,12 @@ class IngestionRunner:
         raw_row_index: int,
         domain_values: dict[str, Any],
         record_type: str,
+        field_semantics: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         source_role = SourceRole.canonical if result.provider == request.canonical_provider else SourceRole.validator
         merge_method = MergeMethod.canonical_only if result.provider == request.canonical_provider else MergeMethod.fallback_single_source
         values = _clean_dict(domain_values)
+        semantics = field_semantics or {}
         provenance = {
             field: {
                 "provider": result.provider,
@@ -1293,6 +1296,7 @@ class IngestionRunner:
                 "raw_payload_id": result.raw_payload_id,
                 "raw_payload_ref": result.raw_payload_ref,
                 "raw_row_index": raw_row_index,
+                **semantics.get(field, {}),
             }
             for field, value in values.items()
             if value is not None and not (isinstance(value, (list, dict)) and not value)
@@ -1548,47 +1552,37 @@ class IngestionRunner:
 
     def _normalize_financial_indicator(self, result: ProviderFetchResult, raw: dict[str, Any], idx: int, request: StockDataRequest, run_id: str) -> list[StandardRecord]:
         identity = self._stock_identity(raw, request)
+        metrics, semantics = map_semantic_fields(
+            "financial_indicator", result.provider, _value(raw, "raw_source_api", default=result.source_api), raw,
+            ["roe", "roa", "gross_margin", "net_margin", "revenue_yoy", "net_profit_yoy", "debt_asset_ratio",
+             "current_ratio", "ocf_to_net_profit", "eps", "bps"],
+        )
         domain = {
             **identity,
             "currency": normalize_currency(_value(raw, "currency", default="CNY")),
             "report_period": str(_value(raw, "report_period", "end_date", "statDate", "报告期")),
             "report_date": _date(raw, "report_date", "statDate", "报告日期"),
             "announcement_date": _date(raw, "ann_date", "announcement_date", "pubDate", "公告日期"),
-            "roe": _float(raw, "roe", "roeAvg", "dupontROE", "ROE"),
-            "roa": _float(raw, "roa", "ROA"),
-            "gross_margin": _float(raw, "gross_margin", "gpMargin", "grossprofit_margin", "毛利率"),
-            "net_margin": _float(raw, "net_margin", "npMargin", "dupontNitogr", "netprofit_margin", "净利率"),
-            "revenue_yoy": _float(raw, "revenue_yoy", "or_yoy", "营收同比"),
-            "net_profit_yoy": _float(raw, "net_profit_yoy", "YOYNI", "YOYPNI", "净利润同比"),
-            "debt_asset_ratio": _float(raw, "debt_asset_ratio", "liabilityToAsset", "资产负债率"),
-            "current_ratio": _float(raw, "current_ratio", "currentRatio", "流动比率"),
-            "ocf_to_net_profit": _float(raw, "ocf_to_net_profit", "CFOToNP", "经营现金流净利润比"),
-            "eps": _float(raw, "eps", "epsTTM", "EPS"),
-            "bps": _float(raw, "bps", "BPS"),
+            **metrics,
         }
-        return [FinancialIndicatorRecord(**self._common_record_kwargs(result=result, request=request, ingestion_run_id=run_id, raw_row_index=idx, domain_values=domain, record_type="financial_indicator"))]
+        return [FinancialIndicatorRecord(**self._common_record_kwargs(result=result, request=request, ingestion_run_id=run_id, raw_row_index=idx, domain_values=domain, record_type="financial_indicator", field_semantics=semantics))]
 
     def _normalize_valuation_metric(self, result: ProviderFetchResult, raw: dict[str, Any], idx: int, request: StockDataRequest, run_id: str) -> list[StandardRecord]:
         identity = self._stock_identity(raw, request)
         amount, _ = self._normalize_amount_for_provider(raw, result.provider)
+        metrics, semantics = map_semantic_fields(
+            "valuation_metric", result.provider, _value(raw, "raw_source_api", default=result.source_api), raw,
+            ["pe", "pe_ttm", "pb", "ps", "ps_ttm", "pcf_ncf_ttm", "dividend_yield", "total_market_value",
+             "float_market_value", "turnover_rate", "volume_ratio"],
+        )
         domain = {
             **identity,
             "currency": normalize_currency(_value(raw, "currency", default="CNY")),
             "trade_date": _date(raw, "trade_date", "date", default=request.end_date or request.start_date),
-            "pe": _float(raw, "pe", "PE"),
-            "pe_ttm": _float(raw, "pe_ttm", "peTTM", "PE_TTM"),
-            "pb": _float(raw, "pb", "pbMRQ", "PB"),
-            "ps": _float(raw, "ps", "PS"),
-            "ps_ttm": _float(raw, "ps_ttm", "psTTM", "PS_TTM"),
-            "pcf_ncf_ttm": _float(raw, "pcf_ncf_ttm", "pcfNcfTTM", "PCF_NCF_TTM"),
-            "dividend_yield": _float(raw, "dividend_yield", "股息率"),
-            "total_market_value": _float(raw, "total_market_value", "total_mv", "总市值"),
-            "float_market_value": _float(raw, "float_market_value", "circ_mv", "流通市值"),
-            "turnover_rate": normalize_turnover_rate(_float(raw, "turnover_rate", "turn", "换手率")),
-            "volume_ratio": _float(raw, "volume_ratio", "量比"),
+            **metrics,
             "amount": amount,
         }
-        return [ValuationMetricRecord(**self._common_record_kwargs(result=result, request=request, ingestion_run_id=run_id, raw_row_index=idx, domain_values=domain, record_type="valuation_metric"))]
+        return [ValuationMetricRecord(**self._common_record_kwargs(result=result, request=request, ingestion_run_id=run_id, raw_row_index=idx, domain_values=domain, record_type="valuation_metric", field_semantics=semantics))]
 
     def _normalize_industry_or_concept(self, result: ProviderFetchResult, raw: dict[str, Any], idx: int, request: StockDataRequest, run_id: str) -> list[StandardRecord]:
         identity = self._stock_identity(raw, request)

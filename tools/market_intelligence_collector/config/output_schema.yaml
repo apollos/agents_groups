@@ -4,6 +4,7 @@ output_schema:
   schema_version: bundle_extraction_v0.3
 
   limits:
+    strict_evidence_review: true
     max_facts: 10
     max_metrics: 10
     max_events: 5

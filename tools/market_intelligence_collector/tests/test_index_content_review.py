@@ -31,7 +31,7 @@ def claim(cid="listing", *, kind="observation", status="source_supported", pid="
 
 def raw_bundle():
     listing = claim()
-    return {"decision": "save_structured", "overall_score": 80,
+    return {"schema_version": "bundle_extraction_v0.3", "confidence": 0.0, "decision": "save_structured", "overall_score": 80,
             "facts": [{"fact_type": "document_listing", "fact_statement": listing["statement"],
                        "evidence_locator": {"passage_id": "entry1"}}],
             "content_review": {"protocol": PROTOCOL, "claims": [listing],

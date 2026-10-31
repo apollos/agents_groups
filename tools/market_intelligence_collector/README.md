@@ -22,7 +22,7 @@ MIC 是一个**搜索结果驱动、模型完全配置化**的情报采集与结
 - **费用控制 = 减少无效调用**，而非选便宜模型：URL/内容指纹复用、query 去重、规则先行、SERP 批量初筛、段落选择、一次性 bundle 抽取、早停。
 - **只持久化链接与结构化结果**：HTML / PDF / 全文 / 截图都不入库（`config/storage_policy.yaml`）。
 - **关系型数据是一等公民**，但用关系表实现，不上图数据库。
-- **默认不产生外部费用**：交付版默认 `active: mock` 且 `.env.example` 里 `MIC_ALLOW_MOCK=true`；真实搜索/模型必须显式配置 API Key、切换真实 search provider，并把 `MIC_ALLOW_MOCK=false`。
+- **正式默认路径**：`browser_local` 使用采集主机 GUI 会话中的专用 Edge profile；`.env.example` 和未设置环境变量时均默认 `MIC_ALLOW_MOCK=false`。离线演示与测试必须显式选择 `mock`。
 
 ---
 
@@ -30,7 +30,7 @@ MIC 是一个**搜索结果驱动、模型完全配置化**的情报采集与结
 
 - 不登录、不复用个人 Cookie、不绕过验证码/付费墙；遇到反爬/验证码页会标记失败并记录日志。
 - `canonical_url` / `content_hash` 复用已实现；**事件级语义复用**暂未启用（`call_governance.yaml -> reuse.same_event_cache: false`），避免把不同来源的相似事件误判为同一事件。
-- SearXNG / Tavily / SerpApi / 视觉转写等真实外部服务都可能产生失败或费用，真实模式必须小预算验证后再放大。
+- 浏览器启动、GUI、profile 锁与验证码等故障会保留真实原因；不得切换到 SearXNG、API 搜索或 mock 并把故障误称为没有相关信息。
 
 ---
 
@@ -103,23 +103,20 @@ cp .env.example .env
 
 ## 离线演示（无需任何 API Key）
 
-交付版默认 `config/search_providers.yaml -> active: mock`，且 `MIC_ALLOW_MOCK=true` 时模型适配层也会使用**确定性 mock**，整条流水线可在无外部服务、无外部费用的情况下端到端跑通。
+正式默认配置不会进入离线模式。离线测试和 `tools/e2e_validate.py` 会各自创建隔离配置，明确使用
+`search_providers.active: mock`、`fallback: []`、`browser_runtime.enabled: false` 和
+`MIC_ALLOW_MOCK=true`。不要通过让真实搜索服务失败来间接回退 mock。
 
-命令行：
+离线全链路验证：
 
 ```bash
-mic targets                                                          # 列出已配置目标
-mic collect company_300750 --focus operating_update,customer_change,risk --time-window 30d
-mic events company_300750 --since 30d                                # 查看最近事件
-mic relations company_300750                                         # 查看关系记录
-mic questions company_300750                                         # 查看分析师后续问题
-mic gaps company_300750                                              # 查看覆盖缺口
-mic explain <source_link_id>                                         # 解释某来源为何入选及抽取内容
+tools/run_offline_e2e.sh
 ```
 
-> 全局选项 `--log-level` / `--log-file` 控制日志（写入 `logs/`）。
+它调用 `tools/e2e_validate.py`，由脚本创建显式 mock 配置；正式默认配置下不要直接把
+`mic collect` 当作离线演示。
 
-Python 调用：
+Python 调用示例使用当前正式配置；离线调用也必须传入上述显式 mock 配置：
 
 ```python
 from mic.api import AnalystAPI
@@ -152,28 +149,30 @@ events = api.get_recent_events("company_300750", since="30d")
 完整原始正文仍仅由已启用的受限 acceptance trace 保存，不默认扩大日志范围。
 后继结果仍须通过原 schema、统一内容审核、日期窗口和入库检查，格式恢复不等于业务验收通过。
 
-1. 在 `.env` 填入密钥（`DEEPSEEK_API_KEY`、`DASHSCOPE_API_KEY`、`SILICONFLOW_API_KEY`、`SERPAPI_API_KEY` 等）。视觉救援（扫描版 PDF / 页面图片转写）还需：
+1. 在 `.env` 填入模型密钥（`DEEPSEEK_API_KEY`、`DASHSCOPE_API_KEY`、`SILICONFLOW_API_KEY` 等）。视觉救援（扫描版 PDF / 页面图片转写）还需：
    - `OPENCLAW_GATEWAY_TOKEN`：网关 token
    - `OPENCLAW_GATEWAY_BASE_URL`：本机 OpenClaw 地址（如 `http://127.0.0.1:18789/v1`），覆盖 `model_registry.yaml` 里的 endpoint，换环境不必改 yaml
    - `OPENCLAW_REQUEST_MODEL`：发给网关的 agent 路由名（yaml 默认 `openclaw/research`）
    - `OPENCLAW_VISION_MODEL`：OpenClaw 侧一个支持图片输入的模型名，如 `custom-api-siliconflow-cn/Pro/moonshotai/Kimi-K2.6`；不配则视觉调用会落到网关默认模型，纯文本模型看不到图片。
-2. 在 `config/search_providers.yaml` 把 `active: mock` 改为某个真实引擎，或一个引擎列表以**同时**调用多个引擎并合并去重，例如：
-   - `active: serpapi_baidu`（仅百度）
-   - `active: [serpapi_baidu, serpapi_bing]`（百度 + Bing）
-   - `active: [serpapi_baidu, serpapi_google, serpapi_bing]`（百度 + 谷歌 + Bing）
+2. 正式采集保持 `config/search_providers.yaml -> active: browser_local`、`fallback: []`，
+   `config/browser_runtime.yaml -> enabled: true`、`headless: false`，以及
+   `config/output_schema.yaml -> limits.strict_evidence_review: true`。该路线需要采集主机上的
+   Edge、Playwright、图形会话与仓库外专用 profile；运行前执行 `mic browser doctor`。
+3. 设置 `MIC_ALLOW_MOCK=false`。缺少浏览器依赖、GUI、专用 profile 或遇到验证码时，收集会保留故障；
+   不会自动换成其他搜索服务或 mock。
+4. 正文读取与搜索独立：搜索入口由 `search_providers.yaml` 决定；搜索得到链接后，正文仍按
+   `config/access_profiles.yaml -> browser_fetch` 的 HTTP/浏览器策略读取。
 
-   多引擎结果按 canonical URL 跨引擎去重，每条命中保留各自的 `provider` 标记（如 `serpapi:baidu`）。缺 Key 的引擎会被跳过（记日志）。三个 `serpapi_*` 引擎共用同一个 `SERPAPI_API_KEY`（微软已于 2025-08 停用原生 Bing Search API，Bing 结果统一经 SerpApi 或 SearXNG 获取）。
+### 旧 API 搜索提供方（兼容用途）
 
-   **计费与单次结果数**：SerpApi 按 API 调用次数计费，与返回条数无关。每引擎的"结果数"参数由代码自动映射（Google→`num`、Baidu→`rn`、Bing→`count`）。注意 **Google 自 2025-09 起不再支持 num 参数**，每次调用固定返回约 10 条；Baidu/Bing 的参数仍有效（单次最高 50）。`hits_per_query` 配 15 对 Google 不会浪费额度，只是用不满。
+[Tavily](https://tavily.com) 是面向 LLM 的搜索 API，按调用计费（basic 1 积分/次，免费档 1000 积分/月），Key 配在 `.env` 的 `TAVILY_API_KEY`。返回的 snippet 是抽取后的正文片段，比传统 SERP 摘要更长更干净。它不是默认路线或默认兜底；如为兼容性验证显式启用，中文财经站点覆盖仍弱于 Baidu。
 
-### Tavily（默认兜底引擎）
-
-[Tavily](https://tavily.com) 是面向 LLM 的搜索 API，按调用计费（basic 1 积分/次，免费档 1000 积分/月），Key 配在 `.env` 的 `TAVILY_API_KEY`。返回的 snippet 是抽取后的正文片段，比传统 SERP 摘要更长更干净，利好初筛打分。**中文财经站点覆盖弱于 Baidu**（百家号、财联社类站点召回偏低），因此默认定位是 `fallback: tavily`（零运维兜底，已是默认配置）或 active 里的补充引擎，不建议单独作为 A 股目标的唯一主引擎。
-3. 设 `MIC_ALLOW_MOCK=false` 强制走真实调用（否则缺 Key 时会自动回退 mock）。`python tools/e2e_validate.py --real` 会自动强制 `MIC_ALLOW_MOCK=false`，并且如果 `active` 仍是 `mock` 会直接失败，避免假阳性。
-4. 生产环境把 `MIC_DATABASE_URL` 指向 PostgreSQL，例如
+Tavily、SerpApi 与 SearXNG 实现和兼容性测试仍保留，但不是正式默认项或 browser_local 的 fallback。
+如为兼容性验证显式选择它们，仍应保持 `MIC_ALLOW_MOCK=false`；正式验收不使用这些路线。
+生产环境可把 `MIC_DATABASE_URL` 指向 PostgreSQL，例如
    `postgresql+psycopg://user:pass@localhost:5432/mic`。
 
-### 免费搜索源：自建 SearXNG（可选兜底）
+### 旧自建 SearXNG（可选兼容服务）
 
 [SearXNG](https://github.com/searxng/searxng) 是自托管元搜索引擎：一条 query 在实例侧扇出到
 百度/谷歌/Bing 并返回合并后的 JSON，**免费、无按次费用**。本仓库自带可直接启动的配置：
@@ -194,10 +193,10 @@ curl 'http://localhost:8888/search?q=test&format=json' | head                   
 >   --restart unless-stopped searxng/searxng:latest
 > ```
 
-用法二选一（`config/search_providers.yaml`）：
+只在显式做旧 provider 兼容性验证时修改 `config/search_providers.yaml`：
 
 - **作为主引擎**：`active: searxng`（或 `active: [searxng, serpapi_baidu]` 混跑）；
-- **作为兜底**：`fallback` 支持单个名字或**有序列表**（默认 `[tavily, searxng]`）——
+- **作为兜底**：`fallback` 支持单个名字或**有序列表**——
   当所有 active 引擎对某条 query 失败或返回 0 条结果时，按顺序逐个用兜底引擎重试，
   直到拿到结果。已出现在 `active` 里的名字、不可用的引擎（缺 Key / 实例没起来）
   会被自动跳过；仅 mock 在跑时兜底不生效。
@@ -208,13 +207,14 @@ curl 'http://localhost:8888/search?q=test&format=json' | head                   
 所有模型供应商均为 OpenAI 兼容接口，在 `config/model_registry.yaml` 注册；
 任务级调用策略在 `config/model_policies.yaml` 配置。
 
-### 本地浏览器搜索路线（`browser_local`，可选）
+### 本地浏览器搜索路线（`browser_local`，正式默认）
 
 设计文档：[`docs/design/local_browser_search.md`](docs/design/local_browser_search.md)。
 在 Ubuntu 图形桌面上用**独立、有窗口的 Microsoft Edge**（Playwright `channel=msedge`，
 `headless=false`）打开正常搜索页，解析自然结果，再走现有的筛选 → 正文读取 → 模型抽取 →
-证据审查链路。仓库默认 **关闭**（`browser_runtime.enabled: false`，`search_providers.active: searxng`），
-现有 SearXNG/API 部署行为不变。
+证据审查链路。仓库默认 **开启**：`browser_runtime.enabled: true`、`headless: false`、
+`search_providers.active: browser_local` 和空的 `fallback`。SearXNG/API 实现仅保留兼容用途，
+不构成启动前提。
 
 依赖与环境：
 

@@ -40,7 +40,7 @@ def test_two_period_amounts_survive_merge_storage_and_coverage(config, tmp_path)
     text = "单位：万元；币种：人民币。期间：2026H1、2025H1。收入120、100；利润-2、-3；经营现金流-40、-20。"
     evidence = [{"passage_id": "table", "quote": text}]
     passages = [Passage(passage_id="table", text=text, section="table")]
-    raw = {"decision": "save_structured", "overall_score": 85, "metrics": [],
+    raw = {"schema_version": "bundle_extraction_v0.3", "confidence": 0.0, "decision": "save_structured", "overall_score": 85, "metrics": [],
            "content_review": {"protocol": PROTOCOL, "claims": [], "bindings": {}}}
     expected = []
     for name, values in [("收入", (120, 100)), ("利润", (-2, -3)), ("经营现金流", (-40, -20))]:
@@ -82,7 +82,7 @@ def test_event_coverage_runs_after_shared_event_resolution(occurrence, expected)
     comparison = {"candidate_ref": "previous", "relation": "same_event",
         "scope_relation": "equivalent", "same_occurrence": occurrence, "stage_relation": "same",
         "reason": "人工标签：同一次发布。", "current_evidence": evidence, "candidate_evidence": evidence}
-    raw = {"decision": "save_structured", "overall_score": 85,
+    raw = {"schema_version": "bundle_extraction_v0.3", "confidence": 0.0, "decision": "save_structured", "overall_score": 85,
         "events": [{"summary": text, "event_type": "product_launch", "evidence_locator": {"passage_id": "p1"},
             "event_resolution": {"current_claim_ids": ["launch"], "reviewed": True,
                 "verdict": "same_event", "reason": "同一发布事项", "current_evidence": evidence,

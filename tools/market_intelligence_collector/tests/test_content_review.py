@@ -56,7 +56,7 @@ def case():
     project_role = claim("project_role", "文中该名称是项目名称。", "p0", kind="identity")
     project_role["field_values"] = {"entities": {"subject": "项目"}}
     claims.extend([parties, project_role])
-    raw = {"decision": "save_structured", "overall_score": 76, "confidence": .8,
+    raw = {"schema_version": "bundle_extraction_v0.3", "decision": "save_structured", "overall_score": 76, "confidence": .8,
            "brief": {"one_sentence": project + owner, "why_it_matters": compare},
            "facts": [{"fact_statement": project + owner, "entities": {"subject": "项目", "owner": "河北任丘智弘"},
                       "evidence_locator": {"passage_id": "p0"}}],
@@ -125,6 +125,12 @@ def test_missing_invalid_or_circular_claims_never_pass(damage):
     if damage == "title_only": award["evidence"] = [{"passage_id": "title", "quote": TEXT["title"]}]
     if damage == "cycle": award["depends_on"] = ["award"]
     if damage == "unknown_dependency": award["depends_on"] = ["unknown"]
+    if damage == "no_review":
+        report = BundleValidator({}, require_content_review=True).validate(raw, PASSAGES)
+        assert not report.schema_valid and report.bundle is None
+        assert report.error_code == "response_protocol_invalid"
+        assert report.errors == ["content_review: missing"]
+        return
     bundle = validate(raw)
     assert bundle.events == []
     assert bundle.content_review["held"]
@@ -227,7 +233,7 @@ def test_thousand_yuan_table_amount_is_converted_not_rejected():
     revenue = {"id": "revenue_2025", "statement": "宁德时代2025年度营业收入为423,701,834千元。", "kind": "observation",
                "status": "source_supported", "reason": "行名、年份列与表头单位说明共同支持。", "evidence": evidence,
                "depends_on": [], "amount": {"currency": "CNY", "value": 423701834, "unit": "千元", "evidence": evidence}}
-    raw = {"decision": "save_structured", "overall_score": 80, "confidence": .9,
+    raw = {"schema_version": "bundle_extraction_v0.3", "decision": "save_structured", "overall_score": 80, "confidence": .9,
            "facts": [{"fact_type": "finance", "fact_statement": revenue["statement"], "period": "2025年度",
                       "metrics": {"amount": 423701834, "currency": "CNY", "amount_unit": "千元"},
                       "evidence_locator": {"passage_id": "t1"}}],
@@ -457,7 +463,7 @@ def test_spec_summary_without_event_type_value_keeps_facts_and_drops_the_event()
     spec = {"id": "spec", "statement": "甲-X200采用扣卡式模组，最大功耗700W。", "kind": "observation",
             "status": "source_supported", "reason": "原文给出形态和最大功耗，没有发布行为。",
             "evidence": [{"passage_id": "p0", "quote": text}], "depends_on": [], "field_values": {}}
-    raw = {"decision": "save_structured", "overall_score": 78, "confidence": 0.8,
+    raw = {"schema_version": "bundle_extraction_v0.3", "decision": "save_structured", "overall_score": 78, "confidence": 0.8,
            "brief": {"one_sentence": spec["statement"]},
            "facts": [{"fact_statement": spec["statement"], "evidence_locator": {"passage_id": "p0"}}],
            "metrics": [{"metric_name": "最大功耗", "metric_value": 700, "unit": "W",
@@ -483,7 +489,7 @@ def test_explicit_event_type_value_still_publishes_the_event():
                 "status": "source_supported", "reason": "原文写明发布行为及日期。",
                 "evidence": [{"passage_id": "p0", "quote": text}], "depends_on": [],
                 "field_values": {"event_type": "product_launch"}}
-    raw = {"decision": "save_structured", "overall_score": 78, "confidence": 0.8,
+    raw = {"schema_version": "bundle_extraction_v0.3", "decision": "save_structured", "overall_score": 78, "confidence": 0.8,
            "events": [{"event_type": "product_launch", "summary": occurred["statement"],
                        "event_date": "2026-03-01", "evidence_locator": {"passage_id": "p0"}}],
            "content_review": {"protocol": PROTOCOL, "claims": [occurred], "bindings": {"/events/0": ["launch"]}}}

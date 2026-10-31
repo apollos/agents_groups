@@ -147,7 +147,7 @@ class MICConfig:
 
     @property
     def allow_mock(self) -> bool:
-        return os.environ.get("MIC_ALLOW_MOCK", "true").lower() in ("1", "true", "yes")
+        return os.environ.get("MIC_ALLOW_MOCK", "false").lower() in ("1", "true", "yes")
 
     def get_target_profile(self, target_id: str) -> dict[str, Any] | None:
         return self.target_profiles.get(target_id)

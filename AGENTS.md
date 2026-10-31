@@ -66,3 +66,7 @@ DB exports, acceptance evidence, driver scripts for such runs) belongs under the
 - If an OpenClaw startup attempt fails, stop the startup/testing workflow
   immediately and notify the user. Do not retry, troubleshoot, attempt repairs,
   or switch environments to work around that failure. The user will handle it.
+
+# 单公司应用验收
+
+单公司应用验收以 docs/acceptance/ACCEPTANCE_BASELINE.md 为准。运行和复核前必须读取，报告注明基线编号、版本及文件哈希。未经用户明确同意，不改变 G1—G6，不将新发现的其他问题自动加入本次通过条件。

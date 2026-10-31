@@ -86,7 +86,7 @@ def _extraction(payload, state):
         "evidence": [{"passage_id": pid, "quote": text}], "depends_on": [],
     }
     bundle = {
-        "decision": "save_structured", "overall_score": 80, "confidence": .9,
+        "schema_version": "bundle_extraction_v0.3", "decision": "save_structured", "overall_score": 80, "confidence": .9,
         "facts": [{"fact_type": "document_listing" if is_index else "claim",
                    "fact_statement": text, "confidence": .9,
                    "evidence_locator": {"passage_id": pid}}],

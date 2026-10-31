@@ -174,8 +174,12 @@ def test_baostock_financial_indicator_merges_selected_quarterly_endpoints(baosto
     row = result.raw_records[0]
     assert row["report_period"] == "20260630"
     assert row["roe"] == "7.1"
-    assert row["net_profit_yoy"] == "10.0"
-    assert row["eps"] == "0.50"
+    # The standard field is parent net profit growth (YOYPNI), not total net profit growth (YOYNI).
+    assert row["net_profit_yoy"] == "12.0"
+    assert row["YOYNI"] == "10.0"
+    # epsTTM is a trailing-twelve-month EPS, not the basic year-to-date EPS of the standard field.
+    assert "eps" not in row
+    assert row["epsTTM"] == "0.50"
     assert {name for name, _ in fake_bs.financial_calls} == {"query_profit_data", "query_growth_data"}
 
 

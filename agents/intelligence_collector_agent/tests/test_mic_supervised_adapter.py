@@ -509,7 +509,7 @@ def test_unique_active_attempt_per_task_key(tmp_path):
 
 # --- skill preflight is provider aware -------------------------------------------------------------
 
-def test_skill_preflight_mentions_browser_doctor_and_searxng_branches(tmp_path):
+def test_skill_preflight_for_browser_local_excludes_legacy_search_startup(tmp_path):
     import types
 
     from agent_trade_intel.openclaw import OpenClawArtifactRenderer
@@ -531,6 +531,6 @@ def test_skill_preflight_mentions_browser_doctor_and_searxng_branches(tmp_path):
         text = OpenClawArtifactRenderer(config).skill_md()
     cfg_mod.load_config.assert_called_once_with("/mic/config")
     assert "search_providers.active = browser_local" in text
-    assert "mic browser doctor" in text and "ensure-search" in text
+    assert "mic browser doctor" in text and "ensure-search" not in text
     assert "gui_unavailable" in text and "profile_busy" in text
     assert "不得杀其他进程" in text

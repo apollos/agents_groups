@@ -76,7 +76,7 @@ def test_existing_model_calls_carry_context_then_persist_decisions(config, monke
                                  "candidate_evidence": [{"passage_id": c["passages"][0]["passage_id"],
                                                          "quote": c["passages"][0]["text"]}]}
                                 for c in context["candidates"]]}
-        parsed = {"decision": "save_structured", "overall_score": 78, "confidence": .9, "events": events}
+        parsed = {"schema_version": "bundle_extraction_v0.3", "decision": "save_structured", "overall_score": 78, "confidence": .9, "events": events}
         parsed = attach_mock_review(parsed, payload["selected_passages"])
         return ModelCallResult(model_config_id=adapter.model_config_id, provider=adapter.provider,
                                provider_type=adapter.provider_type, model_name=adapter.model,

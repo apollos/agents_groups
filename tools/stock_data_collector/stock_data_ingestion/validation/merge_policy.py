@@ -5,6 +5,7 @@ from typing import Any, Iterable
 
 from pydantic import BaseModel
 
+from stock_data_ingestion.normalization.field_semantics import supplement_reason
 from stock_data_ingestion.schemas.quality import ConflictSeverity, DataQualityConflict, MergeMethod, SourceRole, ValidationStatus
 from stock_data_ingestion.validation.comparison import compare_standard_records
 
@@ -41,6 +42,20 @@ def _update_provenance_role(record: BaseModel, role: str, *, reason: str | None 
     return provenance
 
 
+def _provenance_with_validated_by(record: BaseModel, comparisons: Iterable[Any]) -> dict[str, Any]:
+    """Add ``validated_by`` only to fields a provider actually matched on."""
+    matched_by: dict[str, set[str]] = {}
+    for cmp in comparisons:
+        for field_name in cmp.matched_fields:
+            matched_by.setdefault(field_name, set()).add(cmp.compared_provider)
+    provenance = dict(getattr(record, "field_provenance", {}) or {})
+    for field_name, providers in matched_by.items():
+        entry = provenance.get(field_name)
+        if isinstance(entry, dict):
+            provenance[field_name] = {**entry, "validated_by": sorted(set(entry.get("validated_by", [])) | providers)}
+    return provenance
+
+
 def _is_missing(value: Any) -> bool:
     return value is None or value == "" or (isinstance(value, (list, dict)) and not value)
 
@@ -56,7 +71,9 @@ def _fill_missing_fields_from_supplements(
     updates: dict[str, Any] = {}
     provenance = dict(getattr(canonical, "field_provenance", {}) or {})
     supplement_flags = dict(getattr(canonical, "supplement_flags", {}) or {})
-    for field_name in allowed:
+    record_type = str(getattr(canonical, "record_type", ""))
+    refused: list[dict[str, str]] = []
+    for field_name in sorted(allowed):
         if not hasattr(canonical, field_name) or not _is_missing(getattr(canonical, field_name, None)):
             continue
         for supplement in supplements:
@@ -65,8 +82,12 @@ def _fill_missing_fields_from_supplements(
             value = getattr(supplement, field_name, None)
             if _is_missing(value):
                 continue
-            updates[field_name] = value
             source_entry = (getattr(supplement, "field_provenance", {}) or {}).get(field_name, {})
+            reason = supplement_reason(record_type, field_name, source_entry if isinstance(source_entry, dict) else None)
+            if reason is not None:
+                refused.append({"field": field_name, "provider": str(getattr(supplement, "provider", "")), "reason": reason})
+                continue
+            updates[field_name] = value
             provenance[field_name] = {
                 **(source_entry if isinstance(source_entry, dict) else {}),
                 "provider": getattr(supplement, "provider", None),
@@ -80,8 +101,10 @@ def _fill_missing_fields_from_supplements(
                 "reason": "canonical_field_missing_whitelisted_supplement",
             }
             break
+    if refused:
+        supplement_flags["not_supplemented"] = refused
     if not updates:
-        return canonical, []
+        return (_mark(canonical, supplement_flags=supplement_flags) if refused else canonical), []
     return _mark(canonical, **updates, field_provenance=provenance, supplement_flags=supplement_flags), sorted(updates)
 
 
@@ -129,17 +152,32 @@ def apply_canonical_merge_policy(
         first = supplements[0]
         comparisons = [compare_standard_records(first, other, comparison_fields) for other in supplements[1:]]
         conflicts = [conflict for cmp in comparisons for conflict in cmp.conflicts]
+        if not conflicts and not any(cmp.checked_fields for cmp in comparisons):
+            supplement_flags = dict(getattr(first, "supplement_flags", {}) or {})
+            supplement_flags["fallback_reason"] = "canonical_provider_missing"
+            rec = _mark(
+                first,
+                source_role=SourceRole.fallback_canonical,
+                merge_method=MergeMethod.fallback_single_source,
+                validation_status=ValidationStatus.validated_with_warning,
+                effective_provider=getattr(first, "provider"),
+                field_provenance=_update_provenance_role(first, "fallback_canonical", reason="not_available_from_canonical_provider"),
+                supplement_flags=supplement_flags,
+                data_quality=min(getattr(first, "data_quality", 0.75), 0.85),
+            )
+            return MergeResult(records=[rec], warnings=["canonical_missing_no_comparable_fields"])
         if not conflicts:
             supplement_flags = dict(getattr(first, "supplement_flags", {}) or {})
             supplement_flags["fallback_reason"] = "canonical_provider_missing"
-            supplement_flags["validated_by_supplements"] = [getattr(s, "provider") for s in supplements[1:]]
+            supplement_flags["validated_by_supplements"] = sorted({cmp.compared_provider for cmp in comparisons if cmp.matched_fields})
+            role_marked = _mark(first, field_provenance=_update_provenance_role(first, "fallback_canonical", reason="not_available_from_canonical_provider"))
             rec = _mark(
                 first,
                 source_role=SourceRole.fallback_canonical,
                 merge_method=MergeMethod.fallback_multi_source_agreed,
                 validation_status=ValidationStatus.validated,
                 effective_provider=getattr(first, "provider"),
-                field_provenance=_update_provenance_role(first, "fallback_canonical", reason="not_available_from_canonical_provider", validated_by=[getattr(s, "provider") for s in supplements[1:]]),
+                field_provenance=_provenance_with_validated_by(role_marked, comparisons),
                 supplement_flags=supplement_flags,
                 data_quality=min(getattr(first, "data_quality", 0.85), 0.92),
             )
@@ -166,14 +204,18 @@ def apply_canonical_merge_policy(
 
     comparisons = [compare_standard_records(canonical, other, comparison_fields) for other in supplements]
     conflicts = [conflict for cmp in comparisons for conflict in cmp.conflicts]
+    if not conflicts and not any(cmp.checked_fields for cmp in comparisons):
+        rec = _mark(
+            canonical,
+            merge_method=MergeMethod.fill_missing_from_supplement if filled_fields else MergeMethod.canonical_only,
+            validation_status=ValidationStatus.validated_with_warning,
+        )
+        warnings = ["canonical_not_validated_no_comparable_fields"]
+        if filled_fields:
+            warnings.append(f"filled_missing_fields_from_supplement:{','.join(filled_fields)}")
+        return MergeResult(records=[rec], warnings=warnings)
     if not conflicts:
-        validated_by = [getattr(s, "provider") for s in supplements]
-        field_provenance = dict(getattr(canonical, "field_provenance", {}))
-        for field_name, prov in field_provenance.items():
-            if isinstance(prov, dict):
-                updated = dict(prov)
-                updated["validated_by"] = sorted(set(updated.get("validated_by", []) + validated_by))
-                field_provenance[field_name] = updated
+        field_provenance = _provenance_with_validated_by(canonical, comparisons)
         method = MergeMethod.fill_missing_from_supplement if filled_fields else MergeMethod.canonical_validated
         status = ValidationStatus.validated_with_warning if filled_fields else ValidationStatus.validated
         warnings = [f"filled_missing_fields_from_supplement:{','.join(filled_fields)}"] if filled_fields else []

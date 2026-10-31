@@ -27,7 +27,7 @@ def risk_case(severity="medium", horizon="medium_term", *, approved=False):
              "evidence": [{"passage_id": "p1", "quote": TEXT}], "depends_on": []}
     if approved:
         claim["field_values"] = {"severity": severity, "time_horizon": horizon}
-    return {"decision": "save_structured", "overall_score": 80,
+    return {"schema_version": "bundle_extraction_v0.3", "confidence": 0.0, "decision": "save_structured", "overall_score": 80,
             "risks": [{"risk_summary": claim["statement"], "severity": severity,
                        "time_horizon": horizon, "evidence_locator": {"passage_id": "p1"}}],
             "content_review": {"protocol": PROTOCOL, "claims": [claim],

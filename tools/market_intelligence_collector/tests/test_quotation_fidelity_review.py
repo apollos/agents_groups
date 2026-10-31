@@ -33,7 +33,7 @@ def quotation_case(split=True):
     summary = {"id": "summary", "kind": "observation", "status": "source_supported",
                "statement": claim["statement"], "reason": "人工标签：复述现金流金额。",
                "evidence": deepcopy(evidence), "depends_on": ["cash"]}
-    raw = {"decision": "save_structured", "overall_score": 85,
+    raw = {"schema_version": "bundle_extraction_v0.3", "confidence": 0.0, "decision": "save_structured", "overall_score": 85,
            "facts": [{"fact_statement": claim["statement"],
                       "evidence_locator": {"passage_id": "table"}}],
            "metrics": [{"metric_name": "投资现金流净额", "metric_value": -120, "unit": "元",

@@ -15,7 +15,7 @@ def config():
 
 def contribution(score=68, decision="save_structured", model="fixture"):
     return ModelContribution(model_config_id=model, provider=model,
-        bundle=BundleExtraction.model_validate({"source_link_id": "original", "decision": decision,
+        bundle=BundleExtraction.model_validate({"source_link_id": "original", "schema_version": "bundle_extraction_v0.3", "decision": decision,
             "overall_score": score, "confidence": .82,
             "facts": [{"fact_statement": "来源称中标", "evidence_locator": {"passage_id": "p2"}}],
             "metrics": [{"metric_value": 40, "unit": "MWh", "evidence_locator": {"passage_id": "p2"}}],

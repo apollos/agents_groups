@@ -134,6 +134,9 @@ class FetchResult:
     content_type: str | None = None
     html: str | None = None
     content: bytes | None = None
+    # HTTP HTML only: codec used to decode the response bytes and where it came from.
+    encoding: str | None = None
+    encoding_source: str | None = None
     browser_title: str | None = None
     rendered_text: str | None = None
     visibility: dict[str, Any] = field(default_factory=dict)
@@ -157,6 +160,8 @@ class FetchResult:
             "final_url": self.final_url,
             "http_status": self.http_status,
             "content_type": self.content_type,
+            "encoding": self.encoding,
+            "encoding_source": self.encoding_source,
             "browser_title": self.browser_title,
             "visibility": dict(self.visibility),
             "elapsed_ms": self.elapsed_ms,

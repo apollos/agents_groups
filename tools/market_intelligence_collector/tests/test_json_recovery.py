@@ -23,8 +23,18 @@ from mic.schemas import Passage, TriageResult
 
 
 BAD = '{"private_bad_output":"BROKEN_RESPONSE_PRIVATE_MARKER"'
-GOOD = json.dumps({"schema_version": "bundle_extraction_v0.3", "confidence": 0.9,
+REVIEW = {"protocol": "content_review_v2", "claims": [], "bindings": {}}
+GOOD = json.dumps({"schema_version": "bundle_extraction_v0.3", "decision": "save_structured",
+                   "overall_score": 72, "confidence": 0.9, "content_review": REVIEW,
                    "facts": [{"fact_statement": "仅供离线调用回归。"}]}, ensure_ascii=False)
+VALID_SKIP = json.dumps({"schema_version": "bundle_extraction_v0.3", "decision": "skip",
+                         "overall_score": 0, "confidence": 0.0, "content_review": REVIEW})
+# r3 link_4b4f7207e96c: the review object alone at top level, no bundle fields.
+REVIEW_ONLY = json.dumps({"protocol": "content_review_v2",
+                          "decision_reason": "PRIVATE_DRAFT_MARKER 属70-84档。",
+                          "claims": [{"id": "rev", "kind": "observation", "status": "source_supported",
+                                      "statement": "PRIVATE_CLAIM_MARKER"}],
+                          "bindings": {"/metrics/0": ["rev"]}, "task_coverage": []}, ensure_ascii=False)
 
 
 def _setup(monkeypatch, responses, *, mode="single_model", models=1,
@@ -135,7 +145,7 @@ def test_recovery_preserves_material_and_records_two_linked_attempts(tmp_path, m
     assert run.runtime.deadline_at == deadline and run.runtime.started_at == started
     assert all(c["max_tokens"] == 65536 and c["response_format"] == {"type": "json_object"}
                for c in run.calls)
-    association = {"strategy": "reextract_original_input", "attempt": 1,
+    association = {"strategy": "reextract_original_input", "attempt": 1, "trigger": "json_invalid",
                    "parent_response_sha256": sha256(BAD.encode()).hexdigest(), "parent_output_index": 0,
                    "parent_trace_id": parent.acceptance_trace["trace_id"],
                    "parent_provider_request_id": parent.provider_request_id}
@@ -234,7 +244,8 @@ def test_last_failed_fallback_is_reextracted_once_with_same_adapter(monkeypatch)
 
 
 def test_prior_success_even_below_early_stop_prevents_recovery(monkeypatch):
-    weak = json.dumps({"schema_version": "bundle_extraction_v0.3", "confidence": 0.1})
+    weak = json.dumps({"schema_version": "bundle_extraction_v0.3", "decision": "link_only",
+                       "overall_score": 12, "confidence": 0.1, "content_review": REVIEW})
     run = _setup(monkeypatch, [weak, BAD], mode="priority_fallback", models=2)
     assert [r.status for r in _extract(run).outputs] == ["success", "json_invalid"]
     assert len(run.calls) == 2
@@ -243,11 +254,66 @@ def test_prior_success_even_below_early_stop_prevents_recovery(monkeypatch):
 @pytest.mark.parametrize("reply,expected", [
     ({"raw": GOOD, "finish_reason": "length"}, "output_truncated"),
     ({"error": True}, "request_failed"),
-    ("{}", "success"),
+    (VALID_SKIP, "success"),
 ])
-def test_non_json_invalid_results_do_not_trigger_recovery(monkeypatch, reply, expected):
+def test_transport_failures_and_valid_skip_do_not_trigger_recovery(monkeypatch, reply, expected):
     run = _setup(monkeypatch, [reply])
     assert [r.status for r in _extract(run).outputs] == [expected]
+    assert len(run.calls) == 1
+
+
+def test_protocol_invalid_object_is_reextracted_once_with_error_paths_only(monkeypatch):
+    run = _setup(monkeypatch, [REVIEW_ONLY, GOOD])
+    result = _extract(run)
+    parent, child = result.outputs
+    assert parent.status == "success" and parent.raw_text == REVIEW_ONLY
+    assert parent.parsed == json.loads(REVIEW_ONLY)
+    assert child.json_recovery["trigger"] == "response_protocol_invalid"
+    assert child.json_recovery["protocol_errors"] == [
+        "schema_version: missing", "decision: missing", "overall_score: missing",
+        "confidence: missing", "content_review: missing"]
+    retry = json.dumps(run.calls[1]["messages"], ensure_ascii=False)
+    assert "overall_score: missing" in retry
+    assert "PRIVATE_CLAIM_MARKER" not in retry and "PRIVATE_DRAFT_MARKER" not in retry
+    assert len(run.calls) == run.planner.budget.calls_used == 2
+
+
+def test_json_and_protocol_recovery_share_one_quota(monkeypatch):
+    run = _setup(monkeypatch, [BAD, REVIEW_ONLY, "{}"], source_limit=3)
+    first = _extract(run, "link_first")
+    second = _extract(run, "link_second")
+    assert [r.status for r in first.outputs] == ["json_invalid", "success"]
+    assert first.outputs[-1].json_recovery["trigger"] == "json_invalid"
+    assert [r.status for r in second.outputs] == ["success"]
+    assert second.outputs[0].json_recovery is None
+    assert len(run.calls) == run.planner.budget.calls_used == run.runtime.used["gateway_requests_sent"] == 3
+
+
+def test_second_protocol_invalid_response_stops(monkeypatch):
+    run = _setup(monkeypatch, [REVIEW_ONLY, "{}"], source_limit=3)
+    outputs = _extract(run).outputs
+    assert [r.json_recovery is not None for r in outputs] == [False, True]
+    assert len(run.calls) == 2
+
+
+@pytest.mark.parametrize("limit", ["run", "source", "gateway"])
+def test_exhausted_budget_prevents_protocol_recovery_send(monkeypatch, limit):
+    options = {"run_limit": 1} if limit == "run" else {"source_limit": 1} if limit == "source" else {"gateway_limit": 1}
+    run = _setup(monkeypatch, [REVIEW_ONLY], **options)
+    assert len(_extract(run).outputs) == len(run.calls) == 1
+
+
+@pytest.mark.parametrize("reply", [{"raw": REVIEW_ONLY, "elapsed": 60}, {"raw": REVIEW_ONLY, "cancel": True}])
+def test_deadline_or_cancellation_prevents_protocol_recovery(monkeypatch, reply):
+    run = _setup(monkeypatch, [reply])
+    assert len(_extract(run).outputs) == len(run.calls) == 1
+
+
+def test_arbitration_protocol_invalid_gets_no_recovery(monkeypatch):
+    run = _setup(monkeypatch, [REVIEW_ONLY])
+    read, metadata, _ = _input()
+    outputs = run.planner.arbitrate(run.profile, read, metadata, [{"field": "amount", "values": [1, 2]}])
+    assert [r.status for r in outputs] == ["success"]
     assert len(run.calls) == 1
 
 

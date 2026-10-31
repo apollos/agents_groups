@@ -56,6 +56,10 @@ def passages(sample):
     return [Passage(**p, section="正文" if p["passage_id"] != "title" else "标题") for p in sample["passages"]]
 
 
+HEADER = {"schema_version": "bundle_extraction_v0.3", "decision": "save_structured",
+          "overall_score": 76, "confidence": 0.85}
+
+
 def validate(raw, sample):
     report = BundleValidator({}).validate(raw, passages(sample))
     assert report.schema_valid, report.errors
@@ -77,7 +81,7 @@ def gold_response(index, context):
             evidence = {"passage_id": pid, "quote": body[pid]}
             if evidence not in claim["evidence"]:
                 claim["evidence"].append(evidence)
-    raw = {"decision": "save_structured", "overall_score": 76, "confidence": .85,
+    raw = {"schema_version": "bundle_extraction_v0.3", "decision": "save_structured", "overall_score": 76, "confidence": .85,
            "events": [], "metrics": [], "facts": [], "content_review": review}
     for i, original in enumerate(sample["events"]):
         cid = FOCUS[index][i]
@@ -142,7 +146,7 @@ def test_real_borrowed_observation_cannot_approve_identity_or_impact(sample):
     # Exercise the stricter checks with the actual old mappings. A version
     # rejection alone would not prove the borrowed-claim bug was repaired.
     review["protocol"] = PROTOCOL
-    bundle = validate({"events": deepcopy(sample["events"]), "content_review": review}, sample)
+    bundle = validate({**HEADER, "events": deepcopy(sample["events"]), "content_review": review}, sample)
     assert bundle.events
     assert all(e.entities == {} for e in bundle.events)
     assert all(e.impact.horizon == "unclear" and e.impact.channels == [] for e in bundle.events)
@@ -208,8 +212,11 @@ def test_real_price_amount_misencoding_keeps_quote_separate_from_total_money(fie
 
 def test_old_reviews_are_not_silently_relabelled_as_v2():
     sample = SAMPLES[0]
-    bundle = validate({"events": deepcopy(sample["events"]), "content_review": deepcopy(sample["model_review"])}, sample)
-    assert bundle.events == []
+    raw = {**HEADER, "events": deepcopy(sample["events"]), "content_review": deepcopy(sample["model_review"])}
+    report = BundleValidator({}).validate(raw, passages(sample))
+    assert not report.schema_valid and report.bundle is None
+    assert report.error_code == "response_protocol_invalid"
+    assert report.errors == ["content_review.protocol: must be 'content_review_v2'"]
     assert contract_diagnostics([sample["model_review"]])["complete"] is False
 
 

@@ -29,7 +29,7 @@ def scope_case():
         "field_values": {"scope": deepcopy(DIMENSIONS)},
     }
     return {
-        "decision": "save_structured", "overall_score": 90, "confidence": .9,
+        "schema_version": "bundle_extraction_v0.3", "decision": "save_structured", "overall_score": 90, "confidence": .9,
         "metrics": [{"metric_name": "Sales", "metric_value": 120, "unit": "units",
                      "period": "FY1", "scope": deepcopy(DIMENSIONS),
                      "evidence_locator": {"passage_id": "body"}}],

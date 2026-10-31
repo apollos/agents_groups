@@ -24,7 +24,7 @@ def case(date="2026-09-15", *, role="source_publication", status="source_support
                  "assessment": {"protocol": DATE_REVIEW_PROTOCOL, "possible_roles": [role],
                      "selected_role": role, "basis": "explicit_publication",
                      "evidence": [{"passage_id": "p1", "quote": text}]}}}}
-    raw = {"decision": "link_only", "overall_score": 60,
+    raw = {"schema_version": "bundle_extraction_v0.3", "confidence": 0.0, "decision": "link_only", "overall_score": 60,
            "content_review": {"protocol": PROTOCOL, "claims": [claim],
                               "bindings": {"/source_publication": ["date"]}}}
     passages = [Passage(passage_id="p1", section="正文", text=text),
@@ -113,6 +113,11 @@ def test_missing_or_unverified_claims_remain_unknown(damage):
         claim["field_values"] = {}
     elif damage == "invalid_date":
         claim["field_values"]["source_publication"]["published_at"] = "2026-02-30"
+    if damage == "invalid_protocol":
+        report = BundleValidator({}).validate(raw, passages)
+        assert not report.schema_valid and report.bundle is None
+        assert report.error_code == "response_protocol_invalid"
+        return
     bundle = validated(raw, passages)
     assert bundle.content_review["source_publication"]["status"] == "unknown", damage
     result = resolve_source_publication([bundle], UNKNOWN)

@@ -42,7 +42,7 @@ def _stored(tmp_path, *, date="2026-09-15"):
               "field_values": {"source_publication": {"published_at": "2026-09-16",
                                 "date_role": "source_publication",
                                 "assessment": _assessment("source_publication", "explicit_publication", public_evidence)}}}
-    raw = {"decision": "save_structured", "overall_score": 85, "confidence": .9,
+    raw = {"schema_version": "bundle_extraction_v0.3", "decision": "save_structured", "overall_score": 85, "confidence": .9,
            "events": [{"event_type": "capacity_expansion", "event_date": date,
                        "summary": claim["statement"], "evidence_locator": {"passage_id": "p1"}}],
            "content_review": {"protocol": PROTOCOL, "claims": [claim, public],

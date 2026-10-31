@@ -1,0 +1,24 @@
+{
+  "agents": {
+    "entries": {
+      "mic-extract": {
+        "workspace": "/absolute/path/outside/repository/openclaw/mic-extract-workspace",
+        "cwd": "/absolute/path/outside/repository/openclaw/mic-extract-workspace",
+        "model": {
+          "primary": "volcengine-agent-plan/deepseek-v4.1-flash",
+          "fallbacks": []
+        },
+        "thinkingDefault": "off",
+        "reasoningDefault": "off",
+        "contextInjection": "never",
+        "skills": [],
+        "tools": {
+          "deny": ["*"],
+          "exec": {
+            "mode": "deny"
+          }
+        }
+      }
+    }
+  }
+}

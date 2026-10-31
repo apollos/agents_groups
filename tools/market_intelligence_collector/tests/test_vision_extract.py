@@ -116,20 +116,20 @@ def test_vision_model_override_env_wins_over_yaml(config, monkeypatch):
     assert v.model_override == "vendor/from-env"
 
 
-def test_openclaw_gateway_url_and_request_model_env_win_over_yaml(config, monkeypatch):
+def test_openclaw_gateway_url_and_mic_request_model_env_win_over_yaml(config, monkeypatch):
     monkeypatch.setenv("OPENCLAW_GATEWAY_BASE_URL", "http://10.0.0.8:18789/v1/")
-    monkeypatch.setenv("OPENCLAW_REQUEST_MODEL", "openclaw/cloud-research")
+    monkeypatch.setenv("MIC_OPENCLAW_REQUEST_MODEL", "openclaw/mic-extract-cloud")
     adapter = ModelRegistry(config).adapters["openclaw_research"]
     assert adapter.endpoint == "http://10.0.0.8:18789/v1"
-    assert adapter.model == "openclaw/cloud-research"
-    assert VisionExtractor(config).request_model == "openclaw/cloud-research"
+    assert adapter.model == "openclaw/mic-extract-cloud"
+    assert VisionExtractor(config).request_model == "openclaw/mic-extract-cloud"
 
 
 def test_openclaw_gateway_falls_back_to_yaml_when_env_blank(config):
     adapter = ModelRegistry(config).adapters["openclaw_research"]
     assert adapter.endpoint == "http://127.0.0.1:18789/v1"
-    assert adapter.model == "openclaw/research"
-    assert VisionExtractor(config).request_model == "openclaw/research"
+    assert adapter.model == "openclaw/mic-extract"
+    assert VisionExtractor(config).request_model == "openclaw/mic-extract"
 
 
 def test_vision_no_override_header_when_unset(config, monkeypatch):
@@ -276,7 +276,7 @@ def test_fetch_pdf_url_serving_html_is_treated_as_html(config, monkeypatch):
     monkeypatch.setattr(reader_mod.httpx, "get",
                         lambda *a, **kw: _Resp())
     reader = LinkReader(config, search_provider=None)
-    raw, status, _ctype, _final = reader._fetch("https://pdf.example.com/notice.pdf")
+    raw, status, _ctype, _final, _decoded = reader._fetch("https://pdf.example.com/notice.pdf")
     assert isinstance(raw, str)  # routed to the HTML path, not pypdf
 
     class _PdfResp(_Resp):
@@ -285,5 +285,5 @@ def test_fetch_pdf_url_serving_html_is_treated_as_html(config, monkeypatch):
 
     monkeypatch.setattr(reader_mod.httpx, "get",
                         lambda *a, **kw: _PdfResp())
-    raw, _s, _c, _f = reader._fetch("https://pdf.example.com/notice.pdf")
+    raw, _s, _c, _f, _d = reader._fetch("https://pdf.example.com/notice.pdf")
     assert isinstance(raw, bytes)  # real PDFs still go to the PDF path

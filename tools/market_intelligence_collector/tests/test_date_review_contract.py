@@ -36,7 +36,7 @@ def raw_event():
     claim = observation("event", OCCURRENCE, "occurrence", {
         "event_type": "major_order", "event_date": "2026-08-29",
         "event_date_assessment": assessment()})
-    return {"decision": "save_structured", "overall_score": 80,
+    return {"schema_version": "bundle_extraction_v0.3", "confidence": 0.0, "decision": "save_structured", "overall_score": 80,
             "events": [{"event_type": "major_order", "event_date": "2026-08-29", "summary": OCCURRENCE,
                         "evidence_locator": {"passage_id": "occurrence"}}],
             "facts": [{"fact_statement": OCCURRENCE, "evidence_locator": {"passage_id": "occurrence"}}],
@@ -113,7 +113,7 @@ def raw_publication(*, ambiguous=False):
     brief = observation("brief", "公司于2026年8月29日公告50股的流通安排。", "business",
                         depends=["publication", "business"])
     brief["evidence"] += evidence(pid)
-    return {"decision": "save_structured", "overall_score": 80,
+    return {"schema_version": "bundle_extraction_v0.3", "confidence": 0.0, "decision": "save_structured", "overall_score": 80,
         "events": [{"event_type": "financing", "event_date": "2026-08-29", "summary": BUSINESS,
                     "evidence_locator": {"passage_id": "business"}}],
         "facts": [{"fact_statement": BUSINESS, "evidence_locator": {"passage_id": "business"}}],

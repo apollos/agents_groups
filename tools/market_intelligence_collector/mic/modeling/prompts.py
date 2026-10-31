@@ -250,11 +250,22 @@ def build_bundle_messages(profile: TargetProfile, source_metadata: dict,
     ]
 
 
-def build_json_recovery_messages(messages: list[dict]) -> list[dict]:
-    """Regenerate from the unchanged evidence, never from a malformed draft."""
+def build_json_recovery_messages(messages: list[dict], *,
+                                 protocol_errors: list[str] | None = None) -> list[dict]:
+    """Regenerate from the unchanged evidence, never from a malformed draft.
+
+    ``protocol_errors`` carries only field paths and expectations; no content of
+    the rejected response is passed back to the model.
+    """
     retry = deepcopy(messages)
+    if protocol_errors:
+        reason = ("\n本次是上一轮返回的JSON对象不符合bundle协议后的唯一一次重新生成。协议错误："
+                  + "；".join(protocol_errors)
+                  + "。顶层必须是完整bundle对象，content_review作为其中字段，不得只返回审核对象。")
+    else:
+        reason = "\n本次是上一轮返回JSON无法解析后的唯一一次重新生成。"
     instruction = (
-        "\n本次是上一轮返回JSON无法解析后的唯一一次重新生成。"
+        reason +
         "仅依据本次提供的原始来源材料、任务和相同审核规则重新生成完整JSON对象；"
         "不要猜测或补写来源未支持的事实、日期或口径，证据不足继续保留缺口。"
         "完整保留content_review和引用绑定，不以删去审核字段换取格式成功。"

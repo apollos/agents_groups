@@ -71,6 +71,40 @@ def test_request_failure_still_records_requested_cap():
     assert res.requested_max_tokens == 65536 and res.finish_reason is None
 
 
+def test_debug_diagnostics_capture_the_sdk_timeout_and_failure(monkeypatch):
+    class Budget:
+        def remaining_seconds(self):
+            return 42.5
+
+        def reserve(self, _name):
+            return None
+
+    class Completions:
+        def __init__(self):
+            self.kwargs = None
+
+        def create(self, **kwargs):
+            self.kwargs = kwargs
+            raise TimeoutError("gateway did not respond")
+
+    completions = Completions()
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
+    adapter = _adapter(client)
+    adapter.set_budget(Budget())
+    monkeypatch.setenv("MIC_MODEL_CALL_DEBUG", "1")
+
+    result = adapter.complete([{"role": "user", "content": "{}"}])
+
+    assert completions.kwargs["timeout"] == 42.5
+    assert result.error_type == "TimeoutError"
+    assert result.runtime_diagnostics is not None
+    assert result.runtime_diagnostics["sdk_timeout_seconds"] == 42.5
+    assert result.runtime_diagnostics["response_bytes"] == 0
+    assert result.runtime_diagnostics["exception_type"] == "TimeoutError"
+    assert "request_started_epoch" in result.runtime_diagnostics
+    assert "request_finished_epoch" in result.runtime_diagnostics
+
+
 def test_model_run_persists_request_diagnostics_and_explain_exposes_them():
     from mic.store.database import get_database
     from mic.store.repository import Repository

@@ -42,7 +42,7 @@ def reviewed_raw():
     text = "公司披露本期收入240万元。"
     evidence = [{"passage_id": "p0", "quote": text}]
     return text, {
-        "decision": "save_structured", "overall_score": 80,
+        "schema_version": "bundle_extraction_v0.3", "confidence": 0.0, "decision": "save_structured", "overall_score": 80,
         "brief": {"one_sentence": "未经审核的强烈看多判断。"},
         "metrics": [
             {"metric_name": "收入", "metric_value": 240, "unit": "万元",
@@ -88,4 +88,5 @@ def test_bad_comparison_still_rejects_bundle_before_shared_review():
     report = BundleValidator({}).validate(raw, [Passage(passage_id="p0", section="正文", text=text)])
     assert not report.schema_valid
     assert report.bundle is None
-    assert report.errors == ["schema: Input should be a valid dictionary"]
+    assert report.errors == ["metrics.0.comparison: Input should be a valid dictionary"]
+    assert report.error_code == "schema_invalid"

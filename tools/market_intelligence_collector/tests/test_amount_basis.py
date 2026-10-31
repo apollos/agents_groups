@@ -59,7 +59,7 @@ def amount_case(basis, *, parent_status="source_supported", reason="人工标签
     event = {"id": "event_amount", "kind": "observation", "status": "source_supported",
              "statement": "公司披露本期收入120万元。", "reason": "人工标签：事件摘要包含该金额。",
              "evidence": claim_evidence, "depends_on": ["revenue"]}
-    raw = {"decision": "save_structured", "overall_score": 85, "confidence": .9,
+    raw = {"schema_version": "bundle_extraction_v0.3", "decision": "save_structured", "overall_score": 85, "confidence": .9,
            "facts": [{"fact_statement": amount["statement"],
                       "metrics": {"amount": 120, "currency": "CNY", "amount_unit": "万元"},
                       "evidence_locator": {"passage_id": "table"}}],

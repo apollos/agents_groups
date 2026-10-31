@@ -8,16 +8,121 @@ strict article scope, passage selection, hash) regardless of transport.
 
 from __future__ import annotations
 
+import codecs
+import hashlib
+import json
+import os
+import re
 import time
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
+from bs4.dammit import EncodingDetector
 
 from mic.browser.contracts import FetchResult
 
 NO_RETRY_HTTP_STATUSES = {404, 410, 451}
 UNSUPPORTED_BROWSER_CONTENT = ("application/pdf", "application/octet-stream", "application/zip")
+HTML_DECODE_FAILED = "html_decode_failed"
+
+_HEADER_CHARSET = re.compile(r"charset\s*=\s*[\"']?([^\s;\"']+)", re.IGNORECASE)
+
+
+@dataclass
+class DecodedHtml:
+    html: str | None
+    encoding: str | None = None
+    encoding_source: str | None = None  # bom | http_header | html_meta | undeclared_utf8
+    error: str | None = None
+    tried: list[dict[str, str]] = field(default_factory=list)
+
+
+def _codec_name(label: str) -> str | None:
+    """Python codec for an encoding label, using the WHATWG label table when available."""
+    try:
+        import webencodings
+        encoding = webencodings.lookup(label)
+        if encoding is not None:
+            return encoding.codec_info.name
+    except ImportError:
+        pass
+    try:
+        return codecs.lookup(label).name
+    except LookupError:
+        return None
+
+
+def decode_html_bytes(content: bytes, content_type: str | None) -> DecodedHtml:
+    """Decode HTML from the raw response bytes.
+
+    Candidates in order: byte-order mark, HTTP ``charset``, HTML ``<meta>``
+    declaration, then UTF-8 for an undeclared page. Each is tried strictly and
+    the first that decodes the whole body wins. Nothing is guessed from the
+    text itself; when no candidate decodes, the result is an explicit error.
+    """
+    body, bom_encoding = EncodingDetector.strip_byte_order_mark(content)
+    candidates: list[tuple[str, str]] = []
+    if bom_encoding:
+        candidates.append((bom_encoding, "bom"))
+    else:
+        header = _HEADER_CHARSET.search(content_type or "")
+        if header:
+            candidates.append((header.group(1), "http_header"))
+        declared = EncodingDetector.find_declared_encoding(body, is_html=True)
+        if declared:
+            candidates.append((declared, "html_meta"))
+        candidates.append(("utf-8", "undeclared_utf8"))
+    tried: list[dict[str, str]] = []
+    for label, source in candidates:
+        codec = _codec_name(label)
+        if codec is None:
+            tried.append({"label": label, "source": source, "result": "unknown_encoding"})
+            continue
+        try:
+            text = body.decode(codec)
+        except UnicodeDecodeError:
+            tried.append({"label": label, "source": source, "result": "decode_error"})
+            continue
+        return DecodedHtml(text, encoding=codec, encoding_source=source, tried=tried)
+    return DecodedHtml(None, error=HTML_DECODE_FAILED, tried=tried)
+
+
+def _fetch_debug_enabled() -> bool:
+    return os.getenv("MIC_FETCH_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def save_decode_failure_sample(url: str, content_type: str | None, content: bytes,
+                               decoded: DecodedHtml) -> str | None:
+    """Debug mode only: keep the undecodable bytes of a failing target under logs/."""
+    if not _fetch_debug_enabled():
+        return None
+    from mic.logging_utils import log_dir
+
+    digest = hashlib.sha256(content).hexdigest()
+    directory = log_dir() / "fetch_decode_failures"
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"{digest[:24]}.bin").write_bytes(content)
+    (directory / f"{digest[:24]}.json").write_text(json.dumps(
+        {"url": url, "content_type": content_type, "sha256": digest, "bytes": len(content),
+         "tried": decoded.tried}, ensure_ascii=False, indent=2))
+    return digest
+
+
+def decoded_fetch_result(url: str, final_url: str, ctype: str, content: bytes,
+                         elapsed_ms: int | None) -> FetchResult:
+    decoded = decode_html_bytes(content, ctype)
+    if decoded.error:
+        save_decode_failure_sample(url, ctype, content, decoded)
+        return FetchResult(transport="http", requested_url=url, final_url=final_url, http_status=200,
+                           content_type=ctype, blocked_reason=HTML_DECODE_FAILED,
+                           error=";".join(f"{t['source']}={t['label']}:{t['result']}" for t in decoded.tried),
+                           elapsed_ms=elapsed_ms, counted_as="http_read_attempts")
+    return FetchResult(transport="http", requested_url=url, final_url=final_url, http_status=200,
+                       content_type=ctype, html=decoded.html, encoding=decoded.encoding,
+                       encoding_source=decoded.encoding_source, elapsed_ms=elapsed_ms,
+                       counted_as="http_read_attempts")
 
 
 class HttpFetcher:
@@ -54,9 +159,7 @@ class HttpFetcher:
             return FetchResult(transport="http", requested_url=url, final_url=final_url, http_status=200,
                                content_type=ctype or "application/pdf", content=resp.content,
                                elapsed_ms=elapsed, counted_as="http_read_attempts")
-        return FetchResult(transport="http", requested_url=url, final_url=final_url, http_status=200,
-                           content_type=ctype, html=resp.text, elapsed_ms=elapsed,
-                           counted_as="http_read_attempts")
+        return decoded_fetch_result(url, final_url, ctype, resp.content, elapsed)
 
 
 class BrowserFetcher:

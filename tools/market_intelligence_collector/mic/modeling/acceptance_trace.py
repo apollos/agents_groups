@@ -327,6 +327,8 @@ class AcceptanceTrace:
                     and re.fullmatch(r"[a-f0-9]{64}", recovery["parent_response_sha256"])):
                 safe = {key: recovery[key] for key in (
                     "strategy", "attempt", "parent_response_sha256")}
+                if recovery.get("trigger") in ("json_invalid", "response_protocol_invalid"):
+                    safe["trigger"] = recovery["trigger"]
                 index = recovery.get("parent_output_index")
                 if type(index) is int and 0 <= index < CALL_LIMIT:
                     safe["parent_output_index"] = index

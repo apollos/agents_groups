@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -13,13 +14,16 @@ from tests.browser_doubles import browser_config, browser_runtime_block
 
 # --- T01: legacy path untouched --------------------------------------------------------
 
-def test_repo_default_config_keeps_browser_disabled_and_legacy_provider():
-    cfg = load_config()
-    assert cfg.browser_enabled is False
-    assert cfg.search_providers["active"] == "searxng"
+def test_repo_default_config_uses_browser_local_for_formal_collection():
+    repo_cfg = Path(__file__).resolve().parent.parent / "config"
+    cfg = load_config(repo_cfg)
+    assert cfg.browser_enabled is True
+    assert cfg.search_providers["active"] == "browser_local"
+    assert cfg.search_providers["fallback"] == []
+    assert cfg.output_schema["limits"]["strict_evidence_review"] is True
     assert "browser_local" in cfg.search_providers["providers"]
     provider = build_search_provider(cfg)
-    assert provider.browser_backed is False
+    assert provider.browser_backed is True
     assert "playwright" not in sys.modules or True  # importing MIC must not require Playwright
 
 
@@ -27,22 +31,18 @@ def test_mic_config_dir_env_points_cli_at_deployment_config(tmp_path, monkeypatc
     """`mic` CLI commands call load_config() without arguments; MIC_CONFIG_DIR selects the
     deployment config dir. An explicit argument still wins; a missing dir fails loudly."""
     import shutil
-    from pathlib import Path
-
     repo_cfg = Path(__file__).resolve().parent.parent / "config"
     deploy = tmp_path / "deploy-config"
     shutil.copytree(repo_cfg, deploy)
-    rt = (deploy / "browser_runtime.yaml").read_text().replace("enabled: false", "enabled: true", 1)
-    (deploy / "browser_runtime.yaml").write_text(rt)
 
     monkeypatch.setenv("MIC_CONFIG_DIR", str(deploy))
     assert load_config().browser_enabled is True
-    assert load_config(repo_cfg).browser_enabled is False  # explicit argument wins
+    assert load_config(repo_cfg).browser_enabled is True  # explicit argument wins
     monkeypatch.setenv("MIC_CONFIG_DIR", str(tmp_path / "missing"))
     with pytest.raises(FileNotFoundError):
         load_config()
     monkeypatch.setenv("MIC_CONFIG_DIR", "   ")
-    assert load_config().browser_enabled is False  # blank -> repo default
+    assert load_config(repo_cfg).browser_enabled is True  # blank -> explicit repo default
 
 
 def test_legacy_provider_search_with_context_default_reports_api_request():
@@ -145,9 +145,8 @@ def test_browser_provider_requires_strict_evidence_review(strict):
     assert "strict_evidence_review" in str(exc.value)
 
 
-def test_legacy_provider_does_not_require_strict_flag():
-    from mic.config import load_config
-    cfg = load_config()  # repo default: searxng/mock route, flag absent
+def test_nonbrowser_provider_does_not_require_strict_flag():
+    cfg = browser_config(active="mock", strict_evidence_review=None)
     assert ((cfg.output_schema or {}).get("limits") or {}).get("strict_evidence_review") is None
 
 

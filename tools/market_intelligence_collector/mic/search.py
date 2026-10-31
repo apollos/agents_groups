@@ -476,7 +476,7 @@ def build_search_provider(config) -> SearchProvider:
             return _mock_from_config(first_cfg)
         raise RuntimeError(
             f"No usable search provider for active={active!r} and MIC_ALLOW_MOCK=false "
-            "(check API keys / SearXNG instance)")
+            "(check the configured provider prerequisites)")
 
     # Mock never fails, so wrapping it in a fallback only adds noise.
     if isinstance(primary, MockSearchProvider):

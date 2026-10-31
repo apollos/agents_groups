@@ -8,10 +8,12 @@ Validates raw model output BEFORE merge/persist:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 from pydantic import ValidationError
 
+from mic.content_review_policy import PROTOCOL as CONTENT_REVIEW_PROTOCOL
 from mic.schemas import BundleExtraction, Passage
 from mic.money import normalize_bundle_amounts
 from mic.quantity_units import normalize_bundle_quantities, repair_metric_value_strings
@@ -27,6 +29,44 @@ _INVERSE = {
 }
 
 
+BUNDLE_SCHEMA_VERSION = BundleExtraction.model_fields["schema_version"].default
+BUNDLE_DECISIONS = ("save_structured", "link_only", "skip")
+
+
+def _finite_in(value: object, low: float, high: float) -> bool:
+    return type(value) in (int, float) and math.isfinite(value) and low <= value <= high
+
+
+def bundle_protocol_errors(raw: object) -> list[str]:
+    """``path: reason`` for each violation of the bundle protocol by the remote object.
+
+    Runs on the object exactly as returned, before any schema default can fill a
+    missing decision/score. Business arrays and ``source_link_id`` may be omitted.
+    Nothing is recovered from other fields (e.g. a score in ``decision_reason``).
+    """
+    if not isinstance(raw, dict):
+        return ["$: must be a JSON object"]
+    errors: list[str] = []
+
+    def check(container: dict, path: str, key: str, ok, expected: str) -> None:
+        if key not in container:
+            errors.append(f"{path}{key}: missing")
+        elif not ok(container[key]):
+            errors.append(f"{path}{key}: must be {expected}")
+
+    check(raw, "", "schema_version", lambda v: v == BUNDLE_SCHEMA_VERSION, repr(BUNDLE_SCHEMA_VERSION))
+    check(raw, "", "decision", lambda v: v in BUNDLE_DECISIONS, " | ".join(BUNDLE_DECISIONS))
+    check(raw, "", "overall_score", lambda v: _finite_in(v, 0, 100), "a finite number in [0, 100]")
+    check(raw, "", "confidence", lambda v: _finite_in(v, 0, 1), "a finite number in [0, 1]")
+    check(raw, "", "content_review", lambda v: isinstance(v, dict), "an object")
+    review = raw.get("content_review")
+    if isinstance(review, dict):
+        check(review, "content_review.", "protocol", lambda v: v == CONTENT_REVIEW_PROTOCOL, repr(CONTENT_REVIEW_PROTOCOL))
+        check(review, "content_review.", "claims", lambda v: isinstance(v, list), "an array")
+        check(review, "content_review.", "bindings", lambda v: isinstance(v, dict), "an object")
+    return errors
+
+
 @dataclass
 class ValidationReport:
     schema_valid: bool
@@ -35,6 +75,7 @@ class ValidationReport:
     bundle: BundleExtraction | None = None
     relation_reviews: list[dict] = field(default_factory=list)
     quality_reviews: list[dict] = field(default_factory=list)
+    error_code: str | None = None  # response_protocol_invalid | schema_invalid | content_review_invalid
 
 
 class BundleValidator:
@@ -50,10 +91,16 @@ class BundleValidator:
     def validate(self, raw: dict, passages: list[Passage]) -> ValidationReport:
         errors: list[str] = []
         warnings: list[str] = []
+        if self.require_content_review:
+            protocol_errors = bundle_protocol_errors(raw)
+            if protocol_errors:
+                return ValidationReport(False, errors=protocol_errors, error_code="response_protocol_invalid")
         try:
             bundle = BundleExtraction.model_validate(repair_metric_value_strings(raw, warnings))
         except ValidationError as exc:
-            return ValidationReport(False, errors=[f"schema: {e['msg']}" for e in exc.errors()])
+            return ValidationReport(False, errors=[
+                f"{'.'.join(str(p) for p in e['loc']) or '$'}: {e['msg']}" for e in exc.errors()
+            ], error_code="schema_invalid")
 
         if self.require_content_review or bundle.content_review:
             from mic.content_review import ContentReview, seal
@@ -61,7 +108,8 @@ class BundleValidator:
             try:
                 reviews = ContentReview(bundle, passages, warnings).apply()
             except (ValidationError, TypeError, ValueError) as exc:
-                return ValidationReport(False, errors=[f"content_review: {type(exc).__name__}"], warnings=warnings)
+                return ValidationReport(False, errors=[f"content_review: {type(exc).__name__}"], warnings=warnings,
+                                        error_code="content_review_invalid")
             self._enforce_limits(bundle, warnings, truncate_brief=False)
             self._check_evidence(bundle, {p.passage_id for p in passages}, warnings)
             self._attach_excerpts(bundle, {p.passage_id: p.text for p in passages})

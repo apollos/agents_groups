@@ -169,13 +169,10 @@ description: A股情报收集员 Agent 的 CLI 工作流。用于注册 Demand�
 - 需要人工登录或处理同意页时使用 `mic browser setup --engine bing`（或允许清单内的 `--url`），结束后窗口正常关闭；不得编写临时浏览器脚本、提高预算或删除锁。
 - 浏览器路线重启后不依赖 Docker/SearXNG。Edge profile 与 Cookie 文件位于仓库外，不进入日志、回复、Memory 或 Git。
 
-### 2. searxng 搜索路线（`type: searxng`）
+### 2. 配置异常
 
-    timeout --kill-after=5s 120s "{self.config.runtime.workspace_root}/bin/ensure-search"
-
-- 检查正常退出后才继续采集；服务停止时由脚本按需启动。
-- 将 ensure-search 部署到 workspace_root/bin，并按本机环境配置 Compose 路径和健康检查地址。
-- 脚本缺失或检查失败时停止采集，报告依赖故障，不得当成“没有相关信息”。
+- 若配置读取失败或 `search_providers.active` 不是 `browser_local`，报告 `config_error` 并停止。
+- 不得自动切回 SearXNG、Tavily、SerpApi、其他搜索服务或 mock。
 
 ### 3. 需要模型的任务
 

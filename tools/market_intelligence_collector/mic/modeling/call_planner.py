@@ -27,6 +27,7 @@ from mic.profile import TargetProfile
 from mic.schemas import Passage, TriageResult
 from mic.task_triage import (PROTOCOL as TASK_TRIAGE_PROTOCOL, INDEX_BASIS,
                              SEARCH_BASIS, validate_task_triage)
+from mic.validate import bundle_protocol_errors
 
 if TYPE_CHECKING:  # type-hint only; a runtime import would be circular
     # (reader -> modeling.vision -> modeling/__init__ -> call_planner -> reader)
@@ -208,19 +209,27 @@ class ModelCallPlanner:
     def _recover_json(self, outputs, messages):
         """One explicit source re-extraction, inside all existing budgets.
 
-        Ordinary fallback runs first. No valid JSON output is retried for weak
-        evidence, low scores or failed review; malformed text is never repaired
-        locally or reused as source material. Split/triage/arbitration do not use
-        this path. A failed recovery never starts another fallback chain.
+        Ordinary fallback runs first. Triggers are unparseable JSON or a parsed
+        object that violates the bundle protocol; both share the single recovery
+        quota. No protocol-valid output is retried for weak evidence, low scores,
+        an explicit skip or failed review; a bad response is never repaired locally
+        or reused as source material. Split/triage/arbitration do not use this
+        path. A failed recovery never starts another fallback chain.
         """
         if (not self.extraction_cfg.get("json_recovery", {}).get("enabled", True)
                 or self._json_recovery_used or not outputs
-                or outputs[-1].status != "json_invalid"
-                or any(r.status == "success" and r.parsed is not None for r in outputs)
+                or any(r.status == "success" and r.parsed is not None
+                       and not bundle_protocol_errors(r.parsed) for r in outputs)
                 or len(outputs) >= self.budget.max_model_calls_per_source_link
                 or not self.budget.can_call()):
             return
         parent = outputs[-1]
+        if parent.status == "json_invalid":
+            trigger, protocol_errors = "json_invalid", None
+        elif parent.status == "success" and parent.parsed is not None:
+            trigger, protocol_errors = "response_protocol_invalid", bundle_protocol_errors(parent.parsed)
+        else:
+            return
         adapter = self.registry.get(parent.model_config_id)
         if adapter is None or not adapter.usable:
             return
@@ -228,16 +237,18 @@ class ModelCallPlanner:
         if runtime_budget is not None and not runtime_budget.can("gateway_requests_sent"):
             return  # Includes cancellation/deadline; do not create a phantom send.
         recovery = {
-            "strategy": "reextract_original_input", "attempt": 1,
+            "strategy": "reextract_original_input", "attempt": 1, "trigger": trigger,
             "parent_output_index": len(outputs) - 1,
             "parent_response_sha256": sha256(parent.raw_text.encode("utf-8")).hexdigest(),
         }
+        if protocol_errors:
+            recovery["protocol_errors"] = list(protocol_errors)
         if parent.provider_request_id:
             recovery["parent_provider_request_id"] = parent.provider_request_id
         if parent.acceptance_trace and parent.acceptance_trace.get("trace_id"):
             recovery["parent_trace_id"] = parent.acceptance_trace["trace_id"]
         self._json_recovery_used = True
-        result = self._complete(adapter, build_json_recovery_messages(messages),
+        result = self._complete(adapter, build_json_recovery_messages(messages, protocol_errors=protocol_errors),
                                 json_recovery=recovery)
         self.budget.record()
         outputs.append(result)

@@ -119,7 +119,7 @@ def test_metric_value_given_as_power_energy_token_is_split_instead_of_failing_sc
     raw = {"metrics": [metric("二标段规模", "10MW/40MWh", "", "p2"), metric("项目规模", "100MW/400MWh", None, "p0"),
                        metric("中标金额", "4141.622万元", "万元", "p2")]}      # not a power/energy token → still an error
     report = validate(raw)
-    assert not report.schema_valid and report.errors == ["schema: Input should be a valid number, unable to parse string as a number"]
+    assert not report.schema_valid and report.errors == ["metrics.2.metric_value: Input should be a valid number, unable to parse string as a number"]
     raw["metrics"].pop()
     report = validate(raw)
     assert report.schema_valid

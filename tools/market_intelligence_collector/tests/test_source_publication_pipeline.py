@@ -37,7 +37,7 @@ def _date_text(date):
 
 def _raw(date="2026-09-15"):
     return {
-        "decision": "save_structured", "overall_score": 85, "confidence": .9,
+        "schema_version": "bundle_extraction_v0.3", "decision": "save_structured", "overall_score": 85, "confidence": .9,
         "facts": [{"fact_type": "claim", "fact_statement": FACT,
                    "evidence_locator": {"passage_id": "p1"}}],
         "metrics": [{"metric_name": "出货量", "metric_value": 120, "unit": "台",

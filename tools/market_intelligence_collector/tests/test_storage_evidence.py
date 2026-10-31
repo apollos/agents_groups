@@ -18,7 +18,7 @@ from mic.store.repository import Repository
 
 def fixture():
     return BundleExtraction.model_validate({
-        "decision": "save_structured", "overall_score": 80, "confidence": .8,
+        "schema_version": "bundle_extraction_v0.3", "decision": "save_structured", "overall_score": 80, "confidence": .8,
         "brief": {"one_sentence": "合成存储测试样本", "uncertainty": "当前材料未包含交易对手确认，待核查。"},
         "facts": [{"fact_type": "price", "fact_statement": "合成报价", "confidence": .8,
             "metrics": {"amount": None, "unit_price": .518, "unit_price_unit": "元/Wh"},

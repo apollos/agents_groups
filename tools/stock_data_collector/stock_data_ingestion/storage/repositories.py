@@ -177,7 +177,7 @@ class Repository:
     def insert_provider_comparison(self, result: ProviderComparisonResult) -> bool:
         data = result.model_dump(mode="python")
         data["conflicts"] = [c.model_dump(mode="json") for c in result.conflicts]
-        data["validation_status"] = "validated" if result.status == "matched" else "conflicted_high"
+        data["validation_status"] = {"matched": "validated", "not_comparable": "unvalidated"}.get(result.status, "conflicted_high")
         return self.insert_skip_duplicate(models.ProviderComparisonModel, data)
 
     def insert_conflict(self, conflict: DataQualityConflict) -> bool:

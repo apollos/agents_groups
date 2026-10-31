@@ -1062,7 +1062,7 @@ class AKShareAdapter(BaseDataAdapter):
                             "raw_source_api": raw_api,
                             "report_period": self._date_text(self._value(row, "日期", "报告期")) or self._value(row, "日期", "报告期"),
                             "report_date": self._date_text(self._value(row, "日期", "报告期")),
-                            "roe": self._value(row, "净资产收益率(%)", "加权净资产收益率(%)", "ROE"),
+                            "roe": self._value(row, "净资产收益率(%)", "ROE"),
                             "roa": self._value(row, "总资产报酬率(%)", "总资产净利率(%)", "ROA"),
                             "gross_margin": self._value(row, "销售毛利率(%)", "毛利率"),
                             "net_margin": self._value(row, "销售净利率(%)", "净利率"),
@@ -1070,7 +1070,6 @@ class AKShareAdapter(BaseDataAdapter):
                             "net_profit_yoy": self._value(row, "净利润增长率(%)", "归属母公司股东的净利润增长率(%)", "净利润同比"),
                             "debt_asset_ratio": self._value(row, "资产负债率(%)", "资产负债率"),
                             "current_ratio": self._value(row, "流动比率", "current_ratio"),
-                            "eps": self._value(row, "摊薄每股收益(元)", "每股收益", "EPS"),
                             "bps": self._value(row, "每股净资产_调整后(元)", "每股净资产", "BPS"),
                         }
                     )
@@ -1115,7 +1114,8 @@ class AKShareAdapter(BaseDataAdapter):
                                 "pe_ttm": self._value(row, "PE(TTM)"),
                                 "pe": self._value(row, "PE(静)"),
                                 "pb": self._value(row, "市净率"),
-                                "ps": self._value(row, "市销率"),
+                                # stock_value_em renames Eastmoney PS_TTM to 市销率.
+                                "ps_ttm": self._value(row, "市销率"),
                                 "pcf": self._value(row, "市现率"),
                             }
                         )

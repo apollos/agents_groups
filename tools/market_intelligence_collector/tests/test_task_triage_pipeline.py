@@ -56,7 +56,7 @@ def _bundle(payload, score):
     text, passage_id = passage["text"], passage["passage_id"]
     is_index = passage["section"] == "index_entry"
     return {
-        "decision": "save_structured", "overall_score": score, "confidence": .9,
+        "schema_version": "bundle_extraction_v0.3", "decision": "save_structured", "overall_score": score, "confidence": .9,
         "facts": [{"fact_type": "document_listing" if is_index else "claim",
                    "fact_statement": text, "confidence": .9,
                    "evidence_locator": {"passage_id": passage_id}}],

@@ -41,7 +41,7 @@ def _raw(*, assessment="partial"):
             "reason": "人工标注的测试响应；不能作为真实模型理解正确的证据。",
         }]
     return {
-        "decision": "save_structured", "overall_score": 80, "confidence": .9,
+        "schema_version": "bundle_extraction_v0.3", "decision": "save_structured", "overall_score": 80, "confidence": .9,
         "facts": [{"fact_type": "claim", "fact_statement": TEXT, "confidence": .9,
                    "evidence_locator": {"passage_id": "p1"}}],
         "content_review": review,

@@ -24,9 +24,9 @@ call_governance:
     # model prompt there, whereas /v1/chat/completions demotes images to
     # agent attachments that text-only primaries never see.
     model_config_id: openclaw_research
-    # Agent route requested in the payload's "model" field. Deployment-specific;
-    # OPENCLAW_REQUEST_MODEL in .env wins over this yaml fallback.
-    request_model: openclaw/research
+    # Dedicated no-tool MIC route requested in the payload's "model" field.
+    # MIC_OPENCLAW_REQUEST_MODEL may override it for a deployment.
+    request_model: openclaw/mic-extract
     # x-openclaw-model header: forces a vision-capable (text+image) backend
     # for image transcription calls, so the gateway's default text-only model
     # is never asked to look at pictures. Deployment-specific; set

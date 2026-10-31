@@ -52,7 +52,7 @@ def browser_config(active: str = "browser_local", provider: dict | None = None, 
     """Load the repo config and switch it to the browser route (in-memory only).
 
     ``strict_evidence_review`` mirrors the deployment step the README requires; pass
-    ``None`` to leave the repo default (absent) in place.
+    ``None`` to explicitly remove the repository's formal-run default.
     """
     import copy
 
@@ -61,9 +61,11 @@ def browser_config(active: str = "browser_local", provider: dict | None = None, 
     cfg = load_config()
     cfg.raw = copy.deepcopy(cfg.raw)
     cfg.set_browser_runtime(runtime or browser_runtime_block())
-    if strict_evidence_review is not None:
-        cfg.raw.setdefault("output_schema", {}).setdefault("limits", {})["strict_evidence_review"] = \
-            strict_evidence_review
+    limits = cfg.raw.setdefault("output_schema", {}).setdefault("limits", {})
+    if strict_evidence_review is None:
+        limits.pop("strict_evidence_review", None)
+    else:
+        limits["strict_evidence_review"] = strict_evidence_review
     sp = cfg.raw["search_providers"]
     sp["active"] = active
     sp["fallback"] = fallback if fallback is not None else []

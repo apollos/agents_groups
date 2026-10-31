@@ -57,6 +57,8 @@ class ProviderComparisonResult(BaseModel):
     checked_fields: list[str] = Field(default_factory=list)
     matched_fields: list[str] = Field(default_factory=list)
     conflicted_fields: list[str] = Field(default_factory=list)
+    # Fields both providers supplied but which are not the same metric; neither matched nor conflicted.
+    not_comparable_fields: list[dict[str, str]] = Field(default_factory=list)
     conflicts: list[DataQualityConflict] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=now_asia_shanghai)
     request_id: Optional[str] = None

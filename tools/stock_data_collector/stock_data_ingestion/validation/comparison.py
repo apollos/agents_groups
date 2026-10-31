@@ -4,6 +4,7 @@ from typing import Any, Iterable
 
 from pydantic import BaseModel
 
+from stock_data_ingestion.normalization.field_semantics import comparability
 from stock_data_ingestion.schemas.records import BarRecord, ProviderComparisonResult
 from stock_data_ingestion.validation.conflict import detect_field_conflict
 
@@ -103,6 +104,7 @@ def compare_standard_records(
     comparison_key = build_comparison_key(c)
     checked: list[str] = []
     matched: list[str] = []
+    not_comparable: list[dict[str, str]] = []
     conflicts = []
     for field in fields:
         if field not in c and field not in o:
@@ -120,6 +122,13 @@ def compare_standard_records(
         # Estimates cannot independently validate actual amount/VWAP. Current
         # Tencent SDK output provides actual amounts and must be compared.
         if field in {"amount", "vwap"} and (_has_estimated_amount(c) or _has_estimated_amount(o)):
+            continue
+        reason = comparability(
+            str(c.get("record_type")), field,
+            (c.get("field_provenance") or {}).get(field), (o.get("field_provenance") or {}).get(field),
+        )
+        if reason is not None:
+            not_comparable.append({"field": field, "reason": reason})
             continue
         checked.append(field)
         conflict = detect_field_conflict(
@@ -145,10 +154,11 @@ def compare_standard_records(
         comparison_key=comparison_key,
         canonical_provider=str(c.get("provider")),
         compared_provider=str(o.get("provider")),
-        status="matched" if not conflicts else "conflicted",
+        status="conflicted" if conflicts else "matched" if checked else "not_comparable",
         checked_fields=checked,
         matched_fields=matched,
         conflicted_fields=[conflict.field_name for conflict in conflicts],
+        not_comparable_fields=not_comparable,
         conflicts=conflicts,
         request_id=c.get("request_id"),
         ingestion_run_id=c.get("ingestion_run_id"),

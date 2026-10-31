@@ -31,7 +31,7 @@ def raw_bundle(rows=None, *, text=TEXT, claim_status="source_supported"):
               "bindings": {"/facts/0": ["answer"]}}
     if rows is not None:
         review["task_coverage"] = rows
-    return {"decision": "save_structured", "overall_score": 80,
+    return {"schema_version": "bundle_extraction_v0.3", "confidence": 0.0, "decision": "save_structured", "overall_score": 80,
             "facts": [{"fact_statement": text, "evidence_locator": {"passage_id": "p1"}}],
             "content_review": review}
 

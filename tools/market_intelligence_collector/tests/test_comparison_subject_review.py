@@ -32,7 +32,7 @@ def subject_case(state="pending_review"):
     summary = {"id": "summary", "kind": "observation", "status": "source_supported",
         "statement": comparison["statement"], "reason": "人工标签：依赖被隔离的比较，必须同步隔离。",
         "evidence": evidence, "depends_on": ["comparison"]}
-    raw = {"decision": "save_structured", "overall_score": 85,
+    raw = {"schema_version": "bundle_extraction_v0.3", "confidence": 0.0, "decision": "save_structured", "overall_score": 85,
         "facts": [{"fact_statement": growth["statement"], "evidence_locator": {"passage_id": "p1"}}],
         "metrics": [{"metric_name": "收入同比增速", "metric_value": 20, "unit": "%",
             "comparison": {"yoy": .2}, "evidence_locator": {"passage_id": "p1"}}],

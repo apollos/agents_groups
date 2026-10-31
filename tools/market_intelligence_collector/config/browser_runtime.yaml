@@ -1,19 +1,16 @@
 # Local browser runtime for the `browser` search provider and browser body
 # fetching (design: docs/design/local_browser_search.md, section 13.2).
 #
-# Shipped DISABLED so existing SearXNG/API deployments behave exactly as
-# before. To enable the browser route in a deployment:
-#   1. set enabled: true here,
-#   2. set search_providers.active: browser_local and fallback: [],
-#   3. export MIC_BROWSER_PROFILE_DIR=<workspace>/browser/profiles/mic-edge,
-#   4. run `mic browser doctor` (then `mic browser doctor --launch`) on the GUI desktop.
+# Default formal collection route: local, windowed Edge search. Before collecting
+# on the host, configure a dedicated profile outside the repository and run
+# `mic browser doctor` (then `mic browser doctor --launch`) in its GUI session.
 #
 # `limits` are the deployment ceiling for one run; a task budget_profile can
 # only tighten them. Unknown fields, wrong types and out-of-range values make
 # config loading fail (no silent defaults).
 browser_runtime:
   version: 1
-  enabled: false
+  enabled: true
   channel: msedge
   headless: false
   profile_dir_env: MIC_BROWSER_PROFILE_DIR

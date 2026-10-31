@@ -122,7 +122,7 @@ def test_absence_claim_is_limited_to_available_material_without_score_changes():
     from copy import deepcopy
     from mic.schemas import Passage
     from mic.validate import BundleValidator
-    raw = {"decision": "save_structured", "overall_score": 66,
+    raw = {"schema_version": "bundle_extraction_v0.3", "confidence": 0.0, "decision": "save_structured", "overall_score": 66,
            "brief": {"uncertainty": "单一媒体来源，无官方中标文件；订单规模小，对宁德时代收入影响有限。"}}
     original = deepcopy(raw)
     validator = BundleValidator({"strict_evidence_review": True}, require_content_review=False)

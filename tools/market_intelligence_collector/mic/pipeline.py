@@ -130,6 +130,22 @@ class Pipeline:
         self.repo = Repository(get_database(self.config.database_url))
         self.planner = QueryPlanner(self.config)
         self.search = build_search_provider(self.config)
+        search_cfg = self.config.search_providers or {}
+        active_provider = search_cfg.get("active")
+        active_cfg = {}
+        if isinstance(active_provider, str):
+            active_cfg = (search_cfg.get("providers") or {}).get(active_provider, {})
+        runtime = self.config.browser_runtime
+        logger.info(
+            "mic_config_summary config_dir=%s search_provider=%s engine_order=%s "
+            "browser_enabled=%s headless=%s allow_mock=%s",
+            self.config.config_dir,
+            active_provider,
+            active_cfg.get("engine_order", []),
+            bool(runtime.get("enabled")),
+            bool(runtime.get("headless")),
+            self.config.allow_mock,
+        )
         self.triage = SearchHitTriage(self.config)
         self.registry = ModelRegistry(self.config)
         self.vision = VisionExtractor(self.config, self.registry)
@@ -1311,19 +1327,32 @@ class Pipeline:
                 "error_type": res.error_type, "output_tokens": res.output_tokens,
                 **diagnostics,
             })
+            stages = {
+                "http": "failed" if res.status == "request_failed" else "ok",
+                "json_parse": ("ok" if res.status == "success" and res.parsed is not None
+                               else "failed" if res.status == "json_invalid" else "not_attempted"),
+            }
             if res.status != "success" or res.parsed is None:
                 self.repo.save_model_output({
                     "model_run_id": model_run_id, "source_link_id": link_id,
                     "output_json": res.parsed, "schema_valid": False,
-                    "validation_errors": {"status": res.status}, "decision": None,
+                    "validation_errors": {"status": res.status,
+                                          "stages": {**stages, "protocol": "not_checked"}},
+                    "decision": None,
                 })
                 continue
 
             report = self.validator.validate(res.parsed, read.passages)
+            stages["protocol"] = ("invalid" if report.error_code == "response_protocol_invalid"
+                                  else "valid" if self.validator.require_content_review else "not_checked")
+            validation_errors = {"errors": report.errors, "warnings": report.warnings, "stages": stages}
+            if report.error_code:
+                validation_errors["error_code"] = report.error_code
+                stats.model_requests[-1]["validation_error_code"] = report.error_code
             self.repo.save_model_output({
                 "model_run_id": model_run_id, "source_link_id": link_id,
                 "output_json": res.parsed, "schema_valid": report.schema_valid,
-                "validation_errors": {"errors": report.errors, "warnings": report.warnings},
+                "validation_errors": validation_errors,
                 "decision": (report.bundle.decision if report.bundle else None),
                 "overall_score": (report.bundle.overall_score if report.bundle else None),
                 "confidence": (report.bundle.confidence if report.bundle else None),

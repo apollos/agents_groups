@@ -26,7 +26,12 @@ def test_adapter_max_output_tokens_from_registry(config):
     registry = ModelRegistry(config)
     assert registry.adapters["deepseek_v4_pro"].max_output_tokens == 8192
     assert registry.adapters["siliconflow_qwen"].max_output_tokens == 4096
-    # Models without an explicit value fall back to the registry default.
+    assert registry.adapters["openclaw_research"].max_output_tokens == 65536
+
+
+def test_adapter_without_explicit_cap_uses_registry_default(config):
+    del config.model_registry["models"]["openclaw_research"]["max_output_tokens"]
+    registry = ModelRegistry(config)
     default = config.model_registry.get("default_max_output_tokens", 4096)
     assert registry.adapters["openclaw_research"].max_output_tokens == default
 

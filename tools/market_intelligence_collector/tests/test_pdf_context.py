@@ -100,7 +100,8 @@ def test_metadata_title_does_not_become_body_evidence(config, profile):
     passages = reader._select_passages(title, "\n".join(long_body()), [], profile,
                                        preserve_document_edges=True)
     assert not any(title in p.text for p in passages if p.passage_id != "title")
-    raw = {"facts": [{"fact_statement": title}], "content_review": {
+    raw = {"schema_version": "bundle_extraction_v0.3", "decision": "save_structured", "overall_score": 75,
+           "confidence": 0.8, "facts": [{"fact_statement": title}], "content_review": {
         "protocol": PROTOCOL, "claims": [{"id": "title_claim", "statement": title,
         "kind": "observation", "status": "source_supported", "reason": "人工测试标签",
         "evidence": [{"passage_id": "title", "quote": title}], "depends_on": []}],

@@ -11,11 +11,13 @@ import argparse
 import json
 import logging
 import os
+import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import yaml
 from sqlalchemy import inspect
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -83,6 +85,21 @@ def active_provider_names(config) -> list[str]:
     return [active] if isinstance(active, str) else list(active)
 
 
+def prepare_offline_config(destination: Path) -> Path:
+    """Copy and explicitly switch the formal browser defaults to offline mock."""
+    shutil.copytree(PROJECT_ROOT / "config", destination)
+    search_path = destination / "search_providers.yaml"
+    search = yaml.safe_load(search_path.read_text(encoding="utf-8"))
+    search["search_providers"]["active"] = "mock"
+    search["search_providers"]["fallback"] = []
+    search_path.write_text(yaml.safe_dump(search, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    runtime_path = destination / "browser_runtime.yaml"
+    runtime = yaml.safe_load(runtime_path.read_text(encoding="utf-8"))
+    runtime["browser_runtime"]["enabled"] = False
+    runtime_path.write_text(yaml.safe_dump(runtime, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    return destination
+
+
 def enforce_real_mode_config(config) -> None:
     """Fail fast when --real would still run the mock search provider.
 
@@ -100,8 +117,7 @@ def enforce_real_mode_config(config) -> None:
     if mock_names:
         raise RuntimeError(
             "--real requires config/search_providers.yaml active to be a real "
-            f"provider, not {mock_names!r}. For example use serpapi_baidu, "
-            "serpapi_google, tavily, searxng, or a real provider list."
+            f"provider, not {mock_names!r}. Formal collection uses browser_local."
         )
 
 
@@ -118,10 +134,12 @@ def main() -> int:
     else:
         os.environ["MIC_ALLOW_MOCK"] = "true"
         # Offline mode must stay offline even when .env carries real keys or a
-        # local SearXNG instance is running (set before load_config/dotenv).
+        # live browser profile is configured (set before load_config/dotenv).
+        os.environ["MIC_CONFIG_DIR"] = str(prepare_offline_config(
+            log_directory / f"e2e_{stamp}_offline_config"))
+        os.environ["MIC_BROWSER_PROFILE_DIR"] = ""
         os.environ["SERPAPI_API_KEY"] = ""
         os.environ["TAVILY_API_KEY"] = ""
-        os.environ["SEARXNG_BASE_URL"] = "http://127.0.0.1:1"
         # Model keys too: MIC_ALLOW_MOCK only enables the mock *fallback*, so a
         # real key in .env would still send offline runs to live model APIs
         # (cost + non-determinism). Blanking forces the deterministic mock.

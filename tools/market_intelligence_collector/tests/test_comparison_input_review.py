@@ -32,7 +32,7 @@ def fixture(key="yoy", original=147.42, unit="percent", output=1.4742):
         {"id": "summary", "kind": "observation", "status": "source_supported", "reason": "汇总受支持金额和同比。",
          "statement": "报告期收入240万元，同比增长147.42%。", "evidence": evidence, "depends_on": ["amount", "rate"]},
     ]
-    return {"decision": "save_structured", "overall_score": 85,
+    return {"schema_version": "bundle_extraction_v0.3", "confidence": 0.0, "decision": "save_structured", "overall_score": 85,
         "brief": {"one_sentence": claims[2]["statement"]},
         "facts": [{"fact_statement": claims[0]["statement"], "evidence_locator": {"passage_id": "p0"}}],
         "metrics": [{"metric_name": "收入", "metric_value": 240, "unit": "万元", "comparison": {key: output},

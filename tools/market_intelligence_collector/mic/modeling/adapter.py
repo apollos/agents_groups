@@ -9,6 +9,7 @@ passages so the pipeline runs offline.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
@@ -18,6 +19,8 @@ from typing import Any
 from mic.config import MICConfig
 from mic.modeling.json_response import parse_json_object
 
+logger = logging.getLogger(__name__)
+
 try:  # openai is optional at runtime when only the mock is used.
     from openai import OpenAI
 except Exception:  # pragma: no cover
@@ -25,6 +28,11 @@ except Exception:  # pragma: no cover
 
 _AMOUNT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(亿元|万元|亿|万吨|吨|GWh|MWh)")
 _PCT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(%|个百分点)")
+
+
+def _model_call_debug_enabled() -> bool:
+    """Enable timing-only diagnostics for a live gateway investigation."""
+    return os.getenv("MIC_MODEL_CALL_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 @dataclass
@@ -54,6 +62,7 @@ class ModelCallResult:
     served_model: str | None = None
     provider_request_id: str | None = None
     acceptance_trace: dict[str, Any] | None = None
+    runtime_diagnostics: dict[str, Any] | None = None
     json_parse_error: dict[str, Any] | None = None
     json_recovery: dict[str, Any] | None = None
 
@@ -64,6 +73,8 @@ class ModelCallResult:
                 "output_truncated": self.finish_reason == "length"}
         if self.acceptance_trace is not None:
             diagnostics["acceptance_trace"] = dict(self.acceptance_trace)
+        if self.runtime_diagnostics is not None:
+            diagnostics["runtime_diagnostics"] = dict(self.runtime_diagnostics)
         if self.json_parse_error is not None:
             diagnostics["json_parse_error"] = dict(self.json_parse_error)
         if self.json_recovery is not None:
@@ -176,11 +187,13 @@ class ModelAdapter:
         if want_json:
             kwargs["response_format"] = {"type": "json_object"}
         remaining = self.remaining_seconds()
+        sdk_timeout: float | None = None
         if remaining is not None:
             # A recovery must not get a fresh SDK timeout after spending most
             # of the run. The reservation below rechecks deadline/cancellation;
             # the worker supervisor remains the overall wall-clock fence.
-            kwargs["timeout"] = max(0.001, remaining)
+            sdk_timeout = max(0.001, remaining)
+            kwargs["timeout"] = sdk_timeout
         refused = self._reserve_gateway_request()
         if refused is not None:
             return ModelCallResult(
@@ -189,20 +202,59 @@ class ModelAdapter:
                 status="request_failed", input_chars=input_chars,
                 error_type="budget_exhausted", error_message=refused[:500],
             )
+        runtime_diagnostics: dict[str, Any] | None = None
+        if _model_call_debug_enabled():
+            runtime_diagnostics = {
+                "request_started_epoch": start,
+                "remaining_seconds_before_send": remaining,
+                "sdk_timeout_seconds": sdk_timeout,
+                "response_bytes": 0,
+            }
+            logger.info(
+                "model_call_debug request_start model_config_id=%s endpoint=%s model=%s "
+                "input_chars=%s max_tokens=%s remaining_seconds=%s sdk_timeout_seconds=%s",
+                self.model_config_id, self.endpoint, self.model, input_chars, max_tokens,
+                remaining, sdk_timeout,
+            )
         try:
             resp = client.chat.completions.create(**kwargs)
         except Exception as exc:  # noqa: BLE001 - surface as failure for fallback
+            end = time.time()
+            latency_ms = int((end - start) * 1000)
+            if runtime_diagnostics is not None:
+                runtime_diagnostics.update({
+                    "request_finished_epoch": end,
+                    "latency_ms": latency_ms,
+                    "exception_type": type(exc).__name__,
+                })
+                logger.info(
+                    "model_call_debug request_failed model_config_id=%s latency_ms=%s "
+                    "exception_type=%s response_bytes=0",
+                    self.model_config_id, latency_ms, type(exc).__name__,
+                )
             return ModelCallResult(
                 model_config_id=self.model_config_id, provider=self.provider,
                 provider_type=self.provider_type, model_name=self.model,
                 status="request_failed", input_chars=input_chars,
-                latency_ms=int((time.time() - start) * 1000),
+                latency_ms=latency_ms,
                 error_type=type(exc).__name__, error_message=str(exc)[:500],
                 requested_max_tokens=max_tokens,
+                runtime_diagnostics=runtime_diagnostics,
             )
         latency_ms = int((time.time() - start) * 1000)
         choice = resp.choices[0]
         text = choice.message.content or ""
+        if runtime_diagnostics is not None:
+            runtime_diagnostics.update({
+                "request_finished_epoch": time.time(),
+                "latency_ms": latency_ms,
+                "response_bytes": len(text.encode("utf-8")),
+            })
+            logger.info(
+                "model_call_debug request_complete model_config_id=%s latency_ms=%s "
+                "response_bytes=%s",
+                self.model_config_id, latency_ms, runtime_diagnostics["response_bytes"],
+            )
         finish_reason = getattr(choice, "finish_reason", None)
         served_model = getattr(resp, "model", None)
         response_id = getattr(resp, "id", None)
@@ -229,6 +281,7 @@ class ModelAdapter:
             latency_ms=latency_ms, requested_max_tokens=max_tokens,
             finish_reason=finish_reason if isinstance(finish_reason, str) else None,
             served_model=served_model if isinstance(served_model, str) else None,
+            runtime_diagnostics=runtime_diagnostics,
             provider_request_id=response_id if isinstance(response_id, str) else None,
         )
         result.estimated_cost = self._estimate_cost(in_tok, out_tok)

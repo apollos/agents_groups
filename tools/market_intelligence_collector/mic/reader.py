@@ -362,6 +362,12 @@ class LinkReader:
         # recorded source of articles that live on the news site.
         raw, http_status, ctype = fetched[0], fetched[1], fetched[2]
         final_url = fetched[3] if len(fetched) > 3 and fetched[3] else url
+        decoded = fetched[4] if len(fetched) > 4 else None
+        if decoded is not None and decoded.error:
+            return FetchResult(transport="http", requested_url=url, final_url=final_url, http_status=http_status,
+                               content_type=ctype, blocked_reason=decoded.error,
+                               error=";".join(f"{t['source']}={t['label']}:{t['result']}" for t in decoded.tried),
+                               counted_as="http_read_attempts")
         if raw is None:
             blocked = "http_status" if http_status is not None else "network_error"
             return FetchResult(transport="http", requested_url=url, final_url=final_url if http_status else None,
@@ -371,7 +377,9 @@ class LinkReader:
             return FetchResult(transport="http", requested_url=url, final_url=final_url, http_status=http_status,
                                content_type=ctype, content=raw, counted_as="http_read_attempts")
         return FetchResult(transport="http", requested_url=url, final_url=final_url, http_status=http_status,
-                           content_type=ctype, html=raw, counted_as="http_read_attempts")
+                           content_type=ctype, html=raw, counted_as="http_read_attempts",
+                           encoding=decoded.encoding if decoded else None,
+                           encoding_source=decoded.encoding_source if decoded else None)
 
     def _fetch_browser_result(self, url: str, context):
         from mic.browser.contracts import FetchResult
@@ -404,8 +412,8 @@ class LinkReader:
             reason = "fetch_failed"
             if fetched.blocked_reason in ("captcha", "login_required"):
                 reason = fetched.blocked_reason
-            elif fetched.blocked_reason == "unsupported_content":
-                reason = "unsupported_content"
+            elif fetched.blocked_reason in ("unsupported_content", "html_decode_failed"):
+                reason = fetched.blocked_reason
             return ReadResult(source_link_id=source_link_id, read_status="failed",
                               http_status=fetched.http_status, content_type=fetched.content_type,
                               failure_reason=reason, **base)
@@ -591,11 +599,12 @@ class LinkReader:
 
     # --- fetch -------------------------------------------------------------
 
-    def _fetch(self, url: str) -> tuple[str | bytes | None, int | None, str | None, str | None]:
-        """Returns (body, http_status, content_type, final_url).
+    def _fetch(self, url: str) -> tuple[str | bytes | None, int | None, str | None, str | None, object]:
+        """Returns (body, http_status, content_type, final_url, decoded_html).
 
         ``body`` is str for HTML, bytes for PDF, None on failure; ``final_url`` is the
-        URL the response came from after redirects (None on transport failure).
+        URL the response came from after redirects (None on transport failure);
+        ``decoded_html`` is the ``DecodedHtml`` of an HTML body and None otherwise.
         Mock/synthetic bodies are served earlier by ``_fetch_http_result``; this
         method is the plain HTTP transport only.
         """
@@ -605,16 +614,21 @@ class LinkReader:
             ctype = resp.headers.get("content-type", "")
             final_url = str(resp.url)
             if resp.status_code != 200:
-                return None, resp.status_code, ctype, final_url
+                return None, resp.status_code, ctype, final_url, None
             looks_pdf = ("pdf" in ctype.lower()
                          or final_url.lower().split("?")[0].endswith(".pdf"))
             # Trust the magic bytes over URL/Content-Type: ".pdf" URLs often
             # serve an HTML hotlink-protection/redirect page instead.
             if looks_pdf and b"%PDF" in resp.content[:1024]:
-                return resp.content, resp.status_code, ctype, final_url
-            return resp.text, resp.status_code, ctype, final_url
+                return resp.content, resp.status_code, ctype, final_url, None
+            from mic.browser.fetch import decode_html_bytes, save_decode_failure_sample
+
+            decoded = decode_html_bytes(resp.content, ctype)
+            if decoded.error:
+                save_decode_failure_sample(url, ctype, resp.content, decoded)
+            return decoded.html, resp.status_code, ctype, final_url, decoded
         except (httpx.HTTPError, OSError):
-            return None, None, None, None
+            return None, None, None, None, None
 
     # --- anti-bot detection --------------------------------------------------
 

@@ -303,7 +303,7 @@ def test_parse_success_does_not_authorize_unreviewed_business_records(adapter_ca
     from mic.validate import BundleValidator
 
     raw = json.dumps({
-        "decision": "save_structured",
+        "schema_version": "bundle_extraction_v0.3", "decision": "save_structured",
         "overall_score": 99,
         "confidence": 1,
         "facts": [{"fact_statement": "该公司已经完成一项交易。"}],
@@ -311,10 +311,14 @@ def test_parse_success_does_not_authorize_unreviewed_business_records(adapter_ca
     }, ensure_ascii=False)
     result, _, _ = adapter_call(raw)
     assert result.status == "success"
-    report = BundleValidator({}, require_content_review=True).validate(
-        result.parsed,
-        [Passage(passage_id="p0", section="正文", text="文中仅说明计划，后续结果尚待确认。")],
-    )
+    passages = [Passage(passage_id="p0", section="正文", text="文中仅说明计划，后续结果尚待确认。")]
+    report = BundleValidator({}, require_content_review=True).validate(result.parsed, passages)
+    assert not report.schema_valid and report.bundle is None
+    assert report.error_code == "response_protocol_invalid"
+    assert report.errors == ["content_review: missing"]
+
+    reviewed = {**result.parsed, "content_review": {"protocol": "content_review_v2", "claims": [], "bindings": {}}}
+    report = BundleValidator({}, require_content_review=True).validate(reviewed, passages)
     assert report.schema_valid
     assert report.bundle.facts == []
     assert report.bundle.events == []

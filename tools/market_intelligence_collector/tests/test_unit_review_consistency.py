@@ -43,7 +43,7 @@ def unit_case(supported=False, currency="CNY", unit="万元"):
     summary = {"id": "summary", "kind": "observation", "status": "source_supported",
                "statement": f"本期收入120{unit}，同比增长20%。", "reason": "人工标签：整句依赖两项前提。",
                "evidence": evidence, "depends_on": ["revenue", "growth"]}
-    return {"decision": "save_structured", "overall_score": 85, "confidence": .9,
+    return {"schema_version": "bundle_extraction_v0.3", "decision": "save_structured", "overall_score": 85, "confidence": .9,
             "facts": [{"fact_statement": amount["statement"],
                        "metrics": {"amount": 120, "currency": currency, "amount_unit": unit},
                        "evidence_locator": {"passage_id": "table"}}],

@@ -49,7 +49,8 @@ def test_doctor_detects_gui_unavailable_and_lock_holder(tmp_path):
 def test_doctor_launch_refused_when_disabled(tmp_path):
     from mic.config import load_config
 
-    cfg = load_config()  # repo default: browser disabled
+    cfg = load_config()
+    cfg.set_browser_runtime(browser_runtime_block(enabled=False))
     result = run_doctor(cfg, launch=True, env={"MIC_BROWSER_PROFILE_DIR": str(tmp_path / "p"), "DISPLAY": ":0"})
     assert result["launch"]["ok"] is False
     assert "enabled" in result["launch"]["error"]
