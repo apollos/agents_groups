@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import re
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Comment, NavigableString
 from mic.utils import normalize_ws
 
 
@@ -34,6 +34,7 @@ _INLINE_TAGS = frozenset({
 _LINK_RATIO = 0.45
 _MIN_FIRST_PARTY_BLOCKS = 2
 _MIN_FIRST_PARTY_CHARS = 60
+_HEADER_MAX_CHARS = 300
 
 
 @dataclass
@@ -41,6 +42,9 @@ class ArticleExtraction:
     title: str = ''
     publish_time: str | None = None
     body: str = ''
+    # Page-level headline block (headline, byline, adjacent dates) when it sits
+    # outside the body container. Raw text only; its dates are not classified here.
+    header: str = ''
     tables: list[str] = field(default_factory=list)
     image_urls: list[str] = field(default_factory=list)
     report: dict = field(default_factory=dict)
@@ -71,6 +75,56 @@ def _is_related_boundary(text):
         return True
     return any(re.match(r'\A' + re.escape(label) + r'\s*[:：]', text)
                for label in BOUNDARY_LABELS)
+
+
+def _dom_path(node):
+    path = []
+    for current in [node, *node.parents]:
+        if current.name in (None, '[document]', 'html', 'body'):
+            break
+        path.append(current.name + ''.join('#' + current['id'] if current.get('id') else '')
+                    + ''.join('.' + c for c in current.get('class', [])))
+    return ' < '.join(path)
+
+
+def _article_header(soup, root, page_title):
+    """Headline block of the page's own article when it lies outside ``root``.
+
+    Uses the page's single <h1> only if the document <title> names it. The block
+    is that h1's largest ancestor which neither contains the body container nor
+    exceeds a short length, read from the h1 onward. Dates elsewhere on the page
+    (recommendations, sidebars, footers) are never part of it.
+    """
+    headings = soup.find_all('h1')
+    if len(headings) != 1:
+        return '', {'status': 'not_found', 'reason': 'single_h1_missing'}
+    h1 = headings[0]
+    headline = normalize_ws(h1.get_text(' ', strip=True))
+    if not headline or headline not in page_title:
+        return '', {'status': 'not_found', 'reason': 'h1_not_named_by_title'}
+    if any(parent is root for parent in h1.parents):
+        return '', {'status': 'not_found', 'reason': 'h1_inside_body'}
+    order = {id(n): i for i, n in enumerate(soup.find_all(True))}
+    if order.get(id(h1), 0) > order.get(id(root), 0):
+        return '', {'status': 'not_found', 'reason': 'h1_after_body'}
+    region = h1
+    root_ancestors = {id(p) for p in root.parents}
+    for parent in h1.parents:
+        if parent.name in ('body', 'html', '[document]') or id(parent) in root_ancestors:
+            break
+        if len(normalize_ws(parent.get_text(' ', strip=True))) > _HEADER_MAX_CHARS:
+            break
+        region = parent
+    strings, started = [], region is h1
+    for node in region.descendants:
+        started = started or node is h1
+        if started and isinstance(node, NavigableString) and not isinstance(node, Comment):
+            strings.append(str(node))
+    text = normalize_ws(' '.join(strings))
+    if text == headline:
+        return '', {'status': 'not_found', 'reason': 'no_header_lines_beyond_headline'}
+    return text, {'status': 'found', 'container': _dom_path(region), 'h1': _dom_path(h1),
+                  'chars': len(text)}
 
 
 def _first_party_content(soup, title):
@@ -181,6 +235,7 @@ def extract_article(html, reader, page_url="", first_party=False):
             if root is None:
                 result.report['reason'] = 'ambiguous_article_containers'
                 return result
+            result.header, result.report['article_header'] = _article_header(soup, root, page_title)
             break
     if root is None and first_party:
         blocks, tables, truncated = _first_party_content(soup, result.title)

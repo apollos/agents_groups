@@ -437,6 +437,7 @@ class LinkReader:
         url = page_url
         image_texts: list[str] = []
         body_scope: dict = {}
+        header = ""
         first_party_blocks = False
         publication = {"status": "unknown", "published_at": None,
                        "reason": "pdf_publication_not_verified"}
@@ -468,6 +469,7 @@ class LinkReader:
                                           first_party=self._on_official_domain(page_url, profile))
                 title, publish_time, body = article.title, article.publish_time, article.body
                 tables, image_urls, body_scope = article.tables, article.image_urls, article.report
+                header = article.header
                 publication = body_scope.get("publication_time", {})
                 first_party_blocks = body_scope.get("selector") == FIRST_PARTY_SELECTOR
             else:
@@ -508,7 +510,8 @@ class LinkReader:
         if passages is None:
             passages = self._select_passages(title, body, tables, profile,
                                              image_texts=image_texts,
-                                             preserve_document_edges=document_type == "pdf")
+                                             preserve_document_edges=document_type == "pdf",
+                                             header=header)
         return ReadResult(
             source_link_id=source_link_id, read_status="read", http_status=http_status,
             content_type=ctype, content_length=len(body), title=title,
@@ -813,7 +816,8 @@ class LinkReader:
     def _select_passages(self, title: str, body: str, tables: list[str],
                         profile: TargetProfile,
                         image_texts: list[str] | None = None,
-                        preserve_document_edges: bool = False) -> list[Passage]:
+                        preserve_document_edges: bool = False,
+                        header: str = "") -> list[Passage]:
         entity_terms = profile.all_entity_terms()
         keyword_terms = (
             profile.products + profile.customers + profile.suppliers
@@ -871,14 +875,19 @@ class LinkReader:
         scored.sort(key=lambda x: (-x[0], x[1]))
         if preserve_document_edges:
             return self._select_pdf_context_passages(title, body, tables, relevant_tables, scored)
-        # Leave room for the title passage and the reserved table slots.
-        selected = scored[: max(0, self.max_passages - 1 - table_slots)]
+        # Leave room for the title passage, the article header and the reserved table slots.
+        header_slots = 1 if header else 0
+        selected = scored[: max(0, self.max_passages - 1 - header_slots - table_slots)]
         selected.sort(key=lambda x: x[1])  # restore document order
 
         passages: list[Passage] = []
         if title:
             passages.append(Passage(passage_id="title", section="标题", text=title))
         budget = self.max_chars
+        if header:
+            text = header[: max(0, budget)]
+            passages.append(Passage(passage_id="header", section="文章头部", text=text))
+            budget -= len(text)
         # Tables first within the character budget: they are the densest evidence.
         for _score, ti, table_text in relevant_tables:
             if budget <= 0:
