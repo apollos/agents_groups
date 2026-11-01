@@ -11,15 +11,16 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from mic.browser.contracts import SearchBatch, SearchRequest
 from mic.budget import DEFAULT_LIMITS, BudgetExceeded, RunBudget, merge_limits
 from mic.config import MICConfig, load_config
-from mic.content_review import (enforce_source_publication_dates, finalize_task_coverage,
+from mic.content_review import (complete_linked_publication, enforce_source_publication_dates,
+                                finalize_task_coverage, resolve_linked_publications,
                                 resolve_source_publication)
-from mic.content_review_policy import PROTOCOL as CONTENT_REVIEW_PROTOCOL
+from mic.content_review_policy import LINKED_PUBLICATION_PROTOCOL, PROTOCOL as CONTENT_REVIEW_PROTOCOL
 from mic.event_resolution import PROTOCOL, build_context, finalize
 from mic.index_navigation import discover_index_links
 from mic.logging_utils import get_logger, setup_logging
@@ -37,7 +38,7 @@ from mic.schemas import BundleExtraction, CoverageGap, SearchHit, TriageResult
 from mic.search import build_search_provider
 from mic.store import Repository, get_database
 from mic.task_questions import parse_task_questions, question_terms, task_context
-from mic.task_triage import (PROTOCOL as TASK_TRIAGE_PROTOCOL, INDEX_BASIS,
+from mic.task_triage import (PROTOCOL as TASK_TRIAGE_PROTOCOL, INDEX_BASIS, PUBLICATION_BASIS,
                              index_read_authorized)
 from mic.triage import SearchHitTriage
 from mic.utils import canonicalize_url, domain_of, new_id
@@ -48,6 +49,24 @@ logger = get_logger("pipeline")
 # Browser route read gate signals (see ``CollectionPipeline._apply_read_gate``).
 READ_GATE_SIGNAL_PREFIX = "read_gate:"
 RELATED_ONLY_SIGNAL = "related_entity_only"
+# Reader passages outside the article body: a page whose body duplicates an
+# earlier read can still add header or directory evidence.
+NON_BODY_SECTIONS = {"文章头部", "index_entry", "index_scope"}
+IDENTITY_PASSAGE_LIMIT, IDENTITY_PASSAGE_CHARS = 3, 1500
+
+
+@dataclass
+class ExtractedMaterial:
+    """A read, reviewed extraction kept in memory until its publication date is settled."""
+
+    read: Any
+    hit: SearchHit
+    tri: TriageResult
+    bundle: Any
+    merge_result: Any
+    extracted_publication: dict
+    source_metadata: dict
+    resolution_context: Any
 
 
 class RunCancelled(RuntimeError):
@@ -90,6 +109,7 @@ class RunStats:
     source_publications: list[dict[str, Any]] = field(default_factory=list)
     task_triage_reviews: list[dict[str, Any]] = field(default_factory=list)
     index_navigation: list[dict[str, Any]] = field(default_factory=list)
+    publication_corroboration: list[dict[str, Any]] = field(default_factory=list)
     # One entry per model request actually attempted (A4 traceability).
     model_requests: list[dict[str, Any]] = field(default_factory=list)
     stop_reason: str | None = None
@@ -702,6 +722,9 @@ class Pipeline:
         seen_final_canonical: set[str] = set()
         seen_read_hashes: set[str] = set()
         read_ok = 0
+        # Extracted materials whose publication date awaits evidence from a
+        # later read in this run (same budgets), keyed by source_link_id.
+        pending: dict[str, dict[str, Any]] = {}
 
         for qi, (link_id, hit, tri) in enumerate(read_queue):
             if read_ok >= max_links_to_read:
@@ -772,6 +795,9 @@ class Pipeline:
             if read.read_status == "read" and final_canonical in seen_final_canonical:
                 read.read_status, read.failure_reason = "failed", "duplicate_final_url"
             seen_final_canonical.add(final_canonical)
+            corroborates = [t for t in (tri.task_review.get("publication_targets") or [])
+                            if tri.task_review.get("basis") == PUBLICATION_BASIS
+                            and tri.task_review.get("status") == "accepted" and t in pending]
             freshness = window.assess(read.publication_time)
             read.fetch_diagnostics["time_window"] = freshness
             self.repo.save_read_attempt({
@@ -791,13 +817,16 @@ class Pipeline:
                     link_id, "failed", None, None,
                     document_type=read.document_type,
                     access_profile_id=self.reader.access_profile_id)
+                self._note_supplier(pending, link_id, hit, corroborates,
+                                    {"read_status": "failed", "reason": read.failure_reason})
                 if stop_after_this:
                     break
                 continue
             extracted_publication = deepcopy(read.publication_time)
             pending_publication = (window.days is not None
                                    and extracted_publication.get("status", "unknown") == "unknown")
-            if window.days is not None and not freshness["allowed"] and not pending_publication:
+            if (window.days is not None and not freshness["allowed"] and not pending_publication
+                    and not corroborates):
                 # A directory's own publication date does not date the linked
                 # documents. It may route a read while its business content
                 # remains excluded by the ordinary publication window.
@@ -809,8 +838,27 @@ class Pipeline:
                                          extracted_publication, extracted_publication)
                 continue
 
+            duplicate_body = bool(read.content_hash and read.content_hash in seen_content_hash)
+            if corroborates and duplicate_body:
+                # The body was already extracted; only header/directory evidence is new.
+                extra = [p for p in read.passages if p.section in NON_BODY_SECTIONS]
+                if not extra:
+                    stats.cached_or_reused_results += 1
+                    self._note_supplier(pending, link_id, hit, corroborates,
+                                        {"read_status": "read", "duplicate_body": True,
+                                         "reason": "duplicate_body_without_header_or_index_passages"})
+                    self._finish_publication(read, hit, tri, stats, context, window,
+                                             extracted_publication, extracted_publication)
+                    self.repo.update_link_read(
+                        link_id, "link_record_only", read.content_hash, read.simhash,
+                        document_type=read.document_type,
+                        access_profile_id=self.reader.access_profile_id)
+                    continue
+                read.fetch_diagnostics["corroboration_passages"] = {
+                    "duplicate_body": True, "passage_ids": [p.passage_id for p in extra]}
+                read = replace(read, passages=extra)
             # Content-hash reuse (spec 15.1 A): same body within this run.
-            if not pending_publication and read.content_hash in seen_content_hash:
+            if not pending_publication and not corroborates and read.content_hash in seen_content_hash:
                 stats.cached_or_reused_results += 1
                 self._finish_publication(read, hit, tri, stats, context, window,
                                          extracted_publication, extracted_publication)
@@ -822,7 +870,7 @@ class Pipeline:
             # Cross-run content-hash reuse: identical body already analyzed for
             # this target in a prior run -> clone instead of calling models.
             prior_body = None
-            if reuse_enabled and not pending_publication:
+            if reuse_enabled and not pending_publication and not corroborates:
                 prior_body = self.repo.find_analyzed_link_by_content_hash(
                     read.content_hash, profile.target_id, exclude_link_id=link_id, reviewed_only=True)
             if prior_body is not None:
@@ -873,6 +921,10 @@ class Pipeline:
                 source_metadata["navigation"] = deepcopy(tri.task_review["navigation"])
             resolution_context = build_context(task_profile.get("event_resolution_history"), stats.top_events)
             source_metadata["event_resolution_context"] = resolution_context
+            offered = [deepcopy(state["descriptor"]) for lid, state in pending.items()
+                       if lid != link_id and not state["settled"]]
+            if offered:
+                source_metadata["pending_publication_targets"] = offered
             materiality = tri.read_priority
             self._check_alive(context)  # before any model request for this link
             link_result = call_planner.run_for_link(
@@ -908,6 +960,8 @@ class Pipeline:
                 max_links_to_read=max_links_to_read)
 
             if link_result.call_mode == "no_model" or not link_result.outputs:
+                self._note_supplier(pending, link_id, hit, corroborates,
+                                    {"read_status": "read", "model": link_result.skipped_reason or "no_output"})
                 self._finish_publication(read, hit, tri, stats, context, window,
                                          extracted_publication, extracted_publication)
                 self._record_unassessed_coverage(
@@ -915,6 +969,8 @@ class Pipeline:
                 continue
 
             if not contributions:
+                self._note_supplier(pending, link_id, hit, corroborates,
+                                    {"read_status": "read", "model": "no_valid_contribution"})
                 self._finish_publication(read, hit, tri, stats, context, window,
                                          extracted_publication, extracted_publication)
                 self._record_unassessed_coverage(
@@ -947,46 +1003,37 @@ class Pipeline:
                         self._model_feedback)
 
             bundle = merge_result.bundle
+            if offered:
+                self._collect_linked_evidence(read, hit, publication_bundles, bundle,
+                                              offered, pending, corroborates, stats)
             publication = resolve_source_publication(publication_bundles, extracted_publication)
             bundle.content_review["source_publication"] = publication
-            if not self._finish_publication(read, hit, tri, stats, context, window,
-                                            publication, extracted_publication):
-                # Model output remains in the audit; no structured records from a
-                # source without a valid in-window publication date are admitted.
-                stats.content_reviews.append({"source_link_id": link_id,
-                                              "publication_filtered": True, **bundle.content_review})
-                self._record_unassessed_coverage(
-                    run_id, profile.target_id, stats, context, coverage_questions, link_id)
+            material = ExtractedMaterial(
+                read=read, hit=hit, tri=tri, bundle=bundle, merge_result=merge_result,
+                extracted_publication=extracted_publication, source_metadata=source_metadata,
+                resolution_context=resolution_context)
+            # A directory's own date never dates its entries; only document
+            # material waits for linked publication evidence.
+            if (window.days is not None and publication.get("status") == "unknown"
+                    and bundle.decision != "skip" and link_id not in pending
+                    and (read.material_scope or {}).get("kind") != "index"):
+                self._defer_publication(material, publication, pending, stats, context)
+                if corroborates:
+                    # A page read to corroborate others may itself be dated by
+                    # later reads, but does not start another re-ranking round.
+                    pending[link_id]["audit"]["triage"]["status"] = "supplier_not_retriaged"
+                else:
+                    self._corroboration_triage(
+                        pending[link_id], pending, read_queue, qi, sources_by_url, attempted_urls,
+                        call_planner, stats, context, max_links_to_read=max_links_to_read)
                 continue
-            source_metadata["publish_time"] = read.publish_time
-            source_metadata["publication_time"] = publication
-            finalize(bundle, resolution_context, read.passages, run_id=run_id, link_id=link_id,
-                     multiple_extractions=len(merge_result.model_outputs) > 1)
-            coverage = finalize_task_coverage(bundle, coverage_questions)
-            stats.output_decisions.append({"source_link_id": link_id,
-                                           **merge_result.decision_diagnostics})
+            self._admit_material(material, publication, run_id, profile, stats, context,
+                                 window, coverage_questions)
 
-            if bundle.decision in ("save_structured", "link_only"):
-                self._check_alive(context)  # never persist after cancel / past the deadline
-                self.repo.save_merged_analysis(
-                    profile.target_id, link_id, bundle, {
-                        "disagreement_level": merge_result.disagreement_level,
-                        "merge_method": merge_result.merge_method,
-                        "model_outputs": merge_result.model_outputs,
-                        "field_conflicts": merge_result.field_conflicts,
-                    }, search_run_id=run_id)
-                self._tally(stats, bundle, source_metadata=source_metadata)
-            elif coverage:
-                # A skipped source cannot count as an answer. Keep its coverage
-                # uncertainty without admitting its discarded structured output.
-                self._check_alive(context)
-                self.repo.save_coverage_gaps(
-                    run_id, profile.target_id,
-                    [CoverageGap.model_validate(gap) for gap in
-                     bundle.content_review.get("task_coverage_generated_gaps", [])],
-                    source_link_id=link_id)
-                stats.content_reviews.append({"source_link_id": link_id, **bundle.content_review})
-            stats.task_coverage.extend(coverage)
+        # Settle deferred materials inside the same run, after the last read.
+        self._check_alive(context)
+        self._settle_pending(pending, run_id, profile, stats, context, window,
+                             coverage_questions, call_planner, max_links_to_read)
 
         # End of work: a run that is cancelled or past its deadline here is not "completed".
         self._check_alive(context)
@@ -1033,6 +1080,264 @@ class Pipeline:
                                    document_type=read.document_type,
                                    access_profile_id=self.reader.access_profile_id)
         return False
+
+    def _admit_material(self, material: ExtractedMaterial, publication: dict, run_id: str,
+                        profile: TargetProfile, stats: RunStats, context: RunContext,
+                        window: PublicationWindow, coverage_questions: list[dict]) -> bool:
+        """Date, time-window and admission review of an existing extraction (no model call)."""
+        read, hit, tri, bundle = material.read, material.hit, material.tri, material.bundle
+        link_id, merge_result = read.source_link_id, material.merge_result
+        source_metadata = material.source_metadata
+        bundle.content_review["source_publication"] = publication
+        if not self._finish_publication(read, hit, tri, stats, context, window,
+                                        publication, material.extracted_publication):
+            # Model output remains in the audit; no structured records from a
+            # source without a valid in-window publication date are admitted.
+            stats.content_reviews.append({"source_link_id": link_id,
+                                          "publication_filtered": True, **bundle.content_review})
+            self._record_unassessed_coverage(
+                run_id, profile.target_id, stats, context, coverage_questions, link_id)
+            return False
+        source_metadata["publish_time"] = read.publish_time
+        source_metadata["publication_time"] = read.publication_time
+        finalize(bundle, material.resolution_context, read.passages, run_id=run_id, link_id=link_id,
+                 multiple_extractions=len(merge_result.model_outputs) > 1)
+        coverage = finalize_task_coverage(bundle, coverage_questions)
+        stats.output_decisions.append({"source_link_id": link_id,
+                                       **merge_result.decision_diagnostics})
+
+        if bundle.decision in ("save_structured", "link_only"):
+            self._check_alive(context)  # never persist after cancel / past the deadline
+            self.repo.save_merged_analysis(
+                profile.target_id, link_id, bundle, {
+                    "disagreement_level": merge_result.disagreement_level,
+                    "merge_method": merge_result.merge_method,
+                    "model_outputs": merge_result.model_outputs,
+                    "field_conflicts": merge_result.field_conflicts,
+                }, search_run_id=run_id)
+            self._tally(stats, bundle, source_metadata=source_metadata)
+        elif coverage:
+            # A skipped source cannot count as an answer. Keep its coverage
+            # uncertainty without admitting its discarded structured output.
+            self._check_alive(context)
+            self.repo.save_coverage_gaps(
+                run_id, profile.target_id,
+                [CoverageGap.model_validate(gap) for gap in
+                 bundle.content_review.get("task_coverage_generated_gaps", [])],
+                source_link_id=link_id)
+            stats.content_reviews.append({"source_link_id": link_id, **bundle.content_review})
+        stats.task_coverage.extend(coverage)
+        return True
+
+    # --- publication corroboration ------------------------------------------
+
+    def _defer_publication(self, material: ExtractedMaterial, publication: dict,
+                           pending: dict[str, dict], stats: RunStats, context: RunContext) -> None:
+        """Keep an extraction whose own date is unverified, without admitting it."""
+        read, hit = material.read, material.hit
+        link_id = read.source_link_id
+        identity = [{"passage_id": p.passage_id, "section": p.section,
+                     "text": p.text[:IDENTITY_PASSAGE_CHARS]}
+                    for p in read.passages if p.passage_id != "title"][:IDENTITY_PASSAGE_LIMIT]
+        descriptor = {
+            "source_link_id": link_id, "title": read.title or hit.title, "url": hit.url,
+            "final_url": read.final_url, "source_type": material.source_metadata.get("source_type"),
+            "publication_status": publication.get("status"),
+            "publication_reason": publication.get("reason"),
+            "identity_passages": identity,
+        }
+        audit = {"protocol": LINKED_PUBLICATION_PROTOCOL, "target_source_link_id": link_id,
+                 "target_url": hit.url, "target_title": descriptor["title"],
+                 "status": "awaiting_linked_evidence",
+                 "prior_publication": {"status": publication.get("status"),
+                                       "reason": publication.get("reason")},
+                 "identity_passage_ids": [p["passage_id"] for p in identity],
+                 "triage": {"status": "not_started"}, "supplier_attempts": []}
+        stats.publication_corroboration.append(audit)
+        pending[link_id] = {"material": material, "prior": deepcopy(publication),
+                            "descriptor": descriptor, "rows": [], "audit": audit, "settled": False}
+        awaiting = {**deepcopy(publication),
+                    "corroboration": {"protocol": LINKED_PUBLICATION_PROTOCOL,
+                                      "status": "awaiting_linked_evidence"},
+                    "time_window": {"status": "publication_time_unverified", "allowed": False,
+                                    "reason": "awaiting_linked_publication_evidence"}}
+        self._check_alive(context)
+        # Fail closed if the run stops before settlement: unverified, never admitted.
+        self.repo.update_link_publication(link_id, enforce_source_publication_dates(awaiting))
+
+    @staticmethod
+    def _note_supplier(pending: dict[str, dict], link_id: str, hit: SearchHit,
+                       corroborates: list[str], outcome: dict) -> None:
+        for target in corroborates:
+            state = pending.get(target)
+            if state is not None:
+                state["audit"]["supplier_attempts"].append(
+                    {"source_link_id": link_id, "url": hit.url, "requested_by_triage": True, **outcome})
+
+    def _collect_linked_evidence(self, read, hit: SearchHit, bundles: list, bundle,
+                                 offered: list[dict], pending: dict[str, dict],
+                                 corroborates: list[str], stats: RunStats) -> None:
+        targets = {t["source_link_id"]: t for t in offered}
+        index_links: dict[str, list[str]] = {}
+        for entry in (read.material_scope or {}).get("entries") or []:
+            if isinstance(entry, dict) and isinstance(entry.get("entry_id"), str):
+                index_links[entry["entry_id"]] = [
+                    link["url"] for link in entry.get("links") or []
+                    if isinstance(link, dict) and isinstance(link.get("url"), str)]
+        rows = resolve_linked_publications(bundles, targets, index_links=index_links)
+        run_ids = [r["model_run_id"] for r in stats.model_requests
+                   if r.get("source_link_id") == read.source_link_id and r.get("model_run_id")]
+        supplier = {"supplier_source_link_id": read.source_link_id, "supplier_url": hit.url,
+                    "supplier_title": read.title or hit.title,
+                    "supplier_material_kind": (read.material_scope or {}).get("kind"),
+                    "supplier_model_run_ids": run_ids,
+                    "supplier_passages": "non_body_only" if read.fetch_diagnostics.get(
+                        "corroboration_passages") else "selected_passages"}
+        for row in rows:
+            row.update(supplier)
+            state = pending.get(row.get("target_source_link_id"))
+            if state is not None and not state["settled"]:
+                state["rows"].append(row)
+        bundle.content_review["linked_publications"] = rows
+        for target, state in pending.items():
+            if state["settled"] or target not in targets:
+                continue
+            mine = [r for r in rows if r.get("target_source_link_id") == target]
+            if target in corroborates or mine:
+                state["audit"]["supplier_attempts"].append({
+                    "source_link_id": read.source_link_id, "url": hit.url,
+                    "requested_by_triage": target in corroborates, "read_status": "read",
+                    "model_run_ids": run_ids,
+                    "linked_claims": [{"claim_id": r.get("claim_id"), "status": r.get("status"),
+                                       "reason": r.get("reason"), "published_at": r.get("published_at")}
+                                      for r in mine]})
+
+    def _corroboration_triage(self, state: dict, pending: dict[str, dict], read_queue, position,
+                              sources_by_url, attempted_urls, call_planner: ModelCallPlanner,
+                              stats: RunStats, context: RunContext, *, max_links_to_read: int) -> None:
+        """Re-rank unread candidates once the publication gap is known (one triage call)."""
+        triage: dict[str, Any] = {"protocol": TASK_TRIAGE_PROTOCOL, "basis": PUBLICATION_BASIS,
+                                  "status": "not_assessed"}
+        state["audit"]["triage"] = triage
+        if not (self.config.call_governance or {}).get("batching", {}).get("serp_batch_triage", False):
+            triage["status"] = "triage_disabled"
+            return
+        queued = [row for row in read_queue[position + 1:]]
+        queued_ids = {row[0] for row in queued}
+        others = [row for canonical, row in sources_by_url.items()
+                  if canonical not in attempted_urls and row[0] not in queued_ids]
+        others.sort(key=lambda row: -row[2].read_priority)
+        # A content-form demotion can be lifted by an accepted index intent; the
+        # read gate is re-applied to every accepted row below.
+        recoverable = f"{READ_GATE_SIGNAL_PREFIX}content_form"
+        candidates = [row for row in [*queued, *others]
+                      if row[0] not in pending and canonicalize_url(row[1].url) not in attempted_urls
+                      and not any(s.startswith(READ_GATE_SIGNAL_PREFIX) and s != recoverable
+                                  for s in row[2].matched_signals)]
+        if not candidates:
+            triage["status"] = "no_candidates"
+            return
+        size = call_planner.batch_size()
+        triage["omitted_candidate_count"] = max(0, len(candidates) - size)
+        candidates = candidates[:size]
+        if (stats.links_read >= max_links_to_read or not self._read_attempt_possible(context)
+                or not call_planner.budget.can_call_batch_triage()
+                or not context.budget.can("gateway_requests_sent", 2)):
+            triage["status"] = "insufficient_budget"
+            return
+        corroboration_context = {
+            "protocol": LINKED_PUBLICATION_PROTOCOL,
+            "pending_targets": [{key: deepcopy(s["descriptor"][key]) for key in (
+                "source_link_id", "title", "url", "final_url", "source_type",
+                "publication_status", "publication_reason")}
+                for s in pending.values() if not s["settled"]],
+            "read_state": {"attempted_urls": sorted(attempted_urls),
+                           "successful_reads": stats.links_read},
+        }
+        neutral = [(lid, hit, tri.model_copy(deep=True, update={
+            "task_review": {}, "task_read_rank": None, "task_read_priority": None}))
+            for lid, hit, tri in candidates]
+        self._batch_triage(call_planner, neutral, stats, context=context,
+                           max_links_to_read=max_links_to_read,
+                           corroboration_context=corroboration_context, navigation_audit=triage)
+        self._check_alive(context)
+        accepted = [(lid, hit, tri) for lid, hit, tri in neutral
+                    if tri.task_review.get("basis") == PUBLICATION_BASIS
+                    and tri.task_review.get("status") == "accepted"]
+        if not accepted:
+            triage["status"] = ("rejected" if triage.get("submitted_source_link_ids")
+                                else "not_submitted")
+            return
+        approved = []
+        for lid, hit, tri in accepted:
+            tri.reason = tri.task_review["reason"]
+            tri = self._apply_read_gate(hit, tri, stats)
+            self.repo.update_link_triage(lid, tri.read_priority, tri.triage_decision,
+                                        reason=tri.reason, signals=tri.matched_signals,
+                                        need_model=tri.need_model, task_review=tri.task_review)
+            sources_by_url[canonicalize_url(hit.url)] = (lid, hit, tri)
+            if tri.triage_decision == "read":
+                approved.append((lid, hit, tri))
+        approved.sort(key=lambda row: row[2].task_read_rank)
+        approved_ids = {row[0] for row in approved}
+        # Model-approved reads go first; earlier authorizations are not revoked.
+        read_queue[position + 1:] = [*approved, *(row for row in queued if row[0] not in approved_ids)]
+        triage.update(status="accepted", enqueued_source_link_ids=[row[0] for row in approved],
+                      requested_source_link_ids=[
+                          row[0] for row in approved
+                          if state["descriptor"]["source_link_id"] in row[2].task_review.get(
+                              "publication_targets", [])])
+
+    def _settle_pending(self, pending: dict[str, dict], run_id: str, profile: TargetProfile,
+                        stats: RunStats, context: RunContext, window: PublicationWindow,
+                        coverage_questions: list[dict], call_planner: ModelCallPlanner,
+                        max_links_to_read: int) -> None:
+        for target, state in pending.items():
+            audit, rows = state["audit"], state["rows"]
+            triage = audit["triage"]
+            attempted = {row["source_link_id"] for row in audit["supplier_attempts"]}
+            requested = triage.get("requested_source_link_ids") or []
+            unavailable = None
+            if not any(row.get("status") == "supported" for row in rows):
+                if triage.get("status") != "accepted":
+                    unavailable = f"corroboration_triage_{triage.get('status')}"
+                elif set(requested) - attempted:
+                    unavailable = "corroboration_budget_exhausted"
+                elif not requested:
+                    unavailable = "corroboration_no_candidate_selected"
+            publication = complete_linked_publication(state["prior"], rows,
+                                                      unavailable_reason=unavailable)
+            state["settled"] = True
+            material = state["material"]
+            self._check_alive(context)
+            admitted = self._admit_material(material, publication, run_id, profile, stats,
+                                            context, window, coverage_questions)
+            final = material.read.publication_time or {}
+            audit.update(status="settled", admitted_to_time_window=admitted,
+                         final_publication={key: final.get(key) for key in (
+                             "status", "published_at", "precision", "source", "reason")},
+                         time_window=deepcopy(final.get("time_window")),
+                         unattempted_requested_source_link_ids=sorted(set(requested) - attempted))
+            if not admitted:
+                gap_type = {"conflict": "publication_date_conflict"}.get(
+                    final.get("status"), "publication_date_unverified")
+                if (final.get("time_window") or {}).get("status") in (
+                        "outside_time_window", "future_publication_time"):
+                    gap_type = "publication_outside_time_window"
+                elif final.get("status") != "conflict" and unavailable in (
+                        "corroboration_budget_exhausted", "corroboration_triage_insufficient_budget"):
+                    gap_type = "publication_corroboration_budget_exhausted"
+                description = {
+                    "publication_outside_time_window": "已读材料经审核的原始发布日期在本次时间窗外",
+                    "publication_date_conflict": "已读材料的发布日期证据存在未解决冲突",
+                    "publication_corroboration_budget_exhausted": "本次运行剩余预算不足，未能读取补证页面",
+                }.get(gap_type, "已读材料的发布日期未能在本次运行内核实")
+                self._check_alive(context)
+                self.repo.save_coverage_gaps(run_id, profile.target_id, [CoverageGap(
+                    gap_type=gap_type, priority="high",
+                    description=(f"{description}（{final.get('reason')}）；"
+                                 "业务内容保留在审核记录，未作为时间窗内交付。"))],
+                    source_link_id=target)
 
     def _record_unassessed_coverage(self, run_id: str, target_id: str,
                                     stats: RunStats, context: RunContext,
@@ -1184,7 +1489,8 @@ class Pipeline:
                       triaged: list[tuple[str, Any, Any]], stats: RunStats, *,
                       context: RunContext, max_links_to_read: int,
                       navigation_context: dict | None = None,
-                      navigation_audit: dict | None = None) -> None:
+                      navigation_audit: dict | None = None,
+                      corroboration_context: dict | None = None) -> None:
         if not (self.config.call_governance or {}).get("batching", {}).get(
                 "serp_batch_triage", False):
             return
@@ -1231,15 +1537,16 @@ class Pipeline:
                       "source_type": self.triage.source_type(h.domain),
                       "read_gate": (h.discovery or {}).get("relevance", {})}
                      for lid, h, t in batch]
-            if navigation_context is not None:
+            if navigation_context is not None or corroboration_context is not None:
                 from mic.modeling.prompts import build_batch_triage_messages
                 for item, (_, hit, _) in zip(items, batch):
-                    item["navigation"] = deepcopy(hit.discovery["index_navigation"])
+                    if (hit.discovery or {}).get("index_navigation"):
+                        item["navigation"] = deepcopy(hit.discovery["index_navigation"])
                 # Whole candidates only: input size is checked against the actual
                 # user payload, including task, parent provenance and run budget.
                 while items and len(build_batch_triage_messages(
                         items, call_planner.task_context, call_planner.triage_budget_context,
-                        navigation_context)[-1]["content"]) > call_planner.max_input_chars:
+                        navigation_context, corroboration_context)[-1]["content"]) > call_planner.max_input_chars:
                     if navigation_audit is not None:
                         navigation_audit["skipped"].append({
                             "source_link_id": items[-1]["id"], "reason": "model_input_char_limit"})
@@ -1249,8 +1556,12 @@ class Pipeline:
                     break
             before = len(call_planner.triage_results)
             before_reviews = len(call_planner.task_triage_reviews)
-            decisions = (call_planner.batch_triage(items, navigation_context=navigation_context)
-                         if navigation_context is not None else call_planner.batch_triage(items))
+            if corroboration_context is not None:
+                decisions = call_planner.batch_triage(items, corroboration_context=corroboration_context)
+            elif navigation_context is not None:
+                decisions = call_planner.batch_triage(items, navigation_context=navigation_context)
+            else:
+                decisions = call_planner.batch_triage(items)
             stats.task_triage_reviews.extend(call_planner.task_triage_reviews[before_reviews:])
             attempted = call_planner.triage_results[before:]
             if navigation_audit is not None and attempted:
@@ -1612,6 +1923,7 @@ class Pipeline:
             "source_publications": stats.source_publications,
             "task_triage_reviews": stats.task_triage_reviews,
             "index_navigation": stats.index_navigation,
+            "publication_corroboration": stats.publication_corroboration,
             "top_events": stats.top_events[:5],
             # Full event list for downstream coverage accounting: minor events (small buyback,
             # inventory drift, tender shortlist) matter for variable coverage even when they

@@ -155,7 +155,7 @@ def index_navigation(config, monkeypatch):
     state = SimpleNamespace(
         search_urls=[INDEX], index_urls={INDEX}, blocked=set(),
         entries={INDEX: [CHILD, SPARE]}, next_urls={}, publication={},
-        decisions={SPARE: "link_record_only"}, initial_decisions={},
+        decisions={SPARE: "link_record_only"}, initial_decisions={}, corroboration_decisions={},
         priorities={INDEX: 95, CHILD: 90, SPARE: 10, TAIL: 30, NEXT: 85},
         requests=[], reads=[], fetches=[], read_options=[], failed=set(),
         final_urls={}, navigation_invalid=None, bad_child_quote=False, bad_child_scope=False,
@@ -233,9 +233,12 @@ def index_navigation(config, monkeypatch):
         status = "success"
         if payload["task"] == "serp_batch_triage":
             ordered = sorted(payload["items"], key=lambda item: -state.priorities.get(item["url"], 50))
-            decisions = state.decisions if is_navigation else state.initial_decisions
+            corroboration = bool(payload.get("corroboration_context"))
+            decisions = (state.decisions if is_navigation
+                         else state.corroboration_decisions if corroboration else state.initial_decisions)
+            fallback = "link_record_only" if corroboration else "read"
             rows = [{
-                "id": item["id"], "triage_decision": decisions.get(item["url"], "read"),
+                "id": item["id"], "triage_decision": decisions.get(item["url"], fallback),
                 "read_priority": state.priorities.get(item["url"], 50), "need_model": True,
                 "task_read_rank": rank,
                 "read_intent": "index" if item["url"] in state.index_urls else "content",

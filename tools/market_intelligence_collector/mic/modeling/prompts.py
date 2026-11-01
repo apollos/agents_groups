@@ -91,6 +91,8 @@ SYSTEM_PROMPT = """你是一名服务于股票/行业研究分析师的信息抽
    按统一内容审核规则输出 document_listing 事实，保留条目原文、日期角色和链接归属；
    不凭标题生成财务指标或已完成经营事件。最新性须另审来源、筛选、排序、分页范围与截止时点，
    诊断字段不自动证明完整或官方；条目日期不能填作目录自身发布日期。缺少依据即保留覆盖缺口。
+   如 source_metadata.pending_publication_targets 非空，按统一规则的 linked_publication_review_v1
+   判断当前材料能否为其中某份材料提供原始披露日期；不能时不输出该绑定，不复制目标材料的业务内容。
 14. 日期按统一 date_review_v1 契约处理：非空 event_date 同时写入原 observation 的
    field_values.event_date 和 event_date_assessment；来源发布日期在 source_publication.assessment
    显式列出 possible_roles、selected_role、basis 与原文证据。签署/披露尚不能区分时保留多角色和待审，
@@ -324,13 +326,22 @@ items[].navigation 记录原目录、条目及href的来源。只选择给定ID�
 navigation_context.read_state给出已尝试/成功材料的运行状态，成功抓取也不等于已获合格证据。
 已搜索但未读的候选可以基于新目录线索重新排序；明确的站点/实体门禁仍不能靠改分数绕过。
 目录截断和未知排序/完整性保持不变；本次未提供的后缀条目不是可选择候选。
+若输入带 corroboration_context，本次运行已读取并抽取的 pending_targets 材料缺少已核实的发布日期，
+其业务内容在补证前不能作为窗口内正式交付。请对给定的全部未读候选重新排序：结合完整问题，
+判断每个候选是否可能为某份 pending_target 提供原始公开披露日期的证据（例如列示该文件的公司
+披露目录、交易所披露页或给出原始披露日的同文副本），以及是否值得消耗剩余读取预算。
+标题、摘要或搜索结果日期相似只说明可能同源，不能证明该页面没有补证价值；搜索结果日期、URL
+日期只用于导航，不是已核实日期。初筛不核实任何日期，读取后仍须统一模型审核。
+每条结果另给 publication_targets：你认为该候选可能补证的 pending_target source_link_id 列表，
+没有则为空数组；非空时必须 triage_decision=read 且 need_model=true。不要输出给定 ID 之外的目标。
 """
 
 
 def build_batch_triage_messages(items: list[dict],
                                 task_context: dict | None = None,
                                 reading_budget: dict | None = None,
-                                navigation_context: dict | None = None) -> list[dict]:
+                                navigation_context: dict | None = None,
+                                corroboration_context: dict | None = None) -> list[dict]:
     task_aware = bool(task_context and task_context.get("questions"))
     payload = {
         "task": "serp_batch_triage",
@@ -344,12 +355,17 @@ def build_batch_triage_messages(items: list[dict],
         payload["task_context"] = task_context
         if navigation_context is not None:
             payload["navigation_context"] = navigation_context
+        if corroboration_context is not None:
+            payload["corroboration_context"] = corroboration_context
         if reading_budget is not None:
             payload["reading_budget"] = reading_budget
         payload["output_schema_hint"]["results"][0].update({
             "task_read_rank": 1, "reason": "结合问题全文说明候选阅读价值，仅用于审计",
             "read_intent": "content|index",
         })
+        if corroboration_context is not None:
+            payload["output_schema_hint"]["results"][0]["publication_targets"] = [
+                "可能补证的 pending_target source_link_id"]
     return [
         {"role": "system", "content": TASK_BATCH_TRIAGE_SYSTEM if task_aware else BATCH_TRIAGE_SYSTEM},
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},

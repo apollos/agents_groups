@@ -88,7 +88,12 @@ def test_all_stale_or_unknown_report_filtered_not_model_failure(config, monkeypa
     assert report["summary"]["model_calls"] == 1
     assert report["collection_diagnostics"]["output_status"] == "time_window_filtered"
     assert not report["collection_diagnostics"]["usable"]
-    assert report["structured_outputs"]["coverage_gaps"] == 2
+    # Run-level window gaps plus the per-material gap of the unverified source.
+    assert report["structured_outputs"]["coverage_gaps"] == 3
+    corroboration, = report["publication_corroboration"]
+    assert corroboration["triage"]["status"] == "triage_disabled"
+    assert corroboration["final_publication"]["status"] == "unknown"
+    assert {g["gap_type"] for g in report["coverage_gaps"]} >= {"publication_date_unverified"}
 
 
 @pytest.mark.parametrize("date", ["2025-08-06", None])

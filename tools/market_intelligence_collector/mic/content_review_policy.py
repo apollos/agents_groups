@@ -6,7 +6,7 @@ See .cursor/rules/intelligence-content-review.mdc before changing this contract.
 PROTOCOL = "content_review_v2"
 # A prompt change needs a fresh semantic assessment before a cached analysis
 # can be reused. This is provenance, not a new source-approval heuristic.
-REVIEW_REVISION = "amount_scale_currency_20261031"
+REVIEW_REVISION = "linked_publication_20261101"
 # Disclosed to the model; the configured merger remains the admission authority.
 OVERALL_SCORE_ADMISSION_THRESHOLD = 70
 TASK_COVERAGE_PROTOCOL = "task_coverage_v1"
@@ -38,6 +38,14 @@ DATE_ROLE_BASES = {
     "source_publication": {"explicit_publication", "publisher_metadata", "contextual_date"},
     "event_occurrence": {"explicit_occurrence", "explicit_publication", "contextual_date"},
 }
+# Cross-material publication evidence: a page actually read in this run dates a
+# different, already extracted material. Values are model-authored protocol
+# enums; the shared reviewer checks citations and structure, not their meaning.
+LINKED_PUBLICATION_PROTOCOL = "linked_publication_review_v1"
+LINKED_PUBLICATION_BINDING_PREFIX = "/linked_publications/"
+LINKED_DATE_SUBJECTS = {"target_original_disclosure", "current_page_publication", "unknown"}
+LINKED_RELATIONS = {"lists_target_document", "same_document_copy", "discloses_target_document"}
+LINKED_BASIS_KINDS = {"document_title", "document_number", "issuer", "file_link", "body_text", "other"}
 STATES = ("source_supported", "inference", "pending_review", "unsupported")
 GROUPS = (
     "facts", "metrics", "events", "relations", "risks", "catalysts",
@@ -145,6 +153,28 @@ RULE_TEXT = """
    等于公开披露日。上下文不足时用 pending_review，不为通过时间窗改写日期角色或猜测日期。
    日期可以跨段理解，程序仅核对审核引用、依赖、角色枚举与完整日期格式，不按关键词理解日期。
    无效来源日期会使该日期 claim 及其下游依赖均降为待审；摘要不得复述同一个未获支持日期。
+   跨材料发布日期（linked_publication_review_v1）：source_metadata.pending_publication_targets
+   列出本次运行中已读取、已抽取但自身发布日期未核实的其他材料，每项给出 source_link_id、
+   标题、URL 和 identity_passages（该材料的原文片段）。只有当前已读材料确实给出其中某份材料
+   的原始公开披露日期时，才另写一条 observation claim，绑定
+   bindings["/linked_publications/<该材料 source_link_id>"]=[claim id]，并在 field_values.linked_publication
+   给出 protocol、target_source_link_id、published_at、date_role="source_publication"、
+   date_subject、assessment（同 date_review_v1，evidence 引用当前材料）、target_identity 和
+   correspondence。这三项证据缺一不可：
+   - target_identity={status,evidence}：evidence 逐字引用 identity_passages，说明被补证材料是什么文件；
+   - correspondence={status,relation,bases}：relation 为 lists_target_document（目录/披露页列示该文件）、
+     same_document_copy（同一文件的副本）或 discloses_target_document（交易所等披露页对应该文件）；
+     bases 每项含 kind（document_title|document_number|issuer|file_link|body_text|other）、
+     current_evidence（引用当前材料，须被本 claim.evidence 覆盖）和 target_evidence（引用 identity_passages）；
+     kind=file_link 时另给 current_link={passage_id,url}，url 必须是当前目录条目中可见、且指向该材料
+     URL 的链接。对应关系由你结合文档名称、发布主体、文号、文件链接或正文判断，不要求每份材料
+     具备固定字段；仅有标题相近不足以判定同一文件，此时保持 pending_review。
+   - date_subject 说明日期属于谁：target_original_disclosure 表示该文件的原始公开披露日；
+     current_page_publication 表示当前页面自己的发布或转载日期，不能补齐原始文件的披露日期。
+   活动日期、调研日期、报告期、签署日期、搜索结果日期和镜像页面自己的转载日期都不是原始
+   披露日期。目录条目日期只绑定到它指向的文件，不作为目录页面自己的发布日期。只有日期精度时
+   填 YYYY-MM-DD，不补时分秒。依据不足、角色不明或证据冲突时保持 pending_review，不猜测日期。
+   这条 claim 只作材料级元数据，不复制被补证材料的业务事实，也不批准它的业务内容。
 3. 同一判断在事实、指标、事件、关系、摘要等位置必须复用同一 claim id。
    分析判断用 depends_on 引用其前提；缺失/循环/未支持的前提不能被下游措辞绕过。
    depends_on 的方向是“当前判断需要哪些前提”，不是双向关联或“哪些判断用到了我”。
@@ -452,6 +482,31 @@ SCHEMA_HINT = {
                                      "basis": "explicit_publication",
                                      "evidence": [{"passage_id": "p0", "quote": "支持公开披露日期的连续正文原文"}]}}}},
         "bindings": {"/source_publication": ["publication_date"]}},
+    "linked_publication_binding_example": {
+        "说明": "仅当 source_metadata.pending_publication_targets 非空、且当前材料确实给出其中某份材料的原始披露日时使用。",
+        "claim": {"id": "listed_disclosure_date", "kind": "observation", "status": "source_supported",
+                  "statement": "当前目录列示目标文件，并给出其披露日期<完整日期>。",
+                  "reason": "说明当前材料与目标文件如何对应、日期为何属于该文件的原始公开披露。",
+                  "evidence": [{"passage_id": "e3", "quote": "当前材料中支持对应关系与日期的连续原文"}],
+                  "depends_on": [],
+                  "field_values": {"linked_publication": {
+                      "protocol": LINKED_PUBLICATION_PROTOCOL,
+                      "target_source_link_id": "<pending_publication_targets 中的 source_link_id>",
+                      "published_at": "YYYY-MM-DD 或带时区的完整时间", "date_role": "source_publication",
+                      "date_subject": "target_original_disclosure",
+                      "assessment": {"protocol": DATE_REVIEW_PROTOCOL,
+                                     "possible_roles": ["source_publication"], "selected_role": "source_publication",
+                                     "basis": "explicit_publication",
+                                     "evidence": [{"passage_id": "e3", "quote": "日期所在的连续原文"}]},
+                      "target_identity": {"status": "source_supported",
+                                          "evidence": [{"passage_id": "<identity_passages 的 passage_id>",
+                                                        "quote": "目标材料自身表明文件身份的连续原文"}]},
+                      "correspondence": {"status": "source_supported", "relation": "lists_target_document",
+                                         "bases": [{"kind": "document_number",
+                                                    "current_evidence": [{"passage_id": "e3", "quote": "当前材料中的文号原文"}],
+                                                    "target_evidence": [{"passage_id": "<identity_passages 的 passage_id>",
+                                                                         "quote": "目标材料中的文号原文"}]}]}}}},
+        "bindings": {"/linked_publications/<target_source_link_id>": ["listed_disclosure_date"]}},
     "task_coverage": [{"question_id": "来自 task_context.questions 的 question_id",
                        "status": "covered|partial|unanswered",
                        "answer_claim_ids": ["回答该问题且已发布在结构化记录非空字段上的 claim id"],

@@ -105,7 +105,7 @@ def test_open_currency_publishes_scale_without_cny():
         ("收入", 120, "万元"), ("收入同比", 20, "%")]
     assert bundle.events[0].summary == "公司披露本期收入120万元。"
     assert bundle.content_review["claims"]["revenue"]["status"] == "source_supported"
-    assert bundle.content_review["review_revision"] == REVIEW_REVISION == "amount_scale_currency_20261031"
+    assert bundle.content_review["review_revision"] == REVIEW_REVISION == "linked_publication_20261101"
     assert bundle.coverage_gaps[0].description == "当前选段未确认收入金额的币种。"
 
 

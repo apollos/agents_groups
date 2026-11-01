@@ -14,12 +14,15 @@ import hashlib
 import json
 
 from mic.content_review_policy import (COMPARISON_RATE_UNITS, CORE_FIELDS, DATE_BASES, DATE_REVIEW_PROTOCOL, DATE_ROLES, DATE_ROLE_BASES,
-                                       GROUPS, INDEX_FACT_TYPE, INDEX_PASSAGE_SECTIONS, METADATA_FIELDS,
+                                       GROUPS, INDEX_FACT_TYPE, INDEX_PASSAGE_SECTIONS,
+                                       LINKED_BASIS_KINDS, LINKED_PUBLICATION_BINDING_PREFIX,
+                                       LINKED_PUBLICATION_PROTOCOL, LINKED_RELATIONS, METADATA_FIELDS,
                                        NARRATIVE_FIELDS, PROTOCOL, REVIEW_REVISION, REVIEWED_DEFAULTS, STATES,
                                        SCOPE_DERIVED_FIELDS, SCOPE_REVIEW_PROTOCOL,
                                        TASK_COVERAGE_PROTOCOL, field_kinds)
 from mic.money import normalize_cny_fields, normalize_quoted_price, reason_status
 from mic.publication_time import LOCAL_TZ, parse_published
+from mic.utils import canonicalize_url
 
 
 def _present(value):
@@ -581,18 +584,22 @@ def enforce_reviewed_dates(group, record, *, stored_utc=False):
 def enforce_source_publication_dates(publication):
     """Reject legacy model-date approvals without changing publisher metadata."""
     result = deepcopy(publication)
-    if not isinstance(result, dict) or result.get("source") != "model_content_review" or result.get("status") != "known":
+    if (not isinstance(result, dict) or result.get("status") != "known"
+            or result.get("source") not in {"model_content_review", "linked_publication_review"}):
         return result
     assessments = result.get("date_assessments")
-    valid = (result.get("date_review") == DATE_REVIEW_PROTOCOL and isinstance(assessments, list)
-             and bool(assessments) and parse_published(result.get("published_at")) is not None)
-    if valid:
+    if result["source"] == "linked_publication_review":
+        valid = _linked_stored_valid(result)
+    else:
+        valid = (result.get("date_review") == DATE_REVIEW_PROTOCOL and isinstance(assessments, list)
+                 and bool(assessments) and parse_published(result.get("published_at")) is not None)
+    if valid and result["source"] == "model_content_review":
         valid = all(isinstance(row, dict) and _date_assessment_reason(
             row.get("assessment"), {"source_publication"}, result.get("evidence")) is None
             and parse_published(row.get("published_at")) is not None
             for row in assessments)
-    if valid:
-        valid = _publication_agreement([result, *assessments]) is not None
+        if valid:
+            valid = _publication_agreement([result, *assessments]) is not None
     if not valid:
         result["date_review_correction"] = {"original_materialized_value": deepcopy(publication),
                                             "status": "pending_review", "reason": "stored_date_review_missing_or_unverified"}
@@ -1398,6 +1405,198 @@ def resolve_source_publication(bundles, extracted_publication):
             "date_assessments": [{"contribution_index": row["contribution_index"], **item}
                                  for row in known for item in row["date_assessments"]],
             "reason": "source_publication_claim_supported"}
+
+
+def _linked_structure_reason(value, claim_evidence):
+    """Checks that need no passages; shared by review time and stored readback."""
+    if not isinstance(value, dict) or value.get("protocol") != LINKED_PUBLICATION_PROTOCOL:
+        return "linked_publication_missing_or_invalid"
+    if value.get("date_role") != "source_publication":
+        return "publication_role_missing_or_invalid"
+    subject = value.get("date_subject")
+    if subject == "current_page_publication":
+        return "current_page_date_not_target_disclosure"
+    if subject != "target_original_disclosure":
+        return "date_not_bound_to_target_disclosure"
+    if parse_published(value.get("published_at")) is None:
+        return "invalid_publication_date"
+    reason = _date_assessment_reason(value.get("assessment"), {"source_publication"}, claim_evidence)
+    if reason:
+        return reason
+    identity = value.get("target_identity")
+    if (not isinstance(identity, dict) or identity.get("status") != "source_supported"
+            or not isinstance(identity.get("evidence"), list) or not identity["evidence"]):
+        return "target_identity_not_supported"
+    link = value.get("correspondence")
+    if not isinstance(link, dict) or link.get("status") != "source_supported":
+        return "correspondence_not_supported"
+    if link.get("relation") not in LINKED_RELATIONS:
+        return "correspondence_relation_invalid"
+    bases = link.get("bases")
+    if not isinstance(bases, list) or not bases or any(
+            not isinstance(b, dict) or b.get("kind") not in LINKED_BASIS_KINDS for b in bases):
+        return "correspondence_basis_missing_or_invalid"
+    if {b["kind"] for b in bases} == {"document_title"}:
+        return "correspondence_title_only"
+    for basis in bases:
+        current = basis.get("current_evidence")
+        if not isinstance(current, list) or not current or not _citations_covered(current, claim_evidence):
+            return "correspondence_current_evidence_unverified"
+        target = basis.get("target_evidence")
+        if basis["kind"] == "file_link":
+            current_link = basis.get("current_link")
+            if (not isinstance(current_link, dict) or not isinstance(current_link.get("url"), str)
+                    or current_link.get("passage_id") not in {q.get("passage_id") for q in current}):
+                return "correspondence_file_link_unverified"
+        elif not isinstance(target, list) or not target:
+            return "correspondence_target_evidence_missing"
+    return None
+
+
+def _linked_passage_reason(value, target, index_links):
+    """Bind quotes to the target's offered passages and file links to visible entries."""
+    target_passages = {p.get("passage_id"): p.get("text", "") for p in target.get("identity_passages", [])
+                       if isinstance(p, dict)}
+    if not _quote_supported(value["target_identity"]["evidence"], target_passages):
+        return "target_identity_evidence_unverified"
+    urls = {canonicalize_url(u) for u in (target.get("url"), target.get("final_url")) if isinstance(u, str) and u}
+    for basis in value["correspondence"]["bases"]:
+        target_evidence = basis.get("target_evidence")
+        if target_evidence and not _quote_supported(target_evidence, target_passages):
+            return "correspondence_target_evidence_unverified"
+        if basis["kind"] == "file_link":
+            current_link = basis["current_link"]
+            visible = index_links.get(current_link["passage_id"], [])
+            if (current_link["url"] not in visible
+                    or canonicalize_url(current_link["url"]) not in urls):
+                return "correspondence_file_link_unverified"
+    return None
+
+
+def resolve_linked_publications(bundles, targets, *, index_links=None):
+    """Review cross-material publication claims of the current, already validated bundles.
+
+    ``targets`` maps a pending material's source_link_id to the descriptor that
+    was offered to the model (url, final_url, identity_passages). ``index_links``
+    maps a selected index-entry passage id to the URLs visible in that entry.
+    Claim citations against the current passages were already enforced by
+    ``ContentReview``; this adds the target-side and correspondence checks. The
+    model decides identity, correspondence and date role; nothing here reads
+    dates, titles or numbers from prose.
+    """
+    index_links = index_links or {}
+    rows = []
+    for index, bundle in enumerate(bundles):
+        review = getattr(bundle, "content_review", {})
+        if (not isinstance(review, dict) or review.get("protocol") != PROTOCOL
+                or review.get("status") != "applied"):
+            continue
+        raw = review.get("model_review") if isinstance(review.get("model_review"), dict) else {}
+        listed = raw.get("claims") if isinstance(raw.get("claims"), list) else []
+        counts = Counter(c.get("id") for c in listed if isinstance(c, dict))
+        claims = {c["id"]: c for c in listed if isinstance(c, dict)
+                  and isinstance(c.get("id"), str) and counts[c["id"]] == 1}
+        states = review.get("claims") if isinstance(review.get("claims"), dict) else {}
+        bindings = raw.get("bindings") if isinstance(raw.get("bindings"), dict) else {}
+        bound = set()
+        for path, ids in bindings.items():
+            if not isinstance(path, str) or not path.startswith(LINKED_PUBLICATION_BINDING_PREFIX):
+                continue
+            target_id = path[len(LINKED_PUBLICATION_BINDING_PREFIX):]
+            ids = ids if isinstance(ids, list) else [ids]
+            for cid in ids:
+                bound.add(cid)
+                rows.append(_linked_row(index, path, target_id, cid, claims, states, targets, index_links))
+        for cid, claim in claims.items():
+            values = claim.get("field_values")
+            if cid not in bound and isinstance(values, dict) and "linked_publication" in values:
+                value = values["linked_publication"]
+                target_id = value.get("target_source_link_id") if isinstance(value, dict) else None
+                row = _linked_row(index, None, target_id, cid, claims, states, targets, index_links)
+                row.update(status="rejected", reason="linked_publication_binding_missing")
+                rows.append(row)
+    return rows
+
+
+def _linked_row(index, path, target_id, cid, claims, states, targets, index_links):
+    claim = claims.get(cid) if isinstance(cid, str) else None
+    values = claim.get("field_values") if isinstance(claim, dict) else None
+    value = values.get("linked_publication") if isinstance(values, dict) else None
+    state = states.get(cid, {}) if isinstance(cid, str) else {}
+    row = {"protocol": LINKED_PUBLICATION_PROTOCOL, "contribution_index": index, "binding": path,
+           "target_source_link_id": target_id, "claim_id": cid, "status": "rejected",
+           "claim": ({"statement": claim.get("statement"), "kind": claim.get("kind"),
+                      "model_status": claim.get("status"), "reason": claim.get("reason"),
+                      "effective_status": state.get("status"),
+                      "evidence": deepcopy(claim.get("evidence"))} if claim else None),
+           "linked_publication": deepcopy(value)}
+    if not isinstance(target_id, str) or target_id not in targets:
+        return {**row, "reason": "linked_target_unknown"}
+    if claim is None:
+        return {**row, "reason": "unknown_claim_id"}
+    if claim.get("kind") != "observation":
+        return {**row, "reason": "linked_publication_claim_kind_invalid"}
+    if state.get("status") != "source_supported" or state.get("dependency_status") != "source_supported":
+        return {**row, "reason": state.get("reason") or "claim_not_supported"}
+    if isinstance(value, dict) and value.get("target_source_link_id") != target_id:
+        return {**row, "reason": "linked_target_mismatch"}
+    reason = (_linked_structure_reason(value, claim.get("evidence"))
+              or _linked_passage_reason(value, targets[target_id], index_links))
+    if reason:
+        return {**row, "reason": reason}
+    stamp, precision = parse_published(value["published_at"])
+    return {**row, "status": "supported", "reason": "linked_publication_claim_supported",
+            "published_at": stamp.isoformat(), "precision": precision}
+
+
+def _linked_agreement(rows):
+    return _publication_agreement([{"published_at": r.get("published_at"), "precision": r.get("precision")}
+                                   for r in rows])
+
+
+def complete_linked_publication(prior, rows, *, unavailable_reason=None):
+    """Combine a pending material's own date review with reviewed linked evidence.
+
+    Rejected rows are kept for audit; they neither date the material nor veto a
+    supported row, because they carry no reviewed claim about its disclosure.
+    """
+    prior = deepcopy(prior) if isinstance(prior, dict) else {}
+    rows = deepcopy(list(rows))
+    base = {"status": "unknown", "published_at": None, "precision": None,
+            "source": "linked_publication_review", "protocol": LINKED_PUBLICATION_PROTOCOL,
+            "date_review": DATE_REVIEW_PROTOCOL, "prior_publication": prior, "linked_evidence": rows}
+    if prior.get("status") == "conflict":
+        return {**base, "status": "conflict", "reason": prior.get("reason", "conflicting_publication_dates")}
+    supported = [r for r in rows if r.get("status") == "supported"]
+    if not supported:
+        reason = ("linked_publication_rejected" if rows else unavailable_reason or "linked_publication_not_found")
+        return {**base, "reason": reason, **({"unavailable_reason": unavailable_reason}
+                                              if unavailable_reason else {})}
+    agreed = _linked_agreement(supported)
+    if agreed is None:
+        return {**base, "status": "conflict", "reason": "conflicting_publication_dates"}
+    return {**base, "status": "known", "published_at": agreed["published_at"],
+            "precision": agreed["precision"], "reason": "linked_publication_claim_supported"}
+
+
+def _linked_stored_valid(result):
+    rows = result.get("linked_evidence")
+    if result.get("protocol") != LINKED_PUBLICATION_PROTOCOL or not isinstance(rows, list):
+        return False
+    supported = [r for r in rows if isinstance(r, dict) and r.get("status") == "supported"]
+    if not supported or parse_published(result.get("published_at")) is None:
+        return False
+    for row in supported:
+        claim = row.get("claim") if isinstance(row.get("claim"), dict) else {}
+        value = row.get("linked_publication")
+        if (claim.get("effective_status") != "source_supported" or claim.get("kind") != "observation"
+                or not isinstance(value, dict)
+                or value.get("target_source_link_id") != row.get("target_source_link_id")
+                or _linked_structure_reason(value, claim.get("evidence")) is not None
+                or parse_published(row.get("published_at")) is None):
+            return False
+    agreed = _linked_agreement(supported)
+    return agreed is not None and _publication_agreement([result, agreed]) is not None
 
 
 def enforce_integrity(bundle):

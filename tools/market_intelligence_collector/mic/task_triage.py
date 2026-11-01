@@ -13,6 +13,10 @@ import math
 PROTOCOL = "task_triage_v1"
 SEARCH_BASIS = "search_result_navigation_only"
 INDEX_BASIS = "index_result_navigation_only"
+# Re-ranking after a read material was left without a verified publication date.
+# It decides what to read next; it never dates the pending material.
+PUBLICATION_BASIS = "publication_corroboration_navigation_only"
+_BASES = {SEARCH_BASIS, INDEX_BASIS, PUBLICATION_BASIS}
 _DECISIONS = {"read", "link_record_only", "skip_for_now"}
 _READ_INTENTS = {"content", "index"}
 
@@ -27,7 +31,7 @@ def index_read_authorized(source_link_id: str, read_intent: str,
     return bool(
         read_intent == "index" and isinstance(review, dict)
         and review.get("protocol") == PROTOCOL and review.get("status") == "accepted"
-        and review.get("basis") in {SEARCH_BASIS, INDEX_BASIS}
+        and review.get("basis") in _BASES
         and review.get("source_link_id") == source_link_id
         and review.get("read_intent") == "index"
         and review.get("triage_decision") == "read" and review.get("need_model") is True
@@ -36,16 +40,22 @@ def index_read_authorized(source_link_id: str, read_intent: str,
 
 def validate_task_triage(items: list[dict], raw: object, *,
                          review: dict | None = None,
-                         basis: str = SEARCH_BASIS) -> dict[str, dict]:
+                         basis: str = SEARCH_BASIS,
+                         publication_targets: set[str] | None = None) -> dict[str, dict]:
     """Return a complete, strictly bound ranking, or reject the entire batch.
 
     ``review`` optionally receives the raw response and protocol errors for the
     run audit. A partially valid ranking is never returned, so invalid model
-    output cannot silently promote a subset of the candidates.
+    output cannot silently promote a subset of the candidates. With
+    ``PUBLICATION_BASIS`` each row names the pending materials (a subset of
+    ``publication_targets``, possibly empty) whose publication date the model
+    expects the candidate may evidence.
     """
     errors: list[str] = []
-    if basis not in {SEARCH_BASIS, INDEX_BASIS}:
+    if basis not in _BASES:
         errors.append("invalid_navigation_basis")
+    if basis == PUBLICATION_BASIS and not publication_targets:
+        errors.append("missing_publication_targets")
     ids = [item.get("id") if isinstance(item, dict) else None for item in items]
     if not ids or any(type(value) is not str or not value for value in ids):
         errors.append("invalid_input_ids")
@@ -99,6 +109,16 @@ def validate_task_triage(items: list[dict], raw: object, *,
         reason = row.get("reason")
         if type(reason) is not str or not reason.strip():
             errors.append("missing_task_reason")
+        corroborates = row.get("publication_targets", [])
+        if basis == PUBLICATION_BASIS:
+            if (not isinstance(corroborates, list) or len(set(map(str, corroborates))) != len(corroborates)
+                    or any(type(t) is not str or t not in (publication_targets or set()) for t in corroborates)):
+                errors.append("invalid_publication_targets")
+                corroborates = []
+            elif corroborates and (decision != "read" or need_model is not True):
+                errors.append("publication_target_requires_model_read")
+        else:
+            corroborates = []
         normalized[source_id] = {
             "id": source_id, "triage_decision": decision,
             "read_priority": priority, "need_model": need_model,
@@ -113,6 +133,7 @@ def validate_task_triage(items: list[dict], raw: object, *,
                 "read_intent": read_intent, "triage_decision": decision,
                 "need_model": need_model,
                 "reason": reason,
+                **({"publication_targets": list(corroborates)} if basis == PUBLICATION_BASIS else {}),
             },
         }
     if seen != expected:

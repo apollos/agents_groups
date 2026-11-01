@@ -25,7 +25,7 @@ from mic.modeling.prompts import (
 )
 from mic.profile import TargetProfile
 from mic.schemas import Passage, TriageResult
-from mic.task_triage import (PROTOCOL as TASK_TRIAGE_PROTOCOL, INDEX_BASIS,
+from mic.task_triage import (PROTOCOL as TASK_TRIAGE_PROTOCOL, INDEX_BASIS, PUBLICATION_BASIS,
                              SEARCH_BASIS, validate_task_triage)
 from mic.validate import bundle_protocol_errors
 
@@ -342,7 +342,8 @@ class ModelCallPlanner:
     # --- batch SERP triage (spec 11.1 batch_triage + 15.2 D) --------------
 
     def batch_triage(self, items: list[dict], *,
-                     navigation_context: dict | None = None) -> dict[str, dict]:
+                     navigation_context: dict | None = None,
+                     corroboration_context: dict | None = None) -> dict[str, dict]:
         """Triage a batch of search-hit summaries in a single model call.
 
         ``items`` includes id/title/snippet and optional URL/domain/rule priority.
@@ -358,14 +359,19 @@ class ModelCallPlanner:
             return {}
         models = sorted(policy.get("models", []), key=lambda x: x.get("priority", 99))
         task_aware = bool(self.task_context and self.task_context.get("questions"))
-        if navigation_context is not None and not task_aware:
+        guided = navigation_context is not None or corroboration_context is not None
+        if guided and not task_aware:
             return {}  # Directory following requires a complete task-bound ranking.
         messages = build_batch_triage_messages(
             items, task_context=self.task_context, reading_budget=self.triage_budget_context,
-            navigation_context=navigation_context)
-        if navigation_context is not None and len(messages[-1]["content"]) > self.max_input_chars:
+            navigation_context=navigation_context, corroboration_context=corroboration_context)
+        if guided and len(messages[-1]["content"]) > self.max_input_chars:
             return {}  # Never silently truncate the evidence-to-URL binding.
-        basis = INDEX_BASIS if navigation_context is not None else SEARCH_BASIS
+        basis = (PUBLICATION_BASIS if corroboration_context is not None
+                 else INDEX_BASIS if navigation_context is not None else SEARCH_BASIS)
+        publication_targets = ({t["source_link_id"] for t in corroboration_context.get("pending_targets", [])
+                                if isinstance(t, dict) and isinstance(t.get("source_link_id"), str)}
+                               if corroboration_context is not None else None)
         for spec in models:
             adapter = self.registry.get(spec["model_id"])
             if adapter is None or not adapter.usable:
@@ -388,8 +394,11 @@ class ModelCallPlanner:
                 }
                 if navigation_context is not None:
                     review["navigation_context"] = navigation_context
+                if corroboration_context is not None:
+                    review["corroboration_context"] = corroboration_context
                 if res.status == "success":
-                    out = validate_task_triage(items, res.parsed, review=review, basis=basis)
+                    out = validate_task_triage(items, res.parsed, review=review, basis=basis,
+                                               publication_targets=publication_targets)
                 else:
                     out = {}
                     review.update({"status": "not_assessed", "raw": res.parsed,
